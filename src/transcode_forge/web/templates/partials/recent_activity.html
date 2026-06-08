@@ -1,0 +1,40 @@
+{% if jobs %}
+<div class="divide-y divide-forge-rule/40">
+    {% for job in jobs %}
+    <div class="px-6 py-3.5 grid grid-cols-[auto_1fr_auto] gap-4 items-center hover:bg-forge-panel-hi/30 transition-colors">
+        <!-- Status pill -->
+        <div class="w-24">
+            {% if job.status == 'complete' %}
+            <span class="forge-pill forge-pill--complete">Complete</span>
+            {% elif job.status == 'failed' %}
+            <span class="forge-pill forge-pill--failed">Failed</span>
+            {% elif job.status == 'skipped' %}
+            <span class="forge-pill forge-pill--skipped">Skipped</span>
+            {% else %}
+            <span class="forge-pill forge-pill--pending">{{ job.status|capitalize }}</span>
+            {% endif %}
+        </div>
+        <!-- Filename + timestamp -->
+        <div class="min-w-0">
+            <p class="font-body text-sm text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</p>
+            <p class="font-mono text-[10px] text-forge-mute mt-0.5">
+                {{ job.completed_at[:16] if job.completed_at else '—' }}
+            </p>
+        </div>
+        <!-- Saved -->
+        <div class="text-right tabular-nums">
+            {% if job.space_saved %}
+            <p class="font-mono font-semibold text-sm text-forge-oxide">+{{ (job.space_saved / 1048576)|round(0)|int }}<span class="text-forge-mute text-xs"> MiB</span></p>
+            {% else %}
+            <p class="font-mono text-sm text-forge-mute/60">—</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="px-8 py-12 text-center">
+    <p class="font-display font-bold text-xl text-forge-mute uppercase tracking-tight mb-1">No Activity Yet</p>
+    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Run a scan or queue a job</p>
+</div>
+{% endif %}

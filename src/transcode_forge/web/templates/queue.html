@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block title %}Queue — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-8">
+
+    <!-- Page header -->
+    <header class="forge-rise forge-rise-1">
+        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
+            <span class="text-forge-ember">/</span> Section 04 &nbsp;·&nbsp; Operations
+        </p>
+        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">JOB QUEUE</h1>
+        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
+            Live work order &mdash; pending, in-flight, and completed transcodes. Filter by status or library, queue or cancel in bulk.
+        </p>
+    </header>
+
+    <!-- Status readouts -->
+    <section class="grid grid-cols-2 lg:grid-cols-5 gap-3 forge-rise forge-rise-2">
+        {% set stats = [
+            ('pending', 'Pending', 'forge-mute', 'forge-dot--off'),
+            ('queued', 'Queued', 'forge-steel-hi', 'forge-dot--off'),
+            ('transcoding', 'Transcoding', 'forge-ember', 'forge-dot--hot forge-pulse'),
+            ('complete', 'Complete', 'forge-oxide', 'forge-dot--on'),
+            ('failed', 'Failed', 'forge-rust', 'forge-dot--err'),
+        ] %}
+        {% for key, label, color, dot in stats %}
+        <div class="forge-panel{% if key == 'transcoding' %} forge-panel--ember{% endif %} p-4 relative">
+            {% if key != 'transcoding' %}
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            {% endif %}
+            <div class="flex items-center justify-between mb-2">
+                <p class="forge-stat-label">{{ label }}</p>
+                <span class="forge-dot {{ dot }}"></span>
+            </div>
+            <h3 id="badge-{{ key }}" class="forge-stat-value text-4xl text-{{ color }} tabular-nums">—</h3>
+        </div>
+        {% endfor %}
+    </section>
+
+    <!-- Action console — Scan strip -->
+    <section class="forge-panel relative p-5 forge-rise forge-rise-3">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-tr"></span>
+        <span class="forge-tick forge-tick-bl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <p class="forge-stat-label mb-3">Scan Library</p>
+        <div class="flex flex-wrap items-center gap-3">
+            <select id="scan-library" aria-label="Library to scan" class="forge-select">
+                <option value="">All Libraries</option>
+            </select>
+            <input type="number" id="scan-limit" value="10" min="0" max="10000"
+                   class="forge-input w-28" placeholder="Max">
+            <button id="scan-btn" class="forge-btn forge-btn--ember" onclick="triggerScan()">
+                <span class="material-symbols-outlined text-base">search</span>
+                <span>Scan Library</span>
+            </button>
+            <span id="scan-status" class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp"></span>
+            <div class="ml-auto flex items-center gap-3">
+                <button id="pause-btn" class="forge-btn forge-btn--ember" onclick="togglePause()">
+                    <span class="material-symbols-outlined text-base">pause</span>
+                    <span>Pause</span>
+                </button>
+                <button class="forge-btn forge-btn--danger" onclick="cancelAll()" title="Cancels pending and queued jobs. Currently-running jobs finish.">
+                    <span class="material-symbols-outlined text-base">delete_sweep</span>
+                    <span>Cancel All Pending</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Scan history (slim) -->
+    <div id="scan-history"
+         hx-get="/partials/scan-history"
+         hx-trigger="load, refresh, every 10s"
+         hx-swap="innerHTML"
+         class="forge-rise forge-rise-3">
+    </div>
+
+    <!-- Filter strip -->
+    <section class="flex flex-wrap items-center gap-3 forge-rise forge-rise-4">
+        <p class="forge-stat-label">Filter</p>
+        <select id="status-filter" aria-label="Filter by status" class="forge-select"
+                hx-get="/partials/jobs"
+                hx-trigger="change"
+                hx-target="#job-table-container"
+                hx-include="#library-filter, #queue-sort, #queue-dir"
+                name="status">
+            <option value="pending,queued,transcoding" selected>Active (queued + running)</option>
+            <option value="">All Statuses</option>
+            <option value="pending">Pending</option>
+            <option value="queued">Queued</option>
+            <option value="transcoding">Transcoding</option>
+            <option value="complete">Complete</option>
+            <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
+        </select>
+        <select id="library-filter" aria-label="Filter by library" class="forge-select"
+                hx-get="/partials/jobs"
+                hx-trigger="change"
+                hx-target="#job-table-container"
+                hx-include="#status-filter, #queue-sort, #queue-dir"
+                name="library">
+            <option value="">All Libraries</option>
+        </select>
+    </section>
+
+    <!-- Bulk action bar -->
+    <div id="bulk-bar" class="forge-panel forge-panel--ember p-3 flex items-center gap-3 hidden">
+        <span class="font-mono text-[11px] uppercase tracking-stamp text-forge-ember-hot font-bold">
+            <span id="bulk-count">0</span> selected
+        </span>
+        <button class="forge-btn forge-btn--danger" onclick="bulkCancel()">Cancel</button>
+        <button class="forge-btn forge-btn--ember" onclick="bulkRetry()">Retry Failed</button>
+    </div>
+
+    <input type="hidden" id="queue-sort" name="sort" value="created_at">
+    <input type="hidden" id="queue-dir" name="dir" value="desc">
+
+    <!-- Job table -->
+    <div id="job-table-container"
+         hx-get="/partials/jobs"
+         hx-trigger="load, refresh, every 5s"
+         hx-swap="innerHTML"
+         hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir"
+         class="forge-panel relative forge-rise forge-rise-4">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-tr"></span>
+        <span class="forge-tick forge-tick-bl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <div class="flex justify-center p-8">
+            <span class="material-symbols-outlined animate-spin text-forge-ember text-2xl">settings</span>
+        </div>
+    </div>
+</div>
+
+<script>
+const QUEUE_DESC_FIRST = ['source_size'];
+
+// Called from the clickable column headers (rendered fresh on each 5s poll).
+// The hidden sort/dir inputs are pulled in by the container's hx-include, so a
+// plain refresh reloads with the chosen sort and survives the polling.
+function sortQueue(col) {
+    const s = document.getElementById('queue-sort');
+    const d = document.getElementById('queue-dir');
+    if (s.value === col) {
+        d.value = d.value === 'asc' ? 'desc' : 'asc';
+    } else {
+        s.value = col;
+        d.value = QUEUE_DESC_FIRST.includes(col) ? 'desc' : 'asc';
+    }
+    htmx.trigger('#job-table-container', 'refresh');
+}
+
+async function triggerScan() {
+    const btn = document.getElementById('scan-btn');
+    const status = document.getElementById('scan-status');
+    const lib = document.getElementById('scan-library').value;
+    const limit = parseInt(document.getElementById('scan-limit').value) || 0;
+
+    const body = {limit: limit};
+    if (lib) body.library = lib;
+
+    btn.disabled = true;
+    const labelEl = btn.querySelector('span:last-child');
+    const orig = labelEl.textContent;
+    labelEl.textContent = 'Scanning…';
+    status.textContent = '';
+
+    try {
+        const resp = await fetch('/api/scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showToast(`Scan started: ${data.scan_ids.join(', ')}`, 'success');
+            status.textContent = `Scanning: ${data.scan_ids.join(', ')}`;
+        } else {
+            showToast(`Scan error: ${data.detail || 'Unknown'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`Scan error: ${e.message}`, 'error');
+    }
+
+    btn.disabled = false;
+    labelEl.textContent = orig;
+    htmx.trigger('#scan-history', 'refresh');
+    htmx.trigger('#job-table-container', 'refresh');
+}
+
+function applyPauseStateQueue(paused) {
+    const btn = document.getElementById('pause-btn');
+    if (!btn) return;
+    btn.querySelector('span:last-child').textContent = paused ? 'Resume' : 'Pause';
+    btn.querySelector('.material-symbols-outlined').textContent = paused ? 'play_arrow' : 'pause';
+}
+
+async function togglePause() {
+    try {
+        const resp = await fetch('/api/queue/status');
+        if (!resp.ok) { showToast('Error fetching queue status', 'error'); return; }
+        const {paused} = await resp.json();
+        const action = await fetch(paused ? '/api/queue/resume' : '/api/queue/pause', {method: 'POST'});
+        if (!action.ok) { showToast('Error changing queue state', 'error'); return; }
+        applyPauseStateQueue(!paused);
+        showToast(paused ? 'Queue resumed' : 'Queue paused', paused ? 'success' : 'warning');
+    } catch (e) {
+        showToast(`Failed to change queue state: ${e.message}`, 'error');
+    }
+}
+
+async function cancelAll() {
+    if (!confirm('Cancel all pending and queued jobs? Workers will finish their current job.')) return;
+    try {
+        const resp = await fetch('/api/jobs/cancel-all', {method: 'POST'});
+        if (resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            showToast(`${data.cancelled ?? 'All'} pending job(s) cancelled`, 'warning');
+        } else {
+            showToast(`Cancel failed (HTTP ${resp.status})`, 'error');
+        }
+    } catch (e) {
+        showToast(`Cancel failed: ${e.message}`, 'error');
+    }
+    htmx.trigger('#job-table-container', 'refresh');
+}
+
+fetch('/api/queue/status').then(r => r.json()).then(({paused}) => applyPauseStateQueue(paused)).catch(() => {});
+
+function loadQueueStats() {
+    fetch('/api/stats').then(r => r.json()).then(({data}) => {
+        const s = data.jobs_by_status || {};
+        const fmt = n => String(n || 0).padStart(4, '0');
+        document.getElementById('badge-pending').textContent = fmt(s.pending);
+        document.getElementById('badge-queued').textContent = fmt(s.queued);
+        document.getElementById('badge-transcoding').textContent = fmt(s.transcoding);
+        document.getElementById('badge-complete').textContent = fmt(s.complete);
+        document.getElementById('badge-failed').textContent = fmt(s.failed);
+    }).catch(() => {});
+}
+loadQueueStats();
+setInterval(loadQueueStats, 10000);
+
+function toggleBulkBar() {
+    const checked = document.querySelectorAll('.job-checkbox:checked');
+    const bar = document.getElementById('bulk-bar');
+    const count = document.getElementById('bulk-count');
+    if (checked.length > 0) {
+        bar.classList.remove('hidden');
+        count.textContent = checked.length;
+    } else {
+        bar.classList.add('hidden');
+    }
+}
+
+async function bulkCancel() {
+    const ids = [...document.querySelectorAll('.job-checkbox:checked')]
+        .filter(c => ['pending','queued'].includes(c.dataset.status))
+        .map(c => c.value);
+    if (!ids.length) { showToast('No cancellable jobs selected', 'warning'); return; }
+    if (!confirm(`Cancel ${ids.length} job(s)?`)) return;
+    const results = await Promise.all(ids.map(id => fetch(`/api/jobs/${id}/cancel`, {method: 'POST'})));
+    const ok = results.filter(r => r.ok).length;
+    const failed = results.length - ok;
+    if (failed) showToast(`${ok} cancelled, ${failed} failed`, 'error');
+    else showToast(`${ok} job(s) cancelled`, 'warning');
+    htmx.trigger('#job-table-container', 'refresh');
+    document.getElementById('bulk-bar').classList.add('hidden');
+}
+
+async function bulkRetry() {
+    const ids = [...document.querySelectorAll('.job-checkbox:checked')]
+        .filter(c => c.dataset.status === 'failed')
+        .map(c => c.value);
+    if (!ids.length) { showToast('No failed jobs selected', 'warning'); return; }
+    const results = await Promise.all(ids.map(id => fetch(`/api/jobs/${id}/retry`, {method: 'POST'})));
+    const ok = results.filter(r => r.ok).length;
+    const failed = results.length - ok;
+    if (failed) showToast(`${ok} retried, ${failed} failed`, 'error');
+    else showToast(`${ok} job(s) retried`, 'success');
+    htmx.trigger('#job-table-container', 'refresh');
+    document.getElementById('bulk-bar').classList.add('hidden');
+}
+
+// Real-time progress via WebSocket
+(function() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws;
+    function connect() {
+        ws = new WebSocket(`${proto}//${location.host}/ws/updates`);
+        ws.onmessage = function(evt) {
+            const data = JSON.parse(evt.data);
+            const row = document.querySelector(`[data-job-id="${data.job_id}"]`);
+            if (!row) return;
+            const pct = Math.round(data.progress * 100);
+            const barEl = row.querySelector('[data-progress-bar]');
+            const pctEl = row.querySelector('[data-progress-pct]');
+            if (barEl) barEl.style.width = pct + '%';
+            if (pctEl) pctEl.textContent = pct + '%';
+        };
+        ws.onclose = function() { setTimeout(connect, 5000); };
+    }
+    connect();
+})();
+
+// Populate library dropdowns
+fetch('/api/libraries').then(r => r.json()).then(({data}) => {
+    for (const sel of [document.getElementById('scan-library'), document.getElementById('library-filter')]) {
+        if (!sel) continue;
+        for (const lib of data) {
+            const opt = document.createElement('option');
+            opt.value = lib.name;
+            opt.textContent = lib.name;
+            sel.appendChild(opt);
+        }
+    }
+}).catch(() => {});
+</script>
+{% endblock %}

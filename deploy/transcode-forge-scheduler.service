@@ -1,0 +1,41 @@
+[Unit]
+Description=Transcode Forge Scheduler (FastAPI + UI + scan cron)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+
+# Per-host overrides go in a drop-in:
+#   systemctl edit transcode-forge-scheduler
+# Defaults below are sane for a single-host install.
+Environment=TF_LOG_LEVEL=info
+
+# Secrets live in /opt/transcode-forge/.env (gitignored, root-only).
+# The file should set TF_DB_URL, TF_REDIS_URL, and TF_AUTH_SECRET.
+EnvironmentFile=-/opt/transcode-forge/.env
+
+WorkingDirectory=/opt/transcode-forge
+ExecStart=/opt/transcode-forge/.venv/bin/uvicorn \
+    transcode_forge.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --log-level ${TF_LOG_LEVEL} \
+    --no-access-log
+
+Restart=on-failure
+RestartSec=5
+
+# Graceful shutdown — let in-flight requests finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

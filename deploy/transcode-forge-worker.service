@@ -1,0 +1,29 @@
+[Unit]
+Description=Transcode Forge Worker
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/transcode-forge
+
+# Worker config — set these in /etc/default/transcode-forge-worker (or via
+# systemctl edit transcode-forge-worker for a drop-in). At minimum:
+#   TF_SERVER_URL=http://your-scheduler:8000
+#   TF_WORKER_TOKEN=<token issued in Settings → Workers>
+#   TF_WORKER_NAME=this-host
+#   TF_PREFERRED_ENCODER=auto   # or qsv / nvenc / cpu
+EnvironmentFile=-/etc/default/transcode-forge-worker
+
+ExecStart=/opt/transcode-forge/.venv/bin/python -m transcode_forge.worker
+
+Restart=on-failure
+RestartSec=10
+
+# Graceful shutdown: send SIGTERM, wait up to 5 min for the current
+# transcode to finish before a hard kill.
+KillSignal=SIGTERM
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

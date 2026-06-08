@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Transcode Forge{% endblock %}</title>
+
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+    <!-- Tailwind CSS (CDN — no DaisyUI) -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+
+    <!-- Google Fonts: Big Shoulders Display (industrial poster), IBM Plex Sans (body), IBM Plex Mono (readouts), Material Symbols -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght@20..48,100..700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind config: FORGE Console palette — warm graphite + hot-iron amber + cool steel -->
+    <script>
+    tailwind.config = {
+        darkMode: "class",
+        theme: {
+            extend: {
+                colors: {
+                    /* Forge palette — warm dark graphite, never pure black */
+                    "forge-bg":         "#0d0b08",  /* deep warm black, hint of soot */
+                    "forge-surface":    "#15120e",  /* primary surface */
+                    "forge-panel":      "#1c1813",  /* raised panel */
+                    "forge-panel-hi":   "#252018",  /* hover / high panel */
+                    "forge-rule":       "#3a342a",  /* hairline borders, warm low-contrast */
+                    "forge-rule-bright":"#5a4f3e",  /* prominent hairlines */
+                    /* Hot-iron primary — temperature gradient */
+                    "forge-ember":      "#ff7a1a",  /* hot iron — primary accent */
+                    "forge-ember-deep": "#cc4f00",  /* cooling iron */
+                    "forge-ember-hot":  "#ffb86b",  /* white-hot highlights */
+                    /* Cool steel — secondary */
+                    "forge-steel":      "#7d8da3",
+                    "forge-steel-hi":   "#a4b4ca",
+                    /* Status — desaturated, not candy-bright */
+                    "forge-oxide":      "#7eba78",  /* success — green oxide */
+                    "forge-rust":       "#d75d3a",  /* error — rust */
+                    "forge-brass":      "#d9b35c",  /* warning — brass */
+                    /* Text — warm aged-paper whites */
+                    "forge-paper":      "#ede7d8",  /* primary text */
+                    "forge-ink":        "#c8c0ad",  /* secondary text */
+                    "forge-mute":       "#9a8f7d",  /* tertiary / labels — WCAG AA on forge-bg */
+                    "forge-faint":      "#5a5343",  /* almost-disabled */
+
+                    /* Aliases for legacy templates — keep them mapped to the new palette
+                       so settings/movies/tv/etc. inherit the look without per-page edits. */
+                    "background": "#0d0b08",
+                    "surface": "#15120e",
+                    "surface-dim": "#0d0b08",
+                    "surface-container": "#1c1813",
+                    "surface-container-low": "#15120e",
+                    "surface-container-lowest": "#0d0b08",
+                    "surface-container-high": "#252018",
+                    "surface-container-highest": "#2e2820",
+                    "surface-bright": "#3a342a",
+                    "surface-variant": "#252018",
+                    "surface-tint": "#ff7a1a",
+                    "on-surface": "#ede7d8",
+                    "on-surface-variant": "#c8c0ad",
+                    "on-background": "#ede7d8",
+                    "primary": "#ff7a1a",
+                    "primary-container": "#cc4f00",
+                    "primary-fixed": "#ffb86b",
+                    "primary-fixed-dim": "#ff9a4d",
+                    "on-primary": "#1a0a00",
+                    "on-primary-fixed": "#1a0a00",
+                    "on-primary-container": "#ffe1c9",
+                    "on-primary-fixed-variant": "#7a2d00",
+                    "secondary": "#a4b4ca",
+                    "secondary-container": "#3d4858",
+                    "secondary-fixed": "#cfd8e8",
+                    "secondary-fixed-dim": "#a4b4ca",
+                    "on-secondary": "#101820",
+                    "on-secondary-container": "#cfd8e8",
+                    "on-secondary-fixed": "#101820",
+                    "on-secondary-fixed-variant": "#3d4858",
+                    "tertiary": "#d9b35c",
+                    "tertiary-container": "#7a5b1a",
+                    "tertiary-fixed": "#f0d896",
+                    "tertiary-fixed-dim": "#d9b35c",
+                    "on-tertiary": "#1f1500",
+                    "on-tertiary-fixed": "#1f1500",
+                    "on-tertiary-container": "#f0d896",
+                    "on-tertiary-fixed-variant": "#5a4214",
+                    "error": "#ff8866",
+                    "error-container": "#7a2a14",
+                    "on-error": "#1f0500",
+                    "on-error-container": "#ffd7c8",
+                    "outline": "#857d6c",
+                    "outline-variant": "#3a342a",
+                    "inverse-surface": "#ede7d8",
+                    "inverse-on-surface": "#15120e",
+                    "inverse-primary": "#cc4f00",
+                },
+                fontFamily: {
+                    "display": ["'Big Shoulders Display'", "Impact", "sans-serif"],
+                    "headline": ["'Big Shoulders Display'", "Impact", "sans-serif"],
+                    "body": ["'IBM Plex Sans'", "system-ui", "sans-serif"],
+                    "mono": ["'IBM Plex Mono'", "ui-monospace", "monospace"],
+                    "label": ["'IBM Plex Mono'", "ui-monospace", "monospace"],
+                },
+                borderRadius: {
+                    "DEFAULT": "0.125rem",  /* 2px — sharp, not rounded-everything */
+                    "lg":      "0.25rem",
+                    "xl":      "0.375rem",
+                    "full":    "9999px",
+                },
+                letterSpacing: {
+                    "stamp": "0.18em",  /* for stamped/uppercase labels */
+                },
+            },
+        },
+    }
+    </script>
+
+    <!-- HTMX + WebSocket extension -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-ws@2.0.2/ws.js"></script>
+
+    <!-- Chart.js (stats page only, loaded via CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
+
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="/static/css/app.css">
+
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-forge-bg text-forge-paper font-body selection:bg-forge-ember/40 forge-grain antialiased">
+
+    <!-- Mobile sidebar toggle (hidden checkbox) -->
+    <input type="checkbox" id="drawer-toggle" class="hidden peer">
+
+    <!-- Sidebar overlay (mobile only) -->
+    <label for="drawer-toggle" class="fixed inset-0 bg-black/70 z-40 hidden peer-checked:block lg:hidden cursor-pointer"></label>
+
+    <!-- Sidebar — workshop ledger -->
+    <aside class="forge-sidebar h-screen w-64 fixed left-0 top-0 overflow-y-auto z-50
+                  -translate-x-full peer-checked:translate-x-0 lg:translate-x-0 transition-transform duration-200">
+        <div class="flex flex-col h-full">
+            <!-- Logo / Wordmark -->
+            <div class="px-7 pt-8 pb-7 border-b border-forge-rule/60 relative">
+                <div class="forge-corner forge-corner-tl"></div>
+                <div class="forge-corner forge-corner-tr"></div>
+                <div class="flex items-center gap-3 mb-1">
+                    <span class="material-symbols-outlined text-forge-ember text-[28px]" style="font-variation-settings: 'FILL' 1, 'wght' 600;">local_fire_department</span>
+                    <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Transcode</p>
+                </div>
+                <h1 class="font-display font-black text-5xl leading-none text-forge-paper tracking-tight">FORGE</h1>
+                <p class="font-mono text-[10px] text-forge-mute mt-2 tracking-wider">v{{ app_version }}</p>
+            </div>
+
+            <!-- Navigation — workshop section index -->
+            <nav class="flex-1 py-5 px-3">
+                <p class="px-4 mb-2 font-mono text-[9px] uppercase tracking-stamp text-forge-mute/70">Sections</p>
+                {% set nav_items = [
+                    ('/',         'dashboard',  'dashboard',          '01', 'Dashboard'),
+                    ('/movies',   'movies',     'movie',              '02', 'Movies'),
+                    ('/tv',       'tv',         'tv',                 '03', 'TV Shows'),
+                    ('/queue',    'queue',      'queue_play_next',    '04', 'Queue'),
+                    ('/workers',  'workers',    'engineering',        '05', 'Workers'),
+                    ('/history',  'history',    'history',            '06', 'History'),
+                    ('/skipped',  'skipped',    'block',              '07', 'Skipped'),
+                    ('/stats',    'stats',      'leaderboard',        '08', 'Stats'),
+                ] %}
+                {% for href, page, icon, num, label in nav_items %}
+                <a href="{{ href }}"
+                   class="forge-navlink {% if active_page == page %}is-active{% endif %}"
+                   {% if active_page == page %}aria-current="page"{% endif %}>
+                    <span class="forge-navlink-num">{{ num }}</span>
+                    <span class="material-symbols-outlined text-[20px] forge-navlink-icon" {% if active_page == page %}style="font-variation-settings: 'FILL' 1;"{% endif %}>{{ icon }}</span>
+                    <span class="forge-navlink-label">{{ label }}</span>
+                    {% if page == 'queue' %}
+                    <span id="nav-queue-badge" class="ml-auto font-mono text-[10px] font-bold text-forge-ember bg-forge-ember/15 border border-forge-ember/30 px-1.5 py-0.5"
+                          hx-get="/partials/queue-badge"
+                          hx-trigger="load, every 10s"
+                          hx-swap="innerHTML"
+                          style="display:none"></span>
+                    {% endif %}
+                </a>
+                {% endfor %}
+
+                <p class="px-4 mt-6 mb-2 font-mono text-[9px] uppercase tracking-stamp text-forge-mute/70">System</p>
+                <a href="/settings"
+                   class="forge-navlink {% if active_page == 'settings' %}is-active{% endif %}"
+                   {% if active_page == 'settings' %}aria-current="page"{% endif %}>
+                    <span class="forge-navlink-num">09</span>
+                    <span class="material-symbols-outlined text-[20px] forge-navlink-icon" {% if active_page == 'settings' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>settings</span>
+                    <span class="forge-navlink-label">Settings</span>
+                </a>
+
+                <button onclick="forgeLogout()" class="forge-navlink w-full text-left">
+                    <span class="forge-navlink-num">--</span>
+                    <span class="material-symbols-outlined text-[20px] forge-navlink-icon">logout</span>
+                    <span class="forge-navlink-label">Sign out</span>
+                </button>
+            </nav>
+
+            <!-- Footer: Health readout -->
+            <div class="px-5 pb-5 pt-4 border-t border-forge-rule/60 relative">
+                <div class="forge-corner forge-corner-bl"></div>
+                <div class="forge-corner forge-corner-br"></div>
+                <p class="font-mono text-[9px] uppercase tracking-stamp text-forge-mute mb-2">System</p>
+                <div id="health-indicator"
+                     hx-get="/partials/health"
+                     hx-trigger="load, every 30s"
+                     hx-swap="innerHTML">
+                    <span class="material-symbols-outlined text-forge-mute text-sm animate-pulse">hourglass_empty</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Top header bar — minimal datum strip -->
+    <header class="forge-header fixed top-0 right-0 left-0 lg:left-64 h-12 z-40 flex items-center px-4 lg:px-8">
+        <label for="drawer-toggle" class="lg:hidden cursor-pointer text-forge-ink hover:text-forge-paper transition-colors mr-4" aria-label="Toggle navigation menu">
+            <span class="material-symbols-outlined">menu</span>
+        </label>
+        <div class="flex items-center gap-3 font-mono text-[10px] uppercase tracking-stamp text-forge-mute">
+            <span class="inline-block w-1.5 h-1.5 bg-forge-oxide rounded-full forge-pulse"></span>
+            <span>Online</span>
+            <span class="text-forge-rule-bright">·</span>
+            <span id="forge-clock"></span>
+        </div>
+        <div class="flex-1"></div>
+    </header>
+
+    <!-- Main content canvas -->
+    <main class="lg:ml-64 pt-16 px-4 lg:px-8 pb-12 min-h-screen relative">
+        <div id="preflight-banner"></div>
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Toast container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm"></div>
+
+    <!-- Preflight banner — surface startup config problems (bad library
+         path, missing ffmpeg) instead of letting scans fail silently. -->
+    <script>
+    (function () {
+        fetch('/api/health/preflight').then(r => r.ok ? r.json() : null).then(data => {
+            if (!data || !data.issues || !data.issues.length) return;
+            const el = document.getElementById('preflight-banner');
+            if (!el) return;
+            const critical = data.issues.some(i => i.level === 'critical');
+            const tone = critical
+                ? 'border-forge-rust/50 bg-forge-rust/10 text-forge-rust'
+                : 'border-forge-brass/50 bg-forge-brass/10 text-forge-brass';
+            const items = data.issues.map(i => `<li>${i.message}</li>`).join('');
+            el.innerHTML = `
+              <div class="mb-6 border ${tone} px-4 py-3 font-mono text-xs">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="uppercase tracking-stamp">Configuration ${critical ? 'error' : 'warning'}</span>
+                  <button onclick="this.closest('div.mb-6').remove()" class="opacity-60 hover:opacity-100">&times;</button>
+                </div>
+                <ul class="list-disc pl-5 space-y-1 leading-relaxed">${items}</ul>
+              </div>`;
+        }).catch(() => {});
+    })();
+    </script>
+
+    <!-- Toast system + clock readout -->
+    <script>
+    function showToast(message, type = 'info') {
+        const container = document.getElementById('toast-container');
+        const styles = {
+            success: 'bg-forge-oxide/15 text-forge-oxide border-forge-oxide/40',
+            error:   'bg-forge-rust/15 text-forge-rust border-forge-rust/40',
+            warning: 'bg-forge-brass/15 text-forge-brass border-forge-brass/40',
+            info:    'bg-forge-ember/15 text-forge-ember border-forge-ember/40',
+        };
+        const toast = document.createElement('div');
+        toast.className = `forge-toast ${styles[type] || styles.info} font-mono text-xs px-4 py-3 border flex items-center gap-3 forge-slide-in`;
+        // Tag the type + announce errors assertively so automated QA (and screen
+        // readers) can find them.
+        toast.dataset.toastType = type;
+        toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+        toast.innerHTML = `
+            <span class="font-bold uppercase tracking-stamp text-[10px] opacity-80">${type}</span>
+            <span class="text-forge-paper">${message}</span>
+            <button onclick="this.parentElement.remove()" class="ml-auto opacity-60 hover:opacity-100" aria-label="Dismiss">&times;</button>
+        `;
+        container.appendChild(toast);
+        // Errors STAY until dismissed by click — a transient auto-fading error
+        // can be missed by a screenshot or a Playwright assertion. Everything
+        // else auto-dismisses after 5s.
+        if (type !== 'error') {
+            setTimeout(() => {
+                toast.classList.add('forge-fade-out');
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+    }
+
+    document.body.addEventListener('showToast', function(evt) {
+        const d = evt.detail || {};
+        showToast(d.message || 'Action completed', d.type || 'info');
+    });
+
+    async function forgeLogout() {
+        try {
+            await fetch('/api/auth/logout', {method: 'POST'});
+        } catch (_) {}
+        window.location.href = '/login';
+    }
+
+    // "Don't try this again" — flag a path so it never queues again,
+    // then refresh the listing it was clicked from.
+    async function excludeFile(path, reason, refreshTargetId) {
+        if (!confirm("Never try transcoding this file again?\n\n" + path)) return;
+        try {
+            const resp = await fetch('/api/exclusions', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: path, reason: reason || 'manual'}),
+            });
+            if (!resp.ok) {
+                showToast('Failed to exclude (HTTP ' + resp.status + ')', 'error');
+                return;
+            }
+            showToast('Excluded — won\'t try again', 'warning');
+            if (refreshTargetId && window.htmx) {
+                htmx.trigger('#' + refreshTargetId, 'refresh');
+            }
+        } catch (e) {
+            showToast('Exclude failed: ' + e.message, 'error');
+        }
+    }
+    async function unexcludeFile(path, refreshTargetId) {
+        try {
+            const resp = await fetch('/api/exclusions', {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: path}),
+            });
+            if (!resp.ok) {
+                showToast('Failed to remove exclusion', 'error');
+                return;
+            }
+            showToast('Exclusion lifted', 'success');
+            if (refreshTargetId && window.htmx) {
+                htmx.trigger('#' + refreshTargetId, 'refresh');
+            }
+        } catch (e) {
+            showToast('Unexclude failed: ' + e.message, 'error');
+        }
+    }
+    // Remove a file from the skip list (retry on next scan). Sends a JSON
+    // body — the endpoint expects JSON, so the old hx-delete (form-encoded)
+    // 422'd. Mirrors the other delete actions.
+    async function unskipFile(path, refreshTargetId) {
+        try {
+            const resp = await fetch('/api/skipped', {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file_path: path}),
+            });
+            if (!resp.ok) {
+                showToast('Failed to unskip (HTTP ' + resp.status + ')', 'error');
+                return;
+            }
+            showToast('Removed from skip list — will retry on next scan', 'success');
+            if (refreshTargetId && window.htmx) {
+                htmx.trigger('#' + refreshTargetId, 'load');
+            }
+        } catch (e) {
+            showToast('Unskip failed: ' + e.message, 'error');
+        }
+    }
+
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target && evt.detail.target.id === 'nav-queue-badge') {
+            evt.detail.target.style.display = evt.detail.target.textContent.trim() ? '' : 'none';
+        }
+    });
+
+    // Header clock — UTC, 24h, monospaced. Updates every second.
+    (function tickClock() {
+        const el = document.getElementById('forge-clock');
+        if (!el) return;
+        const d = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        el.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        setTimeout(tickClock, 1000);
+    })();
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

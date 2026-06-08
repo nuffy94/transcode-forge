@@ -1,0 +1,16 @@
+{# Reusable click-to-sort table header.
+
+   label      visible column name
+   col        sort key sent to the server (must be in the repo's sort whitelist)
+   sort/dir   the currently-active sort key + direction (for the caret)
+   on_sort    name of the page-level JS handler, called as on_sort('col')
+   cls        extra classes (e.g. 'text-right')
+#}
+{% macro sort_th(label, col, sort, dir, on_sort, cls='') -%}
+{%- set active = (sort == col) -%}
+<th class="cursor-pointer select-none hover:text-forge-paper {{ cls }}"
+    onclick="{{ on_sort }}('{{ col }}')"
+    {% if active %}aria-sort="{{ 'descending' if dir == 'desc' else 'ascending' }}"{% endif %}>
+    {{ label }}{% if active %} <span aria-hidden="true">{{ '↓' if dir == 'desc' else '↑' }}</span>{% endif %}
+</th>
+{%- endmacro %}

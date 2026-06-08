@@ -1,0 +1,49 @@
+<div class="space-y-3.5 font-mono text-[11px]">
+    <div class="flex items-center justify-between">
+        <span class="forge-stat-label">Redis</span>
+        <span class="flex items-center gap-2">
+            {% if redis_ok %}
+            <span class="text-forge-oxide font-semibold uppercase tracking-wider">Online</span>
+            <span class="forge-dot forge-dot--on"></span>
+            {% else %}
+            <span class="text-forge-rust font-semibold uppercase tracking-wider">Offline</span>
+            <span class="forge-dot forge-dot--err"></span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="flex items-center justify-between">
+        <span class="forge-stat-label">Database</span>
+        <span class="flex items-center gap-2">
+            {% if db_ok %}
+            <span class="text-forge-oxide font-semibold uppercase tracking-wider">Online</span>
+            <span class="forge-dot forge-dot--on"></span>
+            {% else %}
+            <span class="text-forge-rust font-semibold uppercase tracking-wider">Error</span>
+            <span class="forge-dot forge-dot--err"></span>
+            {% endif %}
+        </span>
+    </div>
+    <div class="flex items-center justify-between">
+        <span class="forge-stat-label">Queue</span>
+        <span class="flex items-center gap-2">
+            {% if queue_paused %}
+            <span class="text-forge-brass font-semibold uppercase tracking-wider">Paused</span>
+            <span class="material-symbols-outlined text-forge-brass text-sm">pause</span>
+            {% else %}
+            <span class="text-forge-ember font-semibold uppercase tracking-wider">Running</span>
+            <span class="material-symbols-outlined text-forge-ember text-sm">play_arrow</span>
+            {% endif %}
+        </span>
+    </div>
+
+    <div class="pt-3.5 mt-1 border-t border-forge-rule/60 space-y-2">
+        <div class="flex justify-between items-center">
+            <span class="forge-stat-label">Libraries</span>
+            <span class="font-mono font-semibold text-forge-paper tabular-nums">{{ "%02d"|format(library_count) }}</span>
+        </div>
+        <div class="flex justify-between items-center">
+            <span class="forge-stat-label">In Queue</span>
+            <span class="font-mono font-semibold {% if jobs_queued %}text-forge-ember{% else %}text-forge-mute{% endif %} tabular-nums">{{ "%04d"|format(jobs_queued) }}</span>
+        </div>
+    </div>
+</div>

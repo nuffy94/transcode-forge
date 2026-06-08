@@ -1,0 +1,9 @@
+<div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-stamp">
+    {% if healthy %}
+    <span class="forge-dot forge-dot--on forge-pulse"></span>
+    <span class="text-forge-oxide font-semibold">System OK</span>
+    {% else %}
+    <span class="forge-dot forge-dot--err forge-pulse"></span>
+    <span class="text-forge-rust font-semibold">Degraded</span>
+    {% endif %}
+</div>

@@ -1,0 +1,742 @@
+{% extends "base.html" %}
+{% block title %}Settings — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-8 mb-12">
+
+    <header class="forge-rise forge-rise-1">
+        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
+            <span class="text-forge-ember">/</span> Section 09 &nbsp;·&nbsp; Configuration
+        </p>
+        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">SETTINGS</h1>
+        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
+            Workshop configuration &mdash; libraries, integrations, transcoding parameters, and maintenance.
+        </p>
+    </header>
+
+    <div class="grid grid-cols-12 gap-4 max-w-[1600px]">
+
+        <!-- Libraries -->
+        <section id="tab-libraries" class="col-span-12 lg:col-span-8 forge-panel relative p-6 forge-rise forge-rise-2">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="flex items-end justify-between mb-5">
+                <div>
+                    <p class="forge-stat-label">Libraries</p>
+                    <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">CATALOGS</h3>
+                </div>
+                <button class="forge-btn forge-btn--ember" onclick="document.getElementById('add-lib-modal').showModal()">
+                    <span class="material-symbols-outlined text-base">add</span>
+                    <span>Add Library</span>
+                </button>
+            </div>
+            <div id="libraries-list" class="overflow-x-auto">
+                <div class="flex justify-center py-8">
+                    <span class="material-symbols-outlined text-forge-ember animate-spin text-2xl">settings</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quality Presets -->
+        <section id="tab-quality" class="col-span-12 lg:col-span-4 forge-panel relative p-6 forge-rise forge-rise-2">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">Quality</p>
+                <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">PRESETS</h3>
+            </div>
+            <div id="quality-display">
+                <div class="flex justify-center py-8">
+                    <span class="material-symbols-outlined text-forge-ember animate-spin text-2xl">settings</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Services -->
+        <section id="tab-general" class="col-span-12 lg:col-span-8 forge-panel relative p-6 forge-rise forge-rise-3">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">External</p>
+                <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">SERVICES</h3>
+            </div>
+            <div class="space-y-4">
+
+                <!-- Redis -->
+                <div class="border border-forge-rule bg-forge-bg/50 p-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <span id="redis-dot" class="forge-dot forge-dot--off"></span>
+                            <span class="font-display font-semibold text-base text-forge-paper uppercase tracking-tight">Redis Cache</span>
+                        </div>
+                        <span id="redis-status" class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">—</span>
+                    </div>
+                    <p class="font-mono text-[10px] text-forge-mute mt-2 leading-relaxed">URL via TF_REDIS_URL env var. Real-time progress + worker heartbeats.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Transcoding Defaults -->
+        <section class="col-span-12 lg:col-span-4 forge-panel relative p-6 forge-rise forge-rise-3">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">Defaults</p>
+                <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">TRANSCODING</h3>
+            </div>
+            <div class="space-y-3 font-mono text-xs">
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Target Codec</span>
+                    <span class="text-forge-ember">HEVC (H.265)</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Encoder Priority</span>
+                    <span class="text-forge-paper">QSV → NVENC → CPU</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Max Retries</span>
+                    <span id="sys-retries" class="text-forge-paper font-semibold tabular-nums">3</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Heartbeat</span>
+                    <span id="sys-heartbeat" class="text-forge-paper font-semibold tabular-nums">10s</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Worker Timeout</span>
+                    <span id="sys-timeout" class="text-forge-paper font-semibold tabular-nums">30s</span>
+                </div>
+            </div>
+            <p class="font-mono text-[10px] text-forge-mute italic mt-4 leading-relaxed">
+                Configured via <code class="text-forge-ember">TF_*</code> env vars.
+            </p>
+        </section>
+
+        <!-- System Info -->
+        <section class="col-span-12 lg:col-span-4 forge-panel relative p-6 forge-rise forge-rise-4">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">Runtime</p>
+                <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">SYSTEM</h3>
+            </div>
+            <div class="space-y-3 font-mono text-xs">
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Version</span>
+                    <span id="sys-version" class="text-forge-ember">—</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Database</span>
+                    <span id="sys-database" class="text-forge-paper truncate ml-3">—</span>
+                </div>
+                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Uptime</span>
+                    <span id="sys-uptime" class="text-forge-paper font-semibold">—</span>
+                </div>
+                <div class="space-y-1.5 pt-1">
+                    <div class="flex justify-between text-[10px] uppercase tracking-stamp">
+                        <span class="text-forge-mute">Disk Usage</span>
+                        <span id="sys-disk-text" class="text-forge-paper tabular-nums">—</span>
+                    </div>
+                    <div class="forge-meter">
+                        <div id="sys-disk-bar" class="forge-meter-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Worker Tokens — issue / revoke -->
+        <section id="tab-workers" class="col-span-12 forge-panel relative p-6 forge-rise forge-rise-3">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">Workers</p>
+                <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">REMOTE NODES</h3>
+                <p class="font-mono text-[10px] text-forge-mute mt-2 max-w-xl">
+                    Issue a token, paste it on the worker machine, done. Workers
+                    never need DB or Redis credentials — they speak HTTP only.
+                </p>
+            </div>
+
+            <!-- Issue new -->
+            <div class="forge-panel p-4 mb-5">
+                <p class="forge-stat-label mb-3">Issue Token</p>
+                <div class="flex flex-wrap items-end gap-3">
+                    <div class="flex-1 min-w-[200px]">
+                        <label class="forge-stat-label block mb-1">Label</label>
+                        <input id="token-label" type="text" placeholder="e.g. gpu-node" class="forge-input w-full">
+                    </div>
+                    <button class="forge-btn forge-btn--ember" onclick="issueToken()">
+                        <span class="material-symbols-outlined text-base">vpn_key</span>
+                        <span>Issue</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- One-time token reveal modal-ish panel -->
+            <div id="token-reveal" class="forge-panel forge-panel--ember p-5 mb-5 hidden">
+                <div class="flex items-start gap-3">
+                    <span class="material-symbols-outlined text-forge-ember-hot mt-1">key</span>
+                    <div class="flex-1 min-w-0">
+                        <p class="forge-stat-label mb-1">Copy now — this is the only time you'll see it</p>
+                        <div class="flex items-center gap-2">
+                            <code id="token-value" class="font-mono text-xs text-forge-paper bg-forge-bg px-3 py-2 break-all flex-1"></code>
+                            <button class="forge-btn" onclick="copyToken()">Copy</button>
+                            <button class="forge-iconbtn" onclick="document.getElementById('token-reveal').classList.add('hidden')">
+                                <span class="material-symbols-outlined text-base">close</span>
+                            </button>
+                        </div>
+                        <details class="mt-3">
+                            <summary class="forge-stat-label cursor-pointer">How to use it on a remote machine</summary>
+                            <pre id="token-usage" class="font-mono text-[10px] text-forge-ink whitespace-pre-wrap mt-2 bg-forge-bg p-3 leading-relaxed"></pre>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <!-- List -->
+            <div id="tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load" hx-swap="innerHTML"></div>
+        </section>
+
+        <!-- Schedules — when the queue is allowed to run -->
+        <section id="tab-schedules" class="col-span-12 forge-panel relative p-6 forge-rise forge-rise-4">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="flex items-end justify-between mb-5">
+                <div>
+                    <p class="forge-stat-label">Queue Windows</p>
+                    <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">SCHEDULES</h3>
+                    <p class="font-mono text-[10px] text-forge-mute mt-2 max-w-xl">
+                        Define hours when workers may pull jobs. With no schedules, the queue runs always.
+                        With one or more enabled, the queue runs only inside an active window.
+                    </p>
+                </div>
+                <span id="schedule-status-badge" class="forge-pill forge-pill--queued">…</span>
+            </div>
+
+            <!-- Add new -->
+            <div class="forge-panel p-4 mb-5">
+                <p class="forge-stat-label mb-3">New Window</p>
+                <div class="flex flex-wrap items-end gap-3">
+                    <div>
+                        <label for="sched-name" class="forge-stat-label block mb-1">Name</label>
+                        <input id="sched-name" type="text" placeholder="overnight" class="forge-input w-40">
+                    </div>
+                    <div>
+                        <label for="sched-start" class="forge-stat-label block mb-1">Start</label>
+                        <input id="sched-start" type="number" min="0" max="23" value="22" class="forge-input w-20 tabular-nums">
+                    </div>
+                    <div>
+                        <label for="sched-end" class="forge-stat-label block mb-1">End</label>
+                        <input id="sched-end" type="number" min="0" max="23" value="6" class="forge-input w-20 tabular-nums">
+                    </div>
+                    <div class="flex flex-col">
+                        <label class="forge-stat-label block mb-1">Days</label>
+                        <div id="sched-days" class="flex gap-1">
+                            {% for label, bit in [('M',1),('T',2),('W',4),('Th',8),('F',16),('Sa',32),('Su',64)] %}
+                            <button type="button"
+                                    class="forge-btn px-2 py-1 text-xs sched-day-btn"
+                                    data-bit="{{ bit }}"
+                                    aria-pressed="true">{{ label }}</button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <button class="forge-btn forge-btn--ember" onclick="addSchedule()">
+                        <span class="material-symbols-outlined text-base">add</span>
+                        <span>Add</span>
+                    </button>
+                </div>
+                <p class="font-mono text-[10px] text-forge-mute mt-3 italic">
+                    Hours are 24h UTC. End hour is exclusive — 22 → 6 means active 22:00 through 05:59.
+                </p>
+            </div>
+
+            <!-- List -->
+            <div id="schedules-list" hx-get="/partials/schedules" hx-trigger="load" hx-swap="innerHTML"></div>
+        </section>
+
+        <!-- Maintenance -->
+        <section id="tab-danger" class="col-span-12 lg:col-span-4 forge-panel relative p-6 forge-rise forge-rise-4" style="border-color: rgba(215, 93, 58, 0.4);">
+            <div class="mb-5 flex items-center gap-2">
+                <span class="material-symbols-outlined text-forge-rust">warning</span>
+                <div>
+                    <p class="forge-stat-label" style="color: var(--forge-rust);">Danger</p>
+                    <h3 class="font-display font-bold text-2xl text-forge-rust uppercase tracking-tight mt-0.5">MAINTENANCE</h3>
+                </div>
+            </div>
+            <p class="font-mono text-[10px] text-forge-ink mb-5 leading-relaxed">
+                System-wide destructive actions. Cannot be undone.
+            </p>
+            <div class="grid grid-cols-1 gap-2.5">
+                <button class="forge-btn forge-btn--danger w-full justify-center" onclick="cancelAllJobs()">Cancel All Jobs</button>
+                <button class="forge-btn forge-btn--danger w-full justify-center" onclick="clearHistory()">Clear History</button>
+                <button class="forge-btn forge-btn--danger w-full justify-center" onclick="resetAllJobs()">Reset All Jobs</button>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- Add Library Modal -->
+<dialog id="add-lib-modal" class="forge-dialog">
+    <div class="forge-panel forge-panel--ember p-6 w-full max-w-md">
+        <div class="mb-4">
+            <p class="forge-stat-label">New</p>
+            <h3 class="font-display font-bold text-xl text-forge-paper uppercase tracking-tight mt-0.5">ADD LIBRARY</h3>
+        </div>
+        <div class="flex flex-col gap-3">
+            <div>
+                <label class="forge-stat-label block mb-1.5">Name</label>
+                <input id="lib-name" type="text" placeholder="e.g. Movies" class="forge-input w-full">
+            </div>
+            <div>
+                <label for="lib-type" class="forge-stat-label block mb-1.5">Type</label>
+                <select id="lib-type" aria-label="Library media type" class="forge-select w-full">
+                    <option value="movies">Movies</option>
+                    <option value="tv">TV Shows</option>
+                    <option value="anime">Anime</option>
+                </select>
+            </div>
+            <div>
+                <label class="forge-stat-label block mb-1.5">Path</label>
+                <input id="lib-path" type="text" placeholder="/media/movies" class="forge-input w-full">
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="forge-stat-label block mb-1.5">CRF (1–51, lower = better)</label>
+                    <input id="lib-quality" type="number" value="21" min="1" max="51" class="forge-input w-full">
+                </div>
+                <div class="flex-1">
+                    <label class="forge-stat-label block mb-1.5">Scan interval (h)</label>
+                    <input id="lib-scan-interval" type="number" value="24" min="1" max="168" class="forge-input w-full">
+                </div>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-5">
+            <button class="forge-btn" onclick="document.getElementById('add-lib-modal').close()">Cancel</button>
+            <button class="forge-btn forge-btn--ember" onclick="addLibrary()">Add</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Edit Library Modal -->
+<dialog id="edit-lib-modal" class="forge-dialog">
+    <div class="forge-panel forge-panel--ember p-6 w-full max-w-md">
+        <div class="mb-4">
+            <p class="forge-stat-label">Modify</p>
+            <h3 class="font-display font-bold text-xl text-forge-paper uppercase tracking-tight mt-0.5">EDIT LIBRARY</h3>
+        </div>
+        <input type="hidden" id="edit-lib-id">
+        <div class="flex flex-col gap-3">
+            <div>
+                <label class="forge-stat-label block mb-1.5">Name</label>
+                <input id="edit-lib-name" type="text" class="forge-input w-full">
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="forge-stat-label block mb-1.5">CRF (1–51)</label>
+                    <input id="edit-lib-quality" type="number" min="1" max="51" class="forge-input w-full">
+                </div>
+                <div class="flex-1">
+                    <label class="forge-stat-label block mb-1.5">Scan interval (h)</label>
+                    <input id="edit-lib-scan-interval" type="number" min="1" max="168" class="forge-input w-full">
+                </div>
+            </div>
+            <div class="flex items-center gap-3 mt-1">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input id="edit-lib-enabled" type="checkbox" class="forge-check">
+                    <span class="font-mono text-[11px] text-forge-ink uppercase tracking-stamp">Enabled</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input id="edit-lib-auto-scan" type="checkbox" class="forge-check">
+                    <span class="font-mono text-[11px] text-forge-ink uppercase tracking-stamp">Auto Scan</span>
+                </label>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-5">
+            <button class="forge-btn" onclick="document.getElementById('edit-lib-modal').close()">Cancel</button>
+            <button class="forge-btn forge-btn--ember" onclick="saveLibrary()">Save</button>
+        </div>
+    </div>
+</dialog>
+
+<script>
+async function loadLibraries() {
+    const resp = await fetch('/api/libraries');
+    const {data} = await resp.json();
+
+    _libraryCache = data;
+
+    if (!data.length) {
+        document.getElementById('libraries-list').innerHTML = `
+            <div class="text-center py-12">
+                <span class="material-symbols-outlined text-3xl text-forge-faint mb-2 block">folder_off</span>
+                <p class="font-display font-bold text-lg text-forge-mute uppercase tracking-tight mb-1">No Libraries</p>
+                <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Add one to get started</p>
+            </div>`;
+        document.getElementById('quality-display').innerHTML = '<p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp text-center py-4">No libraries configured</p>';
+        return;
+    }
+
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+
+    let html = '<table class="forge-table"><thead><tr><th>Name</th><th>Type</th><th>Path</th><th class="text-right">CRF</th><th>State</th><th class="text-right">Actions</th></tr></thead><tbody>';
+    let qualHtml = '<table class="forge-table"><thead><tr><th>Library</th><th class="text-right">CRF</th><th>Tier</th></tr></thead><tbody>';
+    for (const lib of data) {
+        const qualDesc = lib.quality_preset <= 18 ? 'Very High' : lib.quality_preset <= 22 ? 'High' : lib.quality_preset <= 26 ? 'Medium' : 'Low';
+        const safeName = esc(lib.name);
+        const safePath = esc(lib.path);
+        html += `<tr>
+            <td class="text-forge-paper font-semibold">${safeName}</td>
+            <td><span class="forge-pill forge-pill--queued">${esc(lib.media_type)}</span></td>
+            <td class="col-mono text-xs max-w-xs truncate text-forge-mute" title="${safePath}">${safePath}</td>
+            <td class="col-mono text-right text-forge-paper">${lib.quality_preset}</td>
+            <td>${lib.enabled ? '<span class="forge-pill forge-pill--complete">on</span>' : '<span class="forge-pill forge-pill--cancelled">off</span>'}</td>
+            <td class="text-right">
+                <div class="flex justify-end gap-1.5">
+                    <button class="forge-iconbtn" title="Edit" data-edit-id="${esc(lib.id)}"><span class="material-symbols-outlined text-base">edit</span></button>
+                    <button class="forge-iconbtn" title="Scan" data-scan-id="${esc(lib.id)}" data-scan-name="${safeName}"><span class="material-symbols-outlined text-base">search</span></button>
+                    <button class="forge-iconbtn forge-iconbtn--danger" title="Delete" data-delete-id="${esc(lib.id)}" data-delete-name="${safeName}"><span class="material-symbols-outlined text-base">delete</span></button>
+                </div>
+            </td>
+        </tr>`;
+        qualHtml += `<tr><td class="text-forge-paper font-semibold">${safeName}</td><td class="col-mono text-right text-forge-ember">${lib.quality_preset}</td><td class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">${qualDesc}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    qualHtml += '</tbody></table>';
+    document.getElementById('libraries-list').innerHTML = html;
+    document.getElementById('quality-display').innerHTML = qualHtml;
+}
+
+async function addLibrary() {
+    const body = {
+        name: document.getElementById('lib-name').value,
+        media_type: document.getElementById('lib-type').value,
+        path: document.getElementById('lib-path').value,
+        quality_preset: parseInt(document.getElementById('lib-quality').value),
+        scan_interval_hours: parseInt(document.getElementById('lib-scan-interval').value) || 24,
+    };
+    const resp = await fetch('/api/libraries', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+        document.getElementById('add-lib-modal').close();
+        showToast(`Library "${body.name}" added`, 'success');
+        loadLibraries();
+    } else {
+        const err = await resp.json();
+        showToast(err.detail || 'Failed to add library', 'error');
+    }
+}
+
+async function scanLibrary(id, name) {
+    try {
+        const resp = await fetch(`/api/libraries/${id}/scan?max_files=0`, {method: 'POST'});
+        if (resp.ok) {
+            showToast(`Scanning ${name}...`, 'info');
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast(err.detail || `Scan failed for ${name}`, 'error');
+        }
+    } catch (e) {
+        showToast(`Scan failed: ${e.message}`, 'error');
+    }
+}
+
+async function deleteLibrary(id) {
+    try {
+        const resp = await fetch(`/api/libraries/${id}`, {method: 'DELETE'});
+        if (resp.ok) {
+            showToast('Library deleted', 'warning');
+            loadLibraries();
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast(err.detail || 'Failed to delete library', 'error');
+        }
+    } catch (e) {
+        showToast(`Delete failed: ${e.message}`, 'error');
+    }
+}
+
+let _libraryCache = [];
+
+async function editLibrary(id) {
+    const lib = _libraryCache.find(l => l.id === id);
+    if (!lib) return;
+    document.getElementById('edit-lib-id').value = lib.id;
+    document.getElementById('edit-lib-name').value = lib.name;
+    document.getElementById('edit-lib-quality').value = lib.quality_preset;
+    document.getElementById('edit-lib-scan-interval').value = lib.scan_interval_hours || 24;
+    document.getElementById('edit-lib-enabled').checked = !!lib.enabled;
+    document.getElementById('edit-lib-auto-scan').checked = !!lib.auto_scan;
+    document.getElementById('edit-lib-modal').showModal();
+}
+
+async function saveLibrary() {
+    const id = document.getElementById('edit-lib-id').value;
+    const body = {
+        name: document.getElementById('edit-lib-name').value,
+        quality_preset: parseInt(document.getElementById('edit-lib-quality').value),
+        scan_interval_hours: parseInt(document.getElementById('edit-lib-scan-interval').value) || 24,
+        enabled: document.getElementById('edit-lib-enabled').checked,
+        auto_scan: document.getElementById('edit-lib-auto-scan').checked,
+    };
+    const resp = await fetch(`/api/libraries/${id}`, {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+        document.getElementById('edit-lib-modal').close();
+        showToast('Library updated', 'success');
+        loadLibraries();
+    } else {
+        const err = await resp.json();
+        showToast(err.detail || 'Failed to update library', 'error');
+    }
+}
+
+async function _maintenanceAction({url, method = 'POST', confirmMsg, successMsg, successKind = 'warning'}) {
+    if (!confirm(confirmMsg)) return;
+    try {
+        const resp = await fetch(url, {method});
+        if (resp.ok) {
+            showToast(successMsg, successKind);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast(err.detail || `Action failed (HTTP ${resp.status})`, 'error');
+        }
+    } catch (e) {
+        showToast(`Action failed: ${e.message}`, 'error');
+    }
+}
+
+function cancelAllJobs() {
+    return _maintenanceAction({
+        url: '/api/jobs/cancel-all',
+        confirmMsg: 'Cancel all pending and queued jobs? Workers will finish their current job.',
+        successMsg: 'All pending jobs cancelled',
+    });
+}
+
+function clearHistory() {
+    return _maintenanceAction({
+        url: '/api/jobs/clear-completed',
+        confirmMsg: 'Clear completed and cancelled jobs from history? This cannot be undone.',
+        successMsg: 'History cleared',
+    });
+}
+
+function resetAllJobs() {
+    return _maintenanceAction({
+        url: '/api/jobs/reset?confirm=yes-delete-all',
+        method: 'DELETE',
+        confirmMsg: 'DELETE ALL JOBS — including in-progress, completed, and history? This cannot be undone.',
+        successMsg: 'All jobs deleted',
+    });
+}
+
+fetch('/api/system/info').then(r => r.json()).then(data => {
+    document.getElementById('sys-version').textContent = 'v' + data.version;
+    document.getElementById('sys-database').textContent = data.database;
+    document.getElementById('sys-uptime').textContent = data.uptime;
+    if (data.disk && data.disk.total > 0) {
+        const totalTB = (data.disk.total / 1099511627776).toFixed(1);
+        const usedTB = (data.disk.used / 1099511627776).toFixed(1);
+        document.getElementById('sys-disk-text').textContent = `${usedTB} / ${totalTB} TiB`;
+        document.getElementById('sys-disk-bar').style.width = data.disk.percent + '%';
+    }
+    if (data.max_retries) document.getElementById('sys-retries').textContent = data.max_retries;
+    if (data.heartbeat_interval) document.getElementById('sys-heartbeat').textContent = data.heartbeat_interval + 's';
+    if (data.heartbeat_timeout) document.getElementById('sys-timeout').textContent = data.heartbeat_timeout + 's';
+}).catch(() => {});
+
+fetch('/api/health').then(r => r.json()).then(data => {
+    const dot = document.getElementById('redis-dot');
+    const label = document.getElementById('redis-status');
+    if (data.redis) {
+        dot.className = 'forge-dot forge-dot--on';
+        label.textContent = 'Online';
+        label.style.color = 'var(--forge-oxide)';
+    } else {
+        dot.className = 'forge-dot forge-dot--err';
+        label.textContent = 'Offline';
+        label.style.color = 'var(--forge-rust)';
+    }
+}).catch(() => {});
+
+loadLibraries();
+
+document.getElementById('libraries-list').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-edit-id]');
+    if (editBtn) { editLibrary(editBtn.dataset.editId); return; }
+    const scanBtn = e.target.closest('[data-scan-id]');
+    if (scanBtn) { scanLibrary(scanBtn.dataset.scanId, scanBtn.dataset.scanName); return; }
+    const delBtn = e.target.closest('[data-delete-id]');
+    if (delBtn && confirm(`Delete ${delBtn.dataset.deleteName}?`)) {
+        deleteLibrary(delBtn.dataset.deleteId);
+    }
+});
+
+// ── Worker tokens ────────────────────────────────────────────────────
+async function issueToken() {
+    const label = document.getElementById('token-label').value.trim();
+    if (!label) { showToast('Token label required', 'error'); return; }
+    try {
+        const r = await fetch('/api/worker-tokens', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({label}),
+        });
+        if (!r.ok) { showToast('Failed to issue token', 'error'); return; }
+        const data = await r.json();
+        document.getElementById('token-value').textContent = data.token;
+        const usage = document.getElementById('token-usage');
+        const origin = window.location.origin;
+        usage.textContent =
+`# On the worker machine:
+TF_SERVER_URL=${origin}
+TF_WORKER_TOKEN=${data.token}
+TF_WORKER_NAME=${data.label}
+TF_PREFERRED_ENCODER=auto
+
+# Then run:
+uv run python -m transcode_forge.worker`;
+        document.getElementById('token-reveal').classList.remove('hidden');
+        document.getElementById('token-label').value = '';
+        showToast('Token issued', 'success');
+        htmx.trigger('#tokens-list', 'load');
+    } catch (e) {
+        showToast('Issue failed: ' + e.message, 'error');
+    }
+}
+
+function copyToken() {
+    const text = document.getElementById('token-value').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Token copied', 'success');
+    }).catch(() => {
+        showToast('Copy failed — select manually', 'error');
+    });
+}
+
+async function revokeToken(fingerprint) {
+    if (!confirm("Revoke this token?\n\nThe worker using it will be evicted on its next request.")) return;
+    try {
+        const r = await fetch('/api/worker-tokens', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({token: fingerprint}),
+        });
+        if (!r.ok) { showToast('Revoke failed', 'error'); return; }
+        showToast('Token revoked', 'warning');
+        htmx.trigger('#tokens-list', 'load');
+    } catch (e) {
+        showToast('Revoke failed: ' + e.message, 'error');
+    }
+}
+
+// ── Schedules ────────────────────────────────────────────────────────
+const SCHED_DAY_BTN_ON = 'forge-btn--ember';
+document.querySelectorAll('.sched-day-btn').forEach(btn => {
+    btn.classList.add(SCHED_DAY_BTN_ON);
+    btn.addEventListener('click', () => {
+        btn.classList.toggle(SCHED_DAY_BTN_ON);
+        btn.setAttribute('aria-pressed', btn.classList.contains(SCHED_DAY_BTN_ON));
+    });
+});
+
+function getSelectedDaysMask() {
+    let mask = 0;
+    document.querySelectorAll('.sched-day-btn').forEach(btn => {
+        if (btn.classList.contains(SCHED_DAY_BTN_ON)) {
+            mask |= parseInt(btn.dataset.bit, 10);
+        }
+    });
+    return mask;
+}
+
+async function refreshScheduleStatus() {
+    try {
+        const r = await fetch('/api/schedules');
+        if (!r.ok) return;
+        const meta = (await r.json()).meta || {};
+        const badge = document.getElementById('schedule-status-badge');
+        if (badge) {
+            if (meta.queue_active_now) {
+                badge.textContent = 'Queue Active';
+                badge.className = 'forge-pill forge-pill--complete';
+            } else {
+                badge.textContent = 'Queue Paused';
+                badge.className = 'forge-pill forge-pill--cancelled';
+            }
+        }
+    } catch (_) {}
+}
+refreshScheduleStatus();
+
+async function addSchedule() {
+    const name = document.getElementById('sched-name').value.trim();
+    const start = parseInt(document.getElementById('sched-start').value, 10);
+    const end = parseInt(document.getElementById('sched-end').value, 10);
+    const days_mask = getSelectedDaysMask();
+    if (!name) { showToast('Schedule name required', 'error'); return; }
+    if (!days_mask) { showToast('Pick at least one day', 'error'); return; }
+    try {
+        const r = await fetch('/api/schedules', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, start_hour: start, end_hour: end, days_mask}),
+        });
+        if (!r.ok) { showToast('Failed to add schedule', 'error'); return; }
+        showToast('Schedule added', 'success');
+        document.getElementById('sched-name').value = '';
+        htmx.trigger('#schedules-list', 'load');
+        refreshScheduleStatus();
+    } catch (e) {
+        showToast('Add failed: ' + e.message, 'error');
+    }
+}
+
+async function toggleSchedule(id, enabled) {
+    try {
+        const r = await fetch('/api/schedules/' + id, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled}),
+        });
+        if (!r.ok) { showToast('Toggle failed', 'error'); return; }
+        showToast(enabled ? 'Enabled' : 'Disabled', enabled ? 'success' : 'warning');
+        htmx.trigger('#schedules-list', 'load');
+        refreshScheduleStatus();
+    } catch (e) {
+        showToast('Toggle failed: ' + e.message, 'error');
+    }
+}
+
+async function deleteSchedule(id) {
+    if (!confirm('Delete this schedule?')) return;
+    try {
+        const r = await fetch('/api/schedules/' + id, {method: 'DELETE'});
+        if (!r.ok) { showToast('Delete failed', 'error'); return; }
+        showToast('Schedule removed', 'warning');
+        htmx.trigger('#schedules-list', 'load');
+        refreshScheduleStatus();
+    } catch (e) {
+        showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+</script>
+{% endblock %}

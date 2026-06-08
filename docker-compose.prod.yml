@@ -1,0 +1,70 @@
+# Production install — pulls the pre-built image instead of building from
+# source. The package is private, so authenticate once first:
+#     echo <github-PAT-with-read:packages> | docker login ghcr.io -u <user> --password-stdin
+# Then:
+#     ./bootstrap.sh && docker compose -f docker-compose.prod.yml up -d
+#
+# Postgres/Redis are internal-only; only the web UI is published. Pin a
+# version with TF_VERSION=0.6.0 (defaults to :latest).
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: transcode_forge
+      POSTGRES_USER: tf
+      POSTGRES_PASSWORD: ${TF_PG_PASSWORD:?run ./bootstrap.sh first}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tf -d transcode_forge"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    image: ghcr.io/nuffy94/transcode-forge:${TF_VERSION:-latest}
+    ports:
+      # 0.0.0.0 by default (LAN-reachable). On an untrusted network set
+      # TF_BIND=127.0.0.1 and front with a TLS reverse proxy (README → Security).
+      - "${TF_BIND:-0.0.0.0}:${TF_PORT:-8000}:8000"
+    environment:
+      TF_DB_URL: "postgresql://tf:${TF_PG_PASSWORD}@postgres:5432/transcode_forge"
+      TF_REDIS_URL: "redis://redis:6379/0"
+      TF_AUTH_SECRET: "${TF_AUTH_SECRET}"
+      TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
+      TF_SESSION_SECURE: "${TF_SESSION_SECURE:-false}"
+      TF_LIBRARY_MOVIES: "/media/movies"
+      TF_LIBRARY_TV: "/media/tv"
+    volumes:
+      - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:ro"
+      - "${TF_LIBRARY_TV:-./media/tv}:/media/tv:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:

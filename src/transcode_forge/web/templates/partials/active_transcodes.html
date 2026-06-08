@@ -1,0 +1,47 @@
+{% if jobs %}
+<div class="divide-y divide-forge-rule/40">
+    {% for job in jobs %}
+    {% set pct = (job.progress * 100)|int %}
+    <div class="px-6 py-5 flex items-center gap-6 group hover:bg-forge-panel-hi/40 transition-colors relative">
+        <!-- Index column -->
+        <div class="font-mono text-[10px] text-forge-mute font-semibold w-8 text-right">
+            {{ "%02d"|format(loop.index) }}
+        </div>
+        <!-- Filename + meta -->
+        <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-3 mb-2 flex-wrap">
+                <h3 class="font-body font-medium text-sm text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</h3>
+                <span class="forge-pill forge-pill--running">
+                    <span class="forge-dot forge-dot--hot forge-pulse"></span>
+                    Transcoding
+                </span>
+                <span class="font-mono text-[10px] text-forge-mute uppercase tracking-wider">{{ job.library }}</span>
+                {% if job.worker_id %}
+                <span class="font-mono text-[10px] text-forge-steel">⌖ {{ job.worker_id[:14] }}</span>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="forge-meter flex-1">
+                    <div class="forge-meter-fill" data-progress-bar style="width: {{ pct }}%;"></div>
+                </div>
+                <div class="font-mono text-sm font-semibold text-forge-ember-hot tabular-nums w-16 text-right" data-progress-pct>
+                    {{ pct }}<span class="text-forge-mute text-xs">%</span>
+                </div>
+            </div>
+        </div>
+        <!-- Cancel button -->
+        <button class="opacity-0 group-hover:opacity-100 p-2 border border-forge-rule-bright hover:border-forge-rust hover:text-forge-rust text-forge-mute transition-all"
+                onclick="cancelJob('{{ job.id }}'); return false;"
+                aria-label="Cancel job">
+            <span class="material-symbols-outlined text-base">close</span>
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="px-8 py-16 text-center">
+    <span class="material-symbols-outlined text-forge-faint text-4xl mb-3 block">flash_off</span>
+    <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">Forge Cold</p>
+    <p class="font-mono text-[11px] text-forge-mute uppercase tracking-stamp">No active transcodes</p>
+</div>
+{% endif %}

@@ -1,0 +1,391 @@
+"""Tests for web UI routes and HTMX partials."""
+
+from datetime import UTC, datetime, timedelta
+
+from httpx import AsyncClient
+
+from transcode_forge.models.job import Job, JobStatus
+from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import schedules as sched_repo
+
+
+class TestSchedulesPartial:
+    """Regression guard: /partials/schedules 500'd because the template used
+    an invalid Jinja `&` bitwise operator (it couldn't even compile)."""
+
+    async def test_partial_renders_empty(self, client: AsyncClient):
+        resp = await client.get("/partials/schedules")
+        assert resp.status_code == 200
+
+    async def test_partial_renders_with_schedule(self, client: AsyncClient, app):
+        await sched_repo.create_schedule(
+            app.state.db, name="overnight", start_hour=23, end_hour=7, days_mask=31
+        )
+        resp = await client.get("/partials/schedules")
+        assert resp.status_code == 200
+        assert "overnight" in resp.text
+        assert "Mon" in resp.text  # day_names(31) -> Mon..Fri
+
+
+class TestPageRoutes:
+    async def test_dashboard_page(self, client: AsyncClient):
+        response = await client.get("/")
+        assert response.status_code == 200
+        assert "Transcode Forge" in response.text
+        assert "Dashboard" in response.text
+
+    async def test_queue_page(self, client: AsyncClient):
+        response = await client.get("/queue")
+        assert response.status_code == 200
+        assert "JOB QUEUE" in response.text
+
+    async def test_workers_page(self, client: AsyncClient):
+        response = await client.get("/workers")
+        assert response.status_code == 200
+        assert "Workers" in response.text
+
+    async def test_history_page(self, client: AsyncClient):
+        response = await client.get("/history")
+        assert response.status_code == 200
+        assert "History" in response.text
+
+    async def test_skipped_page(self, client: AsyncClient):
+        response = await client.get("/skipped")
+        assert response.status_code == 200
+        assert "Skipped" in response.text
+
+    async def test_stats_page(self, client: AsyncClient):
+        response = await client.get("/stats")
+        assert response.status_code == 200
+        assert "Statistics" in response.text
+
+
+class TestPartials:
+    async def test_health_partial(self, client: AsyncClient):
+        response = await client.get("/partials/health")
+        assert response.status_code == 200
+        assert "System OK" in response.text
+
+    async def test_jobs_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/jobs")
+        assert response.status_code == 200
+        assert "No Jobs in Queue" in response.text
+
+    async def test_workers_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/workers")
+        assert response.status_code == 200
+        assert "No Workers Registered" in response.text
+
+    async def test_history_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/history")
+        assert response.status_code == 200
+        assert "No History Yet" in response.text
+
+    async def test_skipped_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/skipped")
+        assert response.status_code == 200
+        assert "No Skipped Files" in response.text
+
+    async def test_skipped_unskip_uses_json_not_hx_delete(self, client: AsyncClient, app):
+        """The unskip button must call unskipFile() (a JSON fetch). It used to
+        use hx-delete + hx-vals, which sends form-encoded data and 422'd against
+        the JSON endpoint (found by the UX sweep)."""
+        from transcode_forge.models.skipped import SkipReason
+        from transcode_forge.repos import skipped as skip_repo
+
+        await skip_repo.record_skip(
+            app.state.db,
+            file_path="/m/skip-me.mkv",
+            library="movies",
+            codec="hevc",
+            skip_reason=SkipReason.ALREADY_HEVC,
+        )
+        resp = await client.get("/partials/skipped")
+        assert resp.status_code == 200
+        assert "unskipFile(" in resp.text
+        assert 'hx-delete="/api/skipped"' not in resp.text
+
+    async def test_stats_partial(self, client: AsyncClient):
+        response = await client.get("/partials/stats")
+        assert response.status_code == 200
+        assert "Space Saved" in response.text
+
+    async def test_skip_stats_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/skip-stats")
+        assert response.status_code == 200
+
+    async def test_queue_badge_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/queue-badge")
+        assert response.status_code == 200
+        assert response.text.strip() == ""
+
+    async def test_queue_badge_partial_with_jobs(self, client: AsyncClient, app):
+        db = app.state.db
+        j1 = Job(source_path="/a.mkv", library="movies", source_codec="h264", quality_value=21)
+        j2 = Job(source_path="/b.mkv", library="movies", source_codec="h264", quality_value=21)
+        await job_repo.create_job(db, j1)
+        await job_repo.create_job(db, j2)
+
+        response = await client.get("/partials/queue-badge")
+        assert response.status_code == 200
+        assert response.text.strip() == "2"
+
+    async def test_history_partial_with_status_filter(self, client: AsyncClient, app):
+        db = app.state.db
+        j1 = Job(
+            source_path="/a.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.COMPLETE,
+        )
+        j2 = Job(
+            source_path="/b.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.FAILED,
+            error_message="test error",
+        )
+        await job_repo.create_job(db, j1)
+        await job_repo.create_job(db, j2)
+
+        # Filter for complete only
+        response = await client.get("/partials/history?status=complete")
+        assert response.status_code == 200
+        assert "a.mkv" in response.text
+        assert "b.mkv" not in response.text
+
+        # Filter for failed only
+        response = await client.get("/partials/history?status=failed")
+        assert response.status_code == 200
+        assert "b.mkv" in response.text
+        assert "a.mkv" not in response.text
+
+    async def test_history_partial_duration_calculation(self, client: AsyncClient, app):
+        db = app.state.db
+        now = datetime.now(UTC)
+        j = Job(
+            source_path="/dur.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, j)
+        await job_repo.update_job(
+            db,
+            j.id,
+            status="complete",
+            started_at=(now - timedelta(minutes=3, seconds=45)).isoformat(),
+            completed_at=now.isoformat(),
+        )
+
+        response = await client.get("/partials/history")
+        assert response.status_code == 200
+        assert "3m 45s" in response.text
+
+    async def test_history_partial_dynamic_codec(self, client: AsyncClient, app):
+        db = app.state.db
+        j = Job(
+            source_path="/codec.mkv",
+            library="movies",
+            source_codec="mpeg4",
+            target_codec="hevc",
+            quality_value=21,
+            status=JobStatus.COMPLETE,
+        )
+        await job_repo.create_job(db, j)
+
+        response = await client.get("/partials/history")
+        assert response.status_code == 200
+        assert "MPEG4" in response.text
+        assert "HEVC" in response.text
+
+    async def test_settings_page(self, client: AsyncClient):
+        response = await client.get("/settings")
+        assert response.status_code == 200
+        assert "Settings" in response.text
+        assert "Libraries" in response.text
+        assert "Services" in response.text
+        assert "System Info" in response.text
+
+    async def test_settings_schedule_inputs_are_labelled(self, client: AsyncClient):
+        """The schedule Start/End hour inputs are number fields with no
+        placeholder, so without an explicit for= they have no accessible name
+        (axe flagged them critical). Guard the label association."""
+        response = await client.get("/settings")
+        assert response.status_code == 200
+        assert 'for="sched-start"' in response.text
+        assert 'for="sched-end"' in response.text
+        assert 'for="sched-name"' in response.text
+
+    async def test_movies_page(self, client: AsyncClient):
+        response = await client.get("/movies")
+        assert response.status_code == 200
+        assert "Movies" in response.text
+
+    async def test_tv_page(self, client: AsyncClient):
+        response = await client.get("/tv")
+        assert response.status_code == 200
+        assert "TV" in response.text
+
+    async def test_pagination_count_is_page_aware(self, client: AsyncClient):
+        """The 'Showing X to Y' count must reflect the current page, not a
+        hardcoded start of 1 (regression: page 7 read 'Showing 1 - 50')."""
+        for path in ("/movies", "/tv"):
+            response = await client.get(path)
+            assert response.status_code == 200
+            # page-aware range computation, not a hardcoded start
+            assert "(meta.page - 1) * meta.per_page" in response.text
+
+    async def test_jobs_partial_with_data(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Test Movie.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            source_size=2_000_000_000,
+        )
+        await job_repo.create_job(db, job)
+
+        response = await client.get("/partials/jobs")
+        assert response.status_code == 200
+        assert "Test Movie.mkv" in response.text
+        assert "movies" in response.text
+
+    async def test_history_partial_failed_job_has_retry_button(self, client: AsyncClient, app):
+        """Failed jobs in history should expose a retry button (HX-POST to /api/jobs/{id}/retry)."""
+        db = app.state.db
+        job = Job(
+            source_path="/m.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.FAILED,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="failed", error_message="ffmpeg exited 1")
+
+        response = await client.get("/partials/history?status=failed")
+        assert response.status_code == 200
+        assert f"/api/jobs/{job.id}/retry" in response.text
+        assert "ffmpeg exited 1" in response.text
+
+    async def test_recent_activity_partial_completed_uses_status_complete(
+        self, client: AsyncClient, app
+    ):
+        """Recent activity must check job.status == 'complete' (StrEnum value), not 'completed'."""
+        db = app.state.db
+        now = datetime.now(UTC)
+        job = Job(
+            source_path="/done.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.COMPLETE,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="complete", completed_at=now.isoformat())
+
+        response = await client.get("/partials/recent-activity")
+        assert response.status_code == 200
+        assert "done.mkv" in response.text
+        # The Forge complete pill implies the `status == 'complete'` branch fired —
+        # otherwise the template would render the catch-all "pending" pill instead.
+        assert "forge-pill--complete" in response.text
+        assert "forge-pill--pending" not in response.text
+
+    async def test_history_partial_filters_by_library(self, client: AsyncClient, app):
+        """history?library=X should drop jobs from other libraries."""
+        db = app.state.db
+        for path, lib in [
+            ("/movies/a.mkv", "movies"),
+            ("/movies/b.mkv", "movies"),
+            ("/tv/c.mkv", "tv"),
+        ]:
+            j = Job(
+                source_path=path,
+                library=lib,
+                source_codec="h264",
+                quality_value=21,
+                status=JobStatus.COMPLETE,
+            )
+            await job_repo.create_job(db, j)
+            await job_repo.update_job(db, j.id, status="complete")
+
+        response = await client.get("/partials/history?library=tv")
+        assert response.status_code == 200
+        assert "c.mkv" in response.text
+        assert "a.mkv" not in response.text
+        assert "b.mkv" not in response.text
+
+    async def test_workers_partial_flags_stale_heartbeat(self, client: AsyncClient, app):
+        """A worker last seen 31 minutes ago should render the heartbeat-stale alert."""
+        from transcode_forge.models.worker import Worker, WorkerStatus
+        from transcode_forge.repos import workers as worker_repo
+
+        db = app.state.db
+        worker = Worker(
+            name="worker-1",
+            host="192.0.2.61",
+            capabilities=["qsv"],
+            status=WorkerStatus.ONLINE,
+        )
+        await worker_repo.upsert_worker(db, worker)
+
+        # upsert_worker stamps last_heartbeat with now(), so backdate it directly.
+        stale = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+        await db.execute(
+            "UPDATE workers SET last_heartbeat = ? WHERE id = ?",
+            (stale, worker.id),
+        )
+        await db.commit()
+
+        response = await client.get("/partials/workers")
+        assert response.status_code == 200
+        assert "worker-1" in response.text
+        # Stale alert copy shows up in the partial when alarm tier is reached.
+        assert "Heartbeat" in response.text
+        assert "Stale" in response.text or "Lost" in response.text
+
+    async def test_history_partial_has_sortable_headers(self, client: AsyncClient, app):
+        """Column headers must be click-to-sort (wired to sortHistory) and the
+        route must accept sort/dir without erroring."""
+        await job_repo.create_job(
+            app.state.db,
+            Job(
+                source_path="/a.mkv",
+                library="movies",
+                source_codec="h264",
+                quality_value=21,
+                status=JobStatus.COMPLETE,
+            ),
+        )
+        resp = await client.get("/partials/history?sort=status&dir=asc")
+        assert resp.status_code == 200
+        assert "sortHistory(" in resp.text
+
+    async def test_jobs_partial_has_sortable_headers(self, client: AsyncClient, app):
+        await job_repo.create_job(
+            app.state.db,
+            Job(source_path="/q.mkv", library="movies", source_codec="h264", quality_value=21),
+        )
+        resp = await client.get("/partials/jobs?sort=source_size&dir=desc")
+        assert resp.status_code == 200
+        assert "sortQueue(" in resp.text
+
+    async def test_skipped_partial_has_sortable_headers(self, client: AsyncClient, app):
+        from transcode_forge.models.skipped import SkipReason
+        from transcode_forge.repos import skipped as skip_repo
+
+        await skip_repo.record_skip(
+            app.state.db,
+            file_path="/s.mkv",
+            library="movies",
+            codec="hevc",
+            skip_reason=SkipReason.ALREADY_HEVC,
+        )
+        resp = await client.get("/partials/skipped?sort=file_size&dir=asc")
+        assert resp.status_code == 200
+        assert "sortSkipped(" in resp.text

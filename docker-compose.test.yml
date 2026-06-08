@@ -1,0 +1,30 @@
+# Docker Compose for integration testing with MinIO.
+#
+# Provides a MinIO service for S3-library integration tests.
+# Run with: docker-compose -f docker-compose.test.yml up -d
+#
+# MinIO credentials: minioadmin / minioadmin
+# MinIO API endpoint: http://localhost:9000
+# Test bucket: test-bucket
+
+version: "3.8"
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: transcode-forge-minio-test
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # MinIO console (optional)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: minio server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./tests/fixtures/minio-data:/data

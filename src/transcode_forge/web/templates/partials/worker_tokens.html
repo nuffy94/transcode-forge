@@ -1,0 +1,48 @@
+{% if tokens %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            <th>Label</th>
+            <th>Token</th>
+            <th>Status</th>
+            <th>Last seen</th>
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tokens %}
+        <tr>
+            <td><span class="text-forge-paper">{{ t.label }}</span></td>
+            <td class="col-mono text-forge-mute">{{ t.fingerprint }}</td>
+            <td>
+                {% if t.revoked_at %}
+                <span class="forge-pill forge-pill--cancelled">Revoked</span>
+                {% elif t.worker_id %}
+                <span class="forge-pill forge-pill--complete">Connected</span>
+                {% else %}
+                <span class="forge-pill forge-pill--queued">Pending</span>
+                {% endif %}
+            </td>
+            <td class="col-mono text-forge-ink">{{ (t.last_used_at or '—')[:19].replace('T', ' ') }}</td>
+            <td class="text-right">
+                {% if not t.revoked_at %}
+                <button class="forge-iconbtn forge-iconbtn--danger"
+                        title="Revoke this token"
+                        data-fp="{{ t.fingerprint }}"
+                        onclick="revokeToken(this.dataset.fp); return false;">
+                    <span class="material-symbols-outlined text-base">block</span>
+                </button>
+                {% else %}
+                <span class="text-forge-mute/30">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="text-center py-10 px-6">
+    <span class="material-symbols-outlined text-3xl text-forge-faint mb-2 block">vpn_key_off</span>
+    <p class="font-mono text-[11px] text-forge-mute uppercase tracking-stamp">No worker tokens yet</p>
+</div>
+{% endif %}

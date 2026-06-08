@@ -1,0 +1,54 @@
+{% if schedules %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Window</th>
+            <th>Days</th>
+            <th class="text-center">Status</th>
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in schedules %}
+        <tr>
+            <td><span class="text-forge-paper">{{ s.name }}</span></td>
+            <td class="col-mono tabular-nums">
+                {{ "%02d"|format(s.start_hour) }}:00 &rarr; {{ "%02d"|format(s.end_hour) }}:00
+                {% if s.start_hour > s.end_hour %}<span class="text-forge-mute text-[10px] ml-1">(wraps)</span>{% endif %}
+            </td>
+            <td class="col-mono">
+                {% set days = s.days_mask|day_names %}
+                <span class="text-forge-ink">{{ days|join(' · ') if days|length < 7 else 'Every day' }}</span>
+            </td>
+            <td class="text-center">
+                {% if s.enabled %}
+                <span class="forge-pill forge-pill--complete">Enabled</span>
+                {% else %}
+                <span class="forge-pill forge-pill--cancelled">Disabled</span>
+                {% endif %}
+            </td>
+            <td class="text-right">
+                <div class="flex justify-end gap-1">
+                    <button class="forge-iconbtn"
+                            title="{% if s.enabled %}Disable{% else %}Enable{% endif %}"
+                            onclick="toggleSchedule('{{ s.id }}', {{ 'false' if s.enabled else 'true' }})">
+                        <span class="material-symbols-outlined text-base">{% if s.enabled %}toggle_on{% else %}toggle_off{% endif %}</span>
+                    </button>
+                    <button class="forge-iconbtn forge-iconbtn--danger"
+                            title="Delete schedule"
+                            onclick="deleteSchedule('{{ s.id }}')">
+                        <span class="material-symbols-outlined text-base">delete</span>
+                    </button>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="text-center py-10 px-6">
+    <span class="material-symbols-outlined text-3xl text-forge-faint mb-2 block">schedule</span>
+    <p class="font-mono text-[11px] text-forge-mute uppercase tracking-stamp">No windows configured &mdash; queue runs at all times</p>
+</div>
+{% endif %}

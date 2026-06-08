@@ -1,0 +1,68 @@
+{
+  "dashboard": {
+    "title": "Transcode Forge",
+    "uid": "transcode-forge",
+    "tags": ["transcode", "media"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "panels": [
+      {
+        "type": "stat",
+        "title": "Space Saved",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [{"expr": "tf_space_saved_bytes_total / 1073741824", "legendFormat": "GB"}],
+        "fieldConfig": {"defaults": {"unit": "decgbytes", "color": {"mode": "fixed", "fixedColor": "green"}}}
+      },
+      {
+        "type": "stat",
+        "title": "Active Transcodes",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "targets": [{"expr": "tf_jobs_active", "legendFormat": "active"}],
+        "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}
+      },
+      {
+        "type": "stat",
+        "title": "Queue Depth",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "targets": [{"expr": "tf_jobs_queued", "legendFormat": "queued"}],
+        "fieldConfig": {"defaults": {"thresholds": {"steps": [{"value": 0, "color": "green"}, {"value": 100, "color": "yellow"}, {"value": 500, "color": "red"}]}}}
+      },
+      {
+        "type": "stat",
+        "title": "Workers Online",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "targets": [{"expr": "tf_workers_online", "legendFormat": "online"}],
+        "fieldConfig": {"defaults": {"thresholds": {"steps": [{"value": 0, "color": "red"}, {"value": 1, "color": "yellow"}, {"value": 3, "color": "green"}]}}}
+      },
+      {
+        "type": "timeseries",
+        "title": "Space Saved Over Time",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [{"expr": "tf_space_saved_bytes_total / 1073741824", "legendFormat": "Total (GB)"}],
+        "fieldConfig": {"defaults": {"unit": "decgbytes"}}
+      },
+      {
+        "type": "timeseries",
+        "title": "Queue & Active Jobs",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {"expr": "tf_jobs_queued", "legendFormat": "Queued"},
+          {"expr": "tf_jobs_active", "legendFormat": "Active"}
+        ]
+      },
+      {
+        "type": "histogram",
+        "title": "Transcode Duration",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "targets": [{"expr": "histogram_quantile(0.95, rate(tf_transcode_duration_seconds_bucket[1h]))", "legendFormat": "p95"}],
+        "fieldConfig": {"defaults": {"unit": "s"}}
+      },
+      {
+        "type": "histogram",
+        "title": "File Size Ratio (output/source)",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "targets": [{"expr": "histogram_quantile(0.5, rate(tf_file_size_ratio_bucket[1h]))", "legendFormat": "median"}]
+      }
+    ]
+  }
+}

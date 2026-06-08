@@ -1,0 +1,195 @@
+<div class="flex flex-col gap-8">
+
+<!-- Hero readouts -->
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div class="forge-panel p-5 relative">
+        <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
+        <p class="forge-stat-label mb-2">Total Processed</p>
+        <h3 class="forge-stat-value text-4xl text-forge-paper tabular-nums">{{ "%04d"|format(stats.completed) }}</h3>
+    </div>
+    <div class="forge-panel forge-panel--ember p-5">
+        <p class="forge-stat-label mb-2">Space Saved</p>
+        <h3 class="forge-stat-value text-4xl text-forge-ember-hot tabular-nums">{{ "%.1f"|format(stats.total_space_saved_bytes / 1099511627776) }}<span class="text-base text-forge-mute ml-1">TiB</span></h3>
+    </div>
+    <div class="forge-panel p-5 relative">
+        <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
+        <p class="forge-stat-label mb-2">Avg Savings</p>
+        <h3 class="forge-stat-value text-4xl text-forge-oxide tabular-nums">{{ stats.avg_savings_pct }}<span class="text-base text-forge-mute ml-1">%</span></h3>
+    </div>
+    <div class="forge-panel p-5 relative">
+        <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
+        <p class="forge-stat-label mb-2">Active Workers</p>
+        <h3 class="forge-stat-value text-4xl text-forge-paper tabular-nums">{{ "%02d"|format(stats.workers_by_status.get('online', 0) + stats.workers_by_status.get('busy', 0)) }}<span class="text-base text-forge-mute">/{{ "%02d"|format(stats.total_workers) }}</span></h3>
+    </div>
+    <div class="forge-panel p-5 relative">
+        <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
+        <p class="forge-stat-label mb-2">Pending</p>
+        <h3 class="forge-stat-value text-4xl text-forge-brass tabular-nums">{{ "%04d"|format(stats.jobs_by_status.get('pending', 0) + stats.jobs_by_status.get('queued', 0)) }}</h3>
+    </div>
+</div>
+
+<!-- Library breakdown -->
+{% if stats.by_library %}
+<section>
+    <div class="flex items-end justify-between mb-3">
+        <div>
+            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">By Library</p>
+            <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight">LIBRARY YIELD</h2>
+        </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {% for lib, data in stats.by_library.items() %}
+        {% set pct = (data.completed * 100 / stats.completed)|round(0)|int if stats.completed else 0 %}
+        <div class="forge-panel relative p-6 flex flex-col gap-5">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="flex items-start justify-between">
+                <div>
+                    <p class="forge-stat-label">{{ lib }}</p>
+                    <h4 class="font-display font-bold text-3xl text-forge-paper uppercase tracking-tight mt-1">{{ "%04d"|format(data.completed) }}</h4>
+                    <p class="forge-stat-meta mt-1">files processed</p>
+                </div>
+                <!-- Gauge dial -->
+                <div class="relative w-20 h-20 flex-shrink-0">
+                    <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                        <circle cx="18" cy="18" r="16" fill="none" stroke="var(--forge-rule)" stroke-width="2"></circle>
+                        <circle cx="18" cy="18" r="16" fill="none" stroke="var(--forge-ember)" stroke-width="2" stroke-dasharray="{{ pct }}, 100" stroke-linecap="square" style="filter: drop-shadow(0 0 4px rgba(255, 122, 26, 0.5));"></circle>
+                    </svg>
+                    <div class="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-forge-ember-hot tabular-nums">{{ pct }}%</div>
+                </div>
+            </div>
+            <div class="border-t border-forge-rule/60 pt-3">
+                <p class="forge-stat-label mb-1">Reclaimed</p>
+                <p class="font-mono text-xl font-semibold text-forge-oxide tabular-nums">{{ "%.0f"|format(data.space_saved_bytes / 1073741824) }} <span class="text-sm text-forge-mute">GiB</span></p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<!-- Job distribution + skip reasons -->
+<section>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2 forge-panel relative p-6">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="flex items-end justify-between mb-5">
+                <div>
+                    <p class="forge-stat-label">Distribution</p>
+                    <h4 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">JOB OUTCOMES</h4>
+                </div>
+            </div>
+            {% set completed = stats.jobs_by_status.get('complete', 0) %}
+            {% set skipped = stats.jobs_by_status.get('skipped', 0) %}
+            {% set failed = stats.jobs_by_status.get('failed', 0) %}
+            {% set total_jobs = completed + skipped + failed if (completed + skipped + failed) > 0 else 1 %}
+            <div class="w-full h-10 flex border border-forge-rule overflow-hidden mb-4">
+                <div class="h-full flex items-center justify-center font-mono text-[10px] font-bold uppercase tracking-stamp text-forge-bg" style="width: {{ (completed * 100 / total_jobs)|round(0) }}%; background: var(--forge-oxide);">{% if (completed * 100 / total_jobs)|round(0) > 8 %}{{ (completed * 100 / total_jobs)|round(0) }}%{% endif %}</div>
+                <div class="h-full flex items-center justify-center font-mono text-[10px] font-bold uppercase tracking-stamp text-forge-bg" style="width: {{ (skipped * 100 / total_jobs)|round(0) }}%; background: var(--forge-brass);">{% if (skipped * 100 / total_jobs)|round(0) > 8 %}{{ (skipped * 100 / total_jobs)|round(0) }}%{% endif %}</div>
+                <div class="h-full flex items-center justify-center font-mono text-[10px] font-bold uppercase tracking-stamp text-forge-bg" style="width: {{ (failed * 100 / total_jobs)|round(0) }}%; background: var(--forge-rust);">{% if (failed * 100 / total_jobs)|round(0) > 8 %}{{ (failed * 100 / total_jobs)|round(0) }}%{% endif %}</div>
+            </div>
+            <div class="flex flex-wrap gap-6 font-mono text-[10px] uppercase tracking-stamp">
+                <div class="flex items-center gap-2">
+                    <span class="forge-dot" style="background: var(--forge-oxide);"></span>
+                    <span class="text-forge-mute">Complete</span>
+                    <span class="text-forge-paper tabular-nums">{{ completed }}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="forge-dot" style="background: var(--forge-brass);"></span>
+                    <span class="text-forge-mute">Skipped</span>
+                    <span class="text-forge-paper tabular-nums">{{ skipped }}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="forge-dot" style="background: var(--forge-rust);"></span>
+                    <span class="text-forge-mute">Failed</span>
+                    <span class="text-forge-paper tabular-nums">{{ failed }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="forge-panel relative p-6">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="mb-5">
+                <p class="forge-stat-label">Skips</p>
+                <h4 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">REASONS</h4>
+            </div>
+            {% if stats.skipped_by_reason %}
+            <div class="space-y-3">
+                {% for reason, count in stats.skipped_by_reason.items() %}
+                <div class="flex justify-between items-baseline">
+                    <span class="font-mono text-[11px] text-forge-ink uppercase tracking-wider">{{ reason|replace('_', ' ') }}</span>
+                    <span class="font-mono text-lg font-semibold text-forge-paper tabular-nums">{{ "%03d"|format(count) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp text-center py-4">No skipped files</p>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+<!-- Worker matrix -->
+<section>
+    <div class="flex items-end justify-between mb-3">
+        <div>
+            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Performance</p>
+            <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight">WORKER MATRIX</h2>
+        </div>
+    </div>
+    <div class="forge-panel relative">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-tr"></span>
+        <span class="forge-tick forge-tick-bl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <table class="forge-table">
+            <thead>
+                <tr>
+                    <th>Worker</th>
+                    <th class="text-right">Jobs</th>
+                    <th>Status</th>
+                    <th>Last Heartbeat</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for w in stats.workers %}
+                <tr>
+                    <td>
+                        <div class="flex items-center gap-3">
+                            {% if w.status in ['online', 'busy'] %}
+                            <span class="forge-dot forge-dot--on"></span>
+                            {% elif w.status == 'dead' %}
+                            <span class="forge-dot forge-dot--err"></span>
+                            {% else %}
+                            <span class="forge-dot forge-dot--off"></span>
+                            {% endif %}
+                            <span class="font-mono text-sm text-forge-paper">{{ w.name }}</span>
+                        </div>
+                    </td>
+                    <td class="col-mono text-right text-forge-paper font-semibold">{{ stats.jobs_by_worker.get(w.id, 0) }}</td>
+                    <td>
+                        {% if w.status in ['online', 'busy'] %}
+                        <span class="forge-pill forge-pill--complete">{{ w.status }}</span>
+                        {% elif w.status == 'dead' %}
+                        <span class="forge-pill forge-pill--failed">offline</span>
+                        {% else %}
+                        <span class="forge-pill forge-pill--pending">{{ w.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="col-mono text-xs text-forge-mute">{{ w.last_heartbeat[:16] if w.last_heartbeat else '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+</div>

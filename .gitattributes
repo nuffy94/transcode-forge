@@ -1,0 +1,30 @@
+# Auto-detect text vs binary, normalize to LF in the repo index.
+* text=auto eol=lf
+
+# Files that MUST be LF — Linux bash chokes on CRLF, Dockerfile RUN
+# layers carry over the bad endings, etc.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+Dockerfile  text eol=lf
+*.service   text eol=lf
+
+# Windows-only scripts stay CRLF.
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binaries — never touch.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.db        binary
+*.tar       binary
+*.gz        binary
+*.zip       binary

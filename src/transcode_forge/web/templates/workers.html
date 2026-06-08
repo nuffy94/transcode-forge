@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+{% block title %}Workers — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-8">
+
+    <header class="forge-rise forge-rise-1">
+        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
+            <span class="text-forge-ember">/</span> Section 05 &nbsp;·&nbsp; Fleet
+        </p>
+        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">WORKERS</h1>
+        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
+            Forge floor &mdash; transcode nodes, hardware encoders, and live job assignments.
+        </p>
+    </header>
+
+    <!-- Fleet readouts: side-by-side hero numbers -->
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4 forge-rise forge-rise-2">
+        <div class="forge-panel forge-panel--ember p-6 flex items-center gap-6">
+            <div class="flex-1">
+                <p class="forge-stat-label">Active Nodes</p>
+                <h3 id="stat-active-nodes" class="forge-stat-value text-6xl text-forge-ember-hot tabular-nums mt-2">—</h3>
+            </div>
+            <span class="material-symbols-outlined text-forge-ember/40" style="font-size: 60px;">hub</span>
+        </div>
+        <div class="forge-panel p-6 flex items-center gap-6 relative">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div class="flex-1">
+                <p class="forge-stat-label">Throughput</p>
+                <h3 id="stat-throughput" class="forge-stat-value text-6xl text-forge-paper tabular-nums mt-2">—</h3>
+                <p class="forge-stat-meta mt-1">Concurrent slots</p>
+            </div>
+            <span class="material-symbols-outlined text-forge-mute/30" style="font-size: 60px;">speed</span>
+        </div>
+    </section>
+
+    <!-- Scheduler ID card -->
+    <section class="forge-rise forge-rise-3">
+        <div class="flex items-end justify-between mb-3">
+            <div>
+                <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Coordinator</p>
+                <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight">SCHEDULER</h2>
+            </div>
+            <span id="scheduler-host-badge" class="forge-pill forge-pill--running"><span class="forge-dot forge-dot--hot forge-pulse"></span>online</span>
+        </div>
+        <div class="forge-panel relative p-5">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+            <div id="scheduler-info" hx-get="/partials/scheduler-info" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
+        </div>
+    </section>
+
+    <!-- Add Worker Panel -->
+    <section class="forge-rise forge-rise-4">
+        <button id="add-worker-toggle" class="w-full flex items-center justify-between mb-3 p-4 forge-panel hover:forge-panel--ember transition-colors cursor-pointer group"
+                onclick="toggleAddWorker()">
+            <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-forge-ember-hot text-xl">add_circle</span>
+                <div class="text-left">
+                    <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute group-hover:text-forge-ember-hot">Setup</p>
+                    <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight group-hover:text-forge-ember-hot">ADD A WORKER</h2>
+                </div>
+            </div>
+            <span id="add-worker-chevron" class="material-symbols-outlined text-forge-mute transition-transform">expand_more</span>
+        </button>
+
+        <div id="add-worker-panel" class="forge-panel p-6 hidden">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+
+            <!-- Step 1: Issue Token -->
+            <div class="mb-8">
+                <p class="forge-stat-label mb-4">Step 1: Issue a token for this worker</p>
+                <div class="flex flex-wrap items-end gap-3 mb-5">
+                    <div class="flex-1 min-w-[200px]">
+                        <label for="add-worker-label" class="forge-stat-label block mb-1">Worker name</label>
+                        <input id="add-worker-label" type="text" placeholder="e.g. gpu-node, encoder-2" class="forge-input w-full">
+                    </div>
+                    <button class="forge-btn forge-btn--ember" onclick="issueWorkerToken()">
+                        <span class="material-symbols-outlined text-base">vpn_key</span>
+                        <span>Issue</span>
+                    </button>
+                </div>
+
+                <!-- Token reveal -->
+                <div id="add-worker-token-reveal" class="forge-panel forge-panel--ember p-5 mb-5 hidden">
+                    <div class="flex items-start gap-3">
+                        <span class="material-symbols-outlined text-forge-ember-hot mt-1">key</span>
+                        <div class="flex-1 min-w-0">
+                            <p class="forge-stat-label mb-1">Copy now — shown only once</p>
+                            <div class="flex items-center gap-2">
+                                <code id="add-worker-token-value" class="font-mono text-xs text-forge-paper bg-forge-bg px-3 py-2 break-all flex-1"></code>
+                                <button class="forge-btn" onclick="copyAddWorkerToken()">Copy</button>
+                                <button class="forge-iconbtn" onclick="document.getElementById('add-worker-token-reveal').classList.add('hidden')">
+                                    <span class="material-symbols-outlined text-base">close</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Join Command -->
+            <div id="add-worker-commands" class="mb-8 hidden">
+                <p class="forge-stat-label mb-4">Step 2: Copy the join command for your worker</p>
+
+                <!-- Command tabs -->
+                <div class="flex gap-2 mb-4">
+                    <button class="forge-btn forge-btn--ember" data-cmd-type="docker" onclick="switchCommandType('docker')">
+                        <span class="material-symbols-outlined text-base">containerization</span>
+                        <span>Docker</span>
+                    </button>
+                    <button class="forge-btn" data-cmd-type="uv" onclick="switchCommandType('uv')">
+                        <span class="material-symbols-outlined text-base">terminal</span>
+                        <span>Bare / uv</span>
+                    </button>
+                </div>
+
+                <!-- Docker info -->
+                <div id="cmd-docker" class="mb-5">
+                    <div class="forge-panel p-4 mb-3 bg-forge-mute/5 border-l-2 border-forge-ember">
+                        <p class="font-mono text-[11px] text-forge-mute mb-2">Private image — first time only:</p>
+                        <div class="flex items-center gap-2">
+                            <code id="docker-login-cmd" class="font-mono text-xs text-forge-ink bg-forge-bg px-3 py-2 flex-1 break-all">echo &lt;ghcr-read-pat&gt; | docker login ghcr.io -u &lt;your-github-user&gt; --password-stdin</code>
+                            <button class="forge-btn" onclick="copyCmd('docker-login-cmd')">Copy</button>
+                        </div>
+                        <p class="font-mono text-[10px] text-forge-mute mt-2">
+                            Get a read:packages PAT from <a href="https://github.com/settings/tokens" target="_blank" class="text-forge-ember-hot underline">GitHub settings</a>.
+                        </p>
+                    </div>
+
+                    <p class="font-mono text-[11px] text-forge-mute mb-2">Run the worker:</p>
+                    <div class="flex items-stretch gap-2">
+                        <pre id="cmd-docker-run" class="font-mono text-[11px] text-forge-ink bg-forge-bg px-3 py-2 flex-1 overflow-x-auto rounded leading-relaxed">docker run -d \
+  --name transcode-worker \
+  --restart unless-stopped \
+  -e TF_SERVER_URL=... \
+  -e TF_WORKER_TOKEN=... \
+  -e TF_WORKER_NAME=... \
+  -e TF_PREFERRED_ENCODER=auto \
+  ghcr.io/nuffy94/transcode-forge:latest \
+  python -m transcode_forge.worker</pre>
+                        <button class="forge-btn" onclick="copyCmd('cmd-docker-run')">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Uv info -->
+                <div id="cmd-uv" class="mb-5 hidden">
+                    <p class="font-mono text-[11px] text-forge-mute mb-2">Environment + command:</p>
+                    <div class="flex items-stretch gap-2">
+                        <pre id="cmd-uv-run" class="font-mono text-[11px] text-forge-ink bg-forge-bg px-3 py-2 flex-1 overflow-x-auto rounded leading-relaxed">export TF_SERVER_URL=...
+export TF_WORKER_TOKEN=...
+export TF_WORKER_NAME=...
+export TF_PREFERRED_ENCODER=auto
+
+uv run python -m transcode_forge.worker</pre>
+                        <button class="forge-btn" onclick="copyCmd('cmd-uv-run')">Copy</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Storage & Media Access -->
+            <div id="add-worker-storage" class="mb-8 hidden">
+                <p class="forge-stat-label mb-4">Storage: how the worker reads & writes media</p>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <!-- Filesystem -->
+                    <div class="forge-panel p-4 bg-forge-mute/5 border-l-2 border-forge-ember">
+                        <p class="font-display font-bold text-lg text-forge-paper mb-2">Filesystem Libraries</p>
+                        <p class="text-forge-mute text-sm mb-3">
+                            Media is on a shared NFS/SMB mount or local disk.
+                        </p>
+                        <div class="space-y-2 text-[11px] text-forge-ink">
+                            <p><span class="font-bold">Docker:</span> mount the media path READ-WRITE:</p>
+                            <code class="block bg-forge-bg px-2 py-1 rounded mb-2">-v /mnt/media/movies:/media/movies</code>
+                            <p class="text-forge-mute">
+                                <span class="font-bold">Critical:</span> must be <code class="bg-forge-bg px-1">:rw</code> (default). Read-only mounts fail at the swap step.
+                            </p>
+                            <p class="mt-2"><span class="font-bold">Path differs?</span> use <code class="bg-forge-bg px-1">TF_PATH_MAP</code>:</p>
+                            <code class="block bg-forge-bg px-2 py-1 rounded">TF_PATH_MAP='{"/media/movies":"/host/path"}'</code>
+                        </div>
+                    </div>
+
+                    <!-- S3 -->
+                    <div class="forge-panel p-4 bg-forge-mute/5 border-l-2 border-amber-600/40">
+                        <p class="font-display font-bold text-lg text-forge-paper mb-2">S3 Libraries</p>
+                        <p class="text-forge-mute text-sm mb-3">
+                            Media is in S3. No shared filesystem needed.
+                        </p>
+                        <div class="space-y-2 text-[11px] text-forge-ink">
+                            <p><span class="font-bold">Add to the docker run or uv command:</span></p>
+                            <code class="block bg-forge-bg px-2 py-1 rounded text-[10px]">-e TF_S3_ENDPOINT_URL=...
+-e TF_S3_REGION=...
+-e TF_S3_ACCESS_KEY_ID=...
+-e TF_S3_SECRET_ACCESS_KEY=...
+-e TF_SCRATCH_DIR=/scratch</code>
+                            <p class="text-forge-mute text-[10px] mt-2">
+                                For Docker, add <code class="bg-forge-bg px-1">-v /tmp/transcode-scratch:/scratch</code> (or a faster local SSD path).
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prerequisites -->
+            <div id="add-worker-prerequisites" class="mb-8 hidden">
+                <p class="forge-stat-label mb-3">Prerequisites</p>
+                <ul class="space-y-2 text-sm text-forge-ink">
+                    <li class="flex items-start gap-2">
+                        <span class="text-forge-ember-hot mt-0.5">✓</span>
+                        <span><span class="font-bold">Docker & Docker Compose</span> (if using Docker) OR <span class="font-bold">uv + Python 3.12 + ffmpeg</span> (if using bare metal)</span>
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="text-forge-ember-hot mt-0.5">✓</span>
+                        <span><span class="font-bold">Network</span> — the worker can reach this scheduler at <code id="scheduler-url-display" class="bg-forge-bg px-1 rounded font-mono text-xs"></code></span>
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="text-forge-ember-hot mt-0.5">✓</span>
+                        <span><span class="font-bold">Storage access</span> — filesystem mount OR S3 credentials (see above)</span>
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="text-forge-ember-hot mt-0.5">✓</span>
+                        <span><span class="font-bold">Hardware encoder</span> (optional) — Intel QSV, NVIDIA NVENC, or CPU (slower)</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Live token status -->
+            <div id="add-worker-live-status" class="mb-8 hidden">
+                <p class="forge-stat-label mb-4">Step 3: Waiting for the worker to connect…</p>
+                <div id="add-worker-tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Workers fleet grid -->
+    <section class="forge-rise forge-rise-5">
+        <div class="flex items-end justify-between mb-3">
+            <div>
+                <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Fleet</p>
+                <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight">TRANSCODE NODES</h2>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="clear-dead-btn" class="forge-btn forge-btn--danger hidden" onclick="clearAllDead()">
+                    <span class="material-symbols-outlined text-base">delete_sweep</span>
+                    <span id="clear-dead-label">Clear stale</span>
+                </button>
+                <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">10s poll</p>
+            </div>
+        </div>
+        <div id="workers-container"
+             hx-get="/partials/workers"
+             hx-trigger="load, every 10s"
+             hx-swap="innerHTML"
+             class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div class="flex justify-center col-span-full p-8">
+                <span class="material-symbols-outlined animate-spin text-forge-ember text-2xl">settings</span>
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+// ── Add Worker Panel ────────────────────────────────────────────────────
+let _addWorkerToken = null;
+let _addWorkerLabel = null;
+
+function toggleAddWorker() {
+    const panel = document.getElementById('add-worker-panel');
+    const chevron = document.getElementById('add-worker-chevron');
+    panel.classList.toggle('hidden');
+    chevron.style.transform = panel.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+
+async function issueWorkerToken() {
+    const label = document.getElementById('add-worker-label').value.trim();
+    if (!label) { showToast('Worker name required', 'error'); return; }
+    try {
+        const r = await fetch('/api/worker-tokens', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({label}),
+        });
+        if (!r.ok) { showToast('Failed to issue token', 'error'); return; }
+        const data = await r.json();
+        _addWorkerToken = data.token;
+        _addWorkerLabel = data.label;
+
+        // Show the token
+        document.getElementById('add-worker-token-value').textContent = data.token;
+        document.getElementById('add-worker-token-reveal').classList.remove('hidden');
+
+        // Populate the join commands
+        const origin = window.location.origin;
+        populateJoinCommands(origin, data.token, data.label);
+
+        // Show the rest of the form
+        document.getElementById('add-worker-commands').classList.remove('hidden');
+        document.getElementById('add-worker-storage').classList.remove('hidden');
+        document.getElementById('add-worker-prerequisites').classList.remove('hidden');
+        document.getElementById('add-worker-live-status').classList.remove('hidden');
+
+        // Populate the scheduler URL display
+        document.getElementById('scheduler-url-display').textContent = origin;
+
+        // Clear the input and show success
+        document.getElementById('add-worker-label').value = '';
+        showToast('Token issued', 'success');
+
+        // Trigger the token list refresh
+        htmx.trigger('#add-worker-tokens-list', 'load');
+    } catch (e) {
+        showToast('Issue failed: ' + e.message, 'error');
+    }
+}
+
+function copyAddWorkerToken() {
+    const text = document.getElementById('add-worker-token-value').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Token copied', 'success');
+    }).catch(() => {
+        showToast('Copy failed — select manually', 'error');
+    });
+}
+
+function switchCommandType(type) {
+    // Update button states — keep the base forge-btn on every tab; only the
+    // ember accent toggles to mark the active one.
+    document.querySelectorAll('[data-cmd-type]').forEach(btn => {
+        btn.classList.toggle('forge-btn--ember', btn.dataset.cmdType === type);
+    });
+
+    // Show/hide command blocks
+    document.getElementById('cmd-docker').classList.toggle('hidden', type !== 'docker');
+    document.getElementById('cmd-uv').classList.toggle('hidden', type !== 'uv');
+}
+
+function populateJoinCommands(origin, token, label) {
+    const dockerCmd = `docker run -d \\
+  --name transcode-worker-${label.replace(/[^a-z0-9-]/gi, '-').toLowerCase()} \\
+  --restart unless-stopped \\
+  -e TF_SERVER_URL=${origin} \\
+  -e TF_WORKER_TOKEN=${token} \\
+  -e TF_WORKER_NAME=${label} \\
+  -e TF_PREFERRED_ENCODER=auto \\
+  -v /mnt/media/movies:/media/movies \\
+  ghcr.io/nuffy94/transcode-forge:latest \\
+  python -m transcode_forge.worker`;
+
+    const uvCmd = `export TF_SERVER_URL=${origin}
+export TF_WORKER_TOKEN=${token}
+export TF_WORKER_NAME=${label}
+export TF_PREFERRED_ENCODER=auto
+
+uv run python -m transcode_forge.worker`;
+
+    document.getElementById('cmd-docker-run').textContent = dockerCmd;
+    document.getElementById('cmd-uv-run').textContent = uvCmd;
+}
+
+function copyCmd(elementId) {
+    const text = document.getElementById(elementId).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Copied to clipboard', 'success');
+    }).catch(() => {
+        showToast('Copy failed — select manually', 'error');
+    });
+}
+
+// ── Fleet Management ────────────────────────────────────────────────────
+let _deadIds = [];
+
+// Workers silent this long are safe to remove; matches the server's
+// WORKER_STALE_THRESHOLD_SECONDS. Avoids having JS pre-filter on tiny
+// values the API would just reject anyway.
+const STALE_THRESHOLD_MS = 30 * 60 * 1000;
+
+function isStale(worker) {
+    if (!worker.last_heartbeat) return true;
+    const age = Date.now() - new Date(worker.last_heartbeat).getTime();
+    return age >= STALE_THRESHOLD_MS;
+}
+
+async function refreshDeadCount() {
+    try {
+        const resp = await fetch('/api/workers');
+        if (!resp.ok) return;
+        const {data} = await resp.json();
+        _deadIds = data.filter(isStale).map(w => w.id);
+        const btn = document.getElementById('clear-dead-btn');
+        const label = document.getElementById('clear-dead-label');
+        if (!btn || !label) return;
+        if (_deadIds.length > 0) {
+            btn.classList.remove('hidden');
+            label.textContent = `Clear ${_deadIds.length} stale worker${_deadIds.length !== 1 ? 's' : ''}`;
+        } else {
+            btn.classList.add('hidden');
+        }
+    } catch {}
+}
+
+async function clearAllDead() {
+    if (!_deadIds.length) return;
+    const n = _deadIds.length;
+    if (!confirm(`Remove ${n} stale worker registration${n !== 1 ? 's' : ''}? Only dead workers are affected — anything online stays.`)) return;
+    const btn = document.getElementById('clear-dead-btn');
+    btn.disabled = true;
+    const results = await Promise.all(_deadIds.map(id => fetch(`/api/workers/${id}`, {method: 'DELETE'})));
+    const ok = results.filter(r => r.ok).length;
+    btn.disabled = false;
+    if (ok === n) {
+        showToast(`Removed ${ok} stale worker${ok !== 1 ? 's' : ''}`, 'success');
+    } else {
+        showToast(`Removed ${ok} of ${n} — ${n - ok} could not be deleted (still online?)`, 'warning');
+    }
+    htmx.ajax('GET', '/partials/workers', {target: '#workers-container', swap: 'innerHTML'});
+    refreshDeadCount();
+}
+
+setInterval(refreshDeadCount, 10000);
+refreshDeadCount();
+
+async function removeDeadWorker(id, name) {
+    if (!confirm(`Remove worker "${name}"? Only dead workers can be removed.`)) return;
+    try {
+        const resp = await fetch(`/api/workers/${id}`, {method: 'DELETE'});
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            showToast(`Cannot remove: ${data.detail || resp.statusText}`, 'error');
+            return;
+        }
+        showToast(`Removed ${name}`, 'success');
+        htmx.ajax('GET', '/partials/workers', {target: '#workers-container', swap: 'innerHTML'});
+    } catch (err) {
+        showToast(`Failed to remove worker: ${err.message}`, 'error');
+    }
+}
+
+fetch('/api/workers').then(r => r.json()).then(({data}) => {
+    const active = data.filter(w => w.status === 'online' || w.status === 'busy').length;
+    const slots = data.reduce((sum, w) => sum + ((w.status === 'online' || w.status === 'busy') ? (w.max_concurrent || 1) : 0), 0);
+    document.getElementById('stat-active-nodes').textContent = String(active).padStart(2, '0');
+    document.getElementById('stat-throughput').innerHTML = String(slots).padStart(2, '0') + '<span class="text-2xl text-forge-mute ml-1">×</span>';
+}).catch(() => {});
+
+// Real-time progress via WebSocket
+(function() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws;
+    function connect() {
+        ws = new WebSocket(`${proto}//${location.host}/ws/updates`);
+        ws.onmessage = function(evt) {
+            const data = JSON.parse(evt.data);
+            const card = document.querySelector(`[data-worker-id="${data.worker_id}"]`);
+            if (!card) return;
+            const pct = Math.round(data.progress * 100);
+            const pctEl = card.querySelector('[data-progress-pct]');
+            const barEl = card.querySelector('[data-progress-bar]');
+            const speedEl = card.querySelector('[data-speed]');
+            if (pctEl) pctEl.textContent = pct + '%';
+            if (barEl) barEl.style.width = pct + '%';
+            if (speedEl && data.speed) speedEl.textContent = data.speed.toFixed(1) + '×';
+        };
+        ws.onclose = function() { setTimeout(connect, 5000); };
+    }
+    connect();
+})();
+</script>
+{% endblock %}

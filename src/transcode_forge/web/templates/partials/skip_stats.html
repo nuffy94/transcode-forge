@@ -1,0 +1,38 @@
+{% if total > 0 %}
+<section class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+    {% for reason, count in counts.items() %}
+    {% set pct = (count / total * 100)|int if total > 0 else 0 %}
+    {% set color = 'forge-oxide' if reason == 'already_hevc'
+                   else 'forge-rust' if reason == 'size_regression'
+                   else 'forge-ember' if reason == 'not_h264'
+                   else 'forge-brass' if reason == 'too_small'
+                   else 'forge-mute' %}
+    <div class="forge-panel relative p-5 flex flex-col gap-2">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <div class="flex items-start justify-between">
+            <p class="forge-stat-label">
+                {% if reason == 'already_hevc' %}Already HEVC
+                {% elif reason == 'not_h264' %}Not H.264
+                {% elif reason == 'size_regression' %}Size Regression
+                {% elif reason == 'too_small' %}Too Small
+                {% elif reason == 'manual_skip' %}Manual Skip
+                {% else %}{{ reason|replace('_', ' ') }}{% endif %}
+            </p>
+            <span class="material-symbols-outlined text-base text-{{ color }}">
+                {% if reason == 'already_hevc' %}check_circle
+                {% elif reason == 'not_h264' %}info
+                {% elif reason == 'size_regression' %}warning
+                {% elif reason == 'too_small' %}compress
+                {% else %}help{% endif %}
+            </span>
+        </div>
+        <h3 class="forge-stat-value text-3xl text-forge-paper tabular-nums">{{ "%04d"|format(count) }}</h3>
+        <div class="forge-meter h-1.5 mt-1">
+            <div class="forge-meter-fill" style="width: {{ pct }}%; background: var(--{{ color }}); box-shadow: 0 0 6px rgba(255, 122, 26, 0.25);"></div>
+        </div>
+        <p class="forge-stat-meta">{{ pct }}% of skipped</p>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}

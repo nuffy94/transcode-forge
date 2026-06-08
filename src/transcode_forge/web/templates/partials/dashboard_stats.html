@@ -1,0 +1,57 @@
+<div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+    <!-- HERO READOUT — Space saved (large, ember-framed) -->
+    <div class="lg:col-span-2 forge-panel forge-panel--ember p-7 flex flex-col justify-between min-h-[10rem] relative overflow-hidden">
+        <!-- Decorative measurement scale on the right edge -->
+        <div class="absolute right-3 top-6 bottom-6 w-px bg-forge-rule-bright/40 hidden md:block"></div>
+        <div class="absolute right-2 top-6 bottom-6 hidden md:flex flex-col justify-between text-[8px] font-mono text-forge-mute/70">
+            <span>100</span><span>75</span><span>50</span><span>25</span><span>0</span>
+        </div>
+        <div class="flex items-center justify-between">
+            <p class="forge-stat-label">Space Reclaimed</p>
+            <span class="material-symbols-outlined text-forge-ember/70 text-base" style="font-variation-settings: 'FILL' 1;">database</span>
+        </div>
+        <div class="flex items-baseline gap-2 mt-2">
+            <span class="forge-stat-value" style="font-size: clamp(3.5rem, 7vw, 5rem); color: var(--forge-ember-hot);">{{ "%.1f"|format(space_saved_gb) }}</span>
+            <span class="forge-stat-unit">GiB</span>
+        </div>
+        <p class="forge-stat-meta">Cumulative · all libraries</p>
+    </div>
+
+    <!-- Completed -->
+    <div class="forge-panel p-5 flex flex-col justify-between min-h-[10rem] relative">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <div class="flex items-center justify-between">
+            <p class="forge-stat-label">Completed</p>
+            <span class="forge-dot forge-dot--on"></span>
+        </div>
+        <div class="forge-stat-value text-5xl text-forge-oxide">{{ "%04d"|format(completed) }}</div>
+        <p class="forge-stat-meta">Jobs finished</p>
+    </div>
+
+    <!-- Queued -->
+    <div class="forge-panel p-5 flex flex-col justify-between min-h-[10rem] relative">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <div class="flex items-center justify-between">
+            <p class="forge-stat-label">Queued</p>
+            <span class="forge-dot {% if queued %}forge-dot--hot forge-pulse{% else %}forge-dot--off{% endif %}"></span>
+        </div>
+        <div class="forge-stat-value text-5xl {% if queued %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ "%04d"|format(queued) }}</div>
+        <p class="forge-stat-meta">{% if queued %}In line{% else %}Idle{% endif %}</p>
+    </div>
+
+    <!-- Workers -->
+    <div class="forge-panel p-5 flex flex-col justify-between min-h-[10rem] relative">
+        <span class="forge-tick forge-tick-tl"></span>
+        <span class="forge-tick forge-tick-br"></span>
+        <div class="flex items-center justify-between">
+            <p class="forge-stat-label">Workers</p>
+            <span class="forge-dot {% if workers_online > 0 %}forge-dot--on forge-pulse{% else %}forge-dot--off{% endif %}"></span>
+        </div>
+        <div class="forge-stat-value text-5xl {% if workers_online > 0 %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ "%02d"|format(workers_online) }}</div>
+        <p class="forge-stat-meta">{% if workers_online > 0 %}Systems nominal{% else %}Standby{% endif %}</p>
+    </div>
+
+</div>

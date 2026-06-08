@@ -1,0 +1,149 @@
+{% from "partials/_macros.html" import sort_th %}
+{% if jobs %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            {{ sort_th('Filename', 'source_path', sort, dir, 'sortHistory') }}
+            {{ sort_th('Status', 'status', sort, dir, 'sortHistory') }}
+            {{ sort_th('Size Δ', 'space_saved', sort, dir, 'sortHistory') }}
+            {{ sort_th('Worker', 'worker_id', sort, dir, 'sortHistory') }}
+            <th>Duration</th>
+            {{ sort_th('Completed', 'completed_at', sort, dir, 'sortHistory') }}
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr {% if job.status == 'failed' %}class="is-active"{% endif %}>
+            <td>
+                <div class="flex flex-col gap-1">
+                    <span class="text-sm font-medium text-forge-paper">{{ job.source_path.split('/')[-1] }}</span>
+                    <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
+                        <span class="text-forge-mute">{{ job.library }}</span>
+                        <span class="text-forge-rule-bright">·</span>
+                        <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
+                    </div>
+                </div>
+            </td>
+            <td>
+                {% if job.status == 'complete' %}
+                <span class="forge-pill forge-pill--complete">
+                    <span class="material-symbols-outlined text-[10px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                    Complete
+                </span>
+                {% elif job.status == 'failed' %}
+                <span class="forge-pill forge-pill--failed">
+                    <span class="material-symbols-outlined text-[10px]" style="font-variation-settings: 'FILL' 1;">cancel</span>
+                    Failed
+                </span>
+                {% elif job.status == 'skipped' %}
+                <span class="forge-pill forge-pill--skipped">
+                    <span class="material-symbols-outlined text-[10px]">skip_next</span>
+                    Skipped
+                </span>
+                {% else %}
+                <span class="forge-pill forge-pill--pending">{{ job.status }}</span>
+                {% endif %}
+            </td>
+            <td class="col-mono">
+                {% if job.status == 'failed' %}
+                <span class="text-forge-mute/60">—</span>
+                {% elif job.source_size and job.output_size %}
+                <div class="flex flex-col">
+                    <span class="text-xs text-forge-ink">{{ (job.source_size / 1073741824)|round(1) }} → {{ (job.output_size / 1073741824)|round(1) }} <span class="text-forge-mute">GiB</span></span>
+                    <span class="text-[10px] font-semibold text-forge-oxide">−{{ job.savings_percent|round(1) if job.savings_percent else 0 }}%</span>
+                </div>
+                {% else %}
+                <span class="text-forge-mute/60">—</span>
+                {% endif %}
+            </td>
+            <td class="col-mono text-xs text-forge-steel">{{ job.worker_id[:12] if job.worker_id else '—' }}</td>
+            <td class="col-mono text-xs text-forge-ink">{{ job.duration }}</td>
+            <td class="col-mono text-xs text-forge-mute">{{ job.completed_at[:10] if job.completed_at else '—' }}</td>
+            <td class="text-right">
+                {% if job.status == 'failed' %}
+                <div class="flex justify-end gap-1">
+                    <button class="forge-iconbtn"
+                            title="Retry this job"
+                            aria-label="Retry job"
+                            hx-post="/api/jobs/{{ job.id }}/retry"
+                            hx-swap="none"
+                            hx-on::after-request="htmx.trigger('#history-container', 'refresh')">
+                        <span class="material-symbols-outlined text-base">refresh</span>
+                    </button>
+                    <button class="forge-iconbtn forge-iconbtn--danger"
+                            title="Don't try this file again"
+                            aria-label="Exclude permanently"
+                            data-path="{{ job.source_path }}"
+                            data-reason="failed: {{ (job.error_message or '')[:80] }}"
+                            onclick="excludeFile(this.dataset.path, this.dataset.reason, 'history-container'); return false;">
+                        <span class="material-symbols-outlined text-base">block</span>
+                    </button>
+                </div>
+                {% else %}
+                <span class="text-forge-mute/30">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% if job.status == 'failed' and job.error_message %}
+        <tr class="bg-forge-rust/5">
+            <td colspan="7" class="!py-2.5 !px-6">
+                <div class="flex items-center gap-2 font-mono text-[11px] text-forge-rust">
+                    <span class="material-symbols-outlined text-xs">warning</span>
+                    {{ job.error_message }}
+                </div>
+            </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+    </tbody>
+</table>
+
+{% set total_pages = (total + per_page - 1) // per_page if per_page else 1 %}
+{# Build filter querystring once so pagination preserves all active filters. #}
+{% set filter_qs = [] %}
+{% if status_filter %}{% set _ = filter_qs.append('status=' ~ status_filter) %}{% endif %}
+{% if library_filter %}{% set _ = filter_qs.append('library=' ~ library_filter) %}{% endif %}
+{% if since_filter %}{% set _ = filter_qs.append('since=' ~ since_filter) %}{% endif %}
+{% set _ = filter_qs.append('sort=' ~ sort) %}
+{% set _ = filter_qs.append('dir=' ~ dir) %}
+{% set fq = '&' ~ filter_qs|join('&') if filter_qs else '' %}
+{% if total > per_page %}
+<div class="flex items-center justify-between px-6 py-4 border-t border-forge-rule">
+    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">
+        Showing <span class="text-forge-ink">{{ ((page - 1) * per_page) + 1 }}–{{ (page * per_page) if (page * per_page) < total else total }}</span> of <span class="text-forge-ink">{{ total }}</span>
+    </p>
+    <div class="flex items-center gap-1">
+        <button class="forge-iconbtn {% if page <= 1 %}opacity-30 pointer-events-none{% endif %}"
+                aria-label="Previous page"
+                {% if page > 1 %}hx-get="/partials/history?page={{ page - 1 }}{{ fq }}" hx-target="#history-container"{% endif %}>
+            <span class="material-symbols-outlined text-sm">chevron_left</span>
+        </button>
+        {% for p in range(1, total_pages + 1) %}
+            {% if p <= 10 %}
+            <button class="forge-iconbtn font-mono text-[11px] font-semibold {% if p == page %}!border-forge-ember !text-forge-ember{% endif %}"
+                    aria-label="Go to page {{ p }}"
+                    hx-get="/partials/history?page={{ p }}{{ fq }}"
+                    hx-target="#history-container">
+                {{ p }}
+            </button>
+            {% endif %}
+        {% endfor %}
+        <button class="forge-iconbtn {% if page >= total_pages %}opacity-30 pointer-events-none{% endif %}"
+                aria-label="Next page"
+                {% if page < total_pages %}hx-get="/partials/history?page={{ page + 1 }}{{ fq }}" hx-target="#history-container"{% endif %}>
+            <span class="material-symbols-outlined text-sm">chevron_right</span>
+        </button>
+    </div>
+</div>
+{% else %}
+<div class="px-6 py-3 border-t border-forge-rule font-mono text-[10px] text-forge-mute uppercase tracking-stamp">{{ total }} jobs</div>
+{% endif %}
+
+{% else %}
+<div class="text-center py-16 px-6">
+    <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">inventory_2</span>
+    <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No History Yet</p>
+    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Completed and failed runs will appear here</p>
+</div>
+{% endif %}

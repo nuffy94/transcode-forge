@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
+# Environment
+.env
+.env.local
+deploy/worker.env
+
+# Default media directory created by bootstrap.sh — only ignored if user
+# happens to point TF_LIBRARY_* at the in-tree default.
+/media/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# uv
+# uv.lock IS committed for reproducibility — uncomment to ignore for libraries.
+# uv.lock
+
+# Database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Docker
+.docker/
+.playwright-mcp/
+
+# Claude Code agent tooling / local settings — not part of the shipped project
+.claude/
+
+# Audit / UX testing artifacts (Playwright screenshots, page snapshots, ad-hoc diffs)
+# Audit reports are moved to docs/audits/ when worth keeping.
+/[0-9][0-9]-*.png
+/[0-9][0-9][a-z]-*.png
+/step[0-9]*-*.png
+/step[0-9]*-*.md
+/*-snapshot.md
+# QA sweep artifacts (regenerated each run)
+/tests/qa/shots/
+# qa/: only the committed tooling ships — agent scratch + screenshots are ignored.
+/qa/*
+!/qa/sweep_helpers.py
+!/qa/scenarios.md
+!/qa/ux-sweep.workflow.js
+/qa_sweep_live.db*
+/dashboard.png
+/movies.png
+/queue.png
+/workers.png
+/stats.png
+/skipped*.png
+/diff.txt
+
+# External tool sandboxes (e.g., Simplifi MCP) that landed in the workspace
+/data/
+
+# Internal dev/process artifacts — kept locally, not shipped in the repo.
+# (Session logs, internal audits, multi-session planning docs, design
+# mockups/exports, and generated showcase docs.)
+/docs/sessions/
+/docs/audits/
+/docs/plan.md
+/docs/audit-v0.1.0.md
+/docs/DECISIONS.md
+/plans/
+/designs/
+/docs/COMPONENT_SHOWCASE.html
+/docs/QUICK_REFERENCE.txt
+/docs/DESIGN_DOCUMENTATION_INDEX.md

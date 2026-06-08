@@ -1,0 +1,212 @@
+"""Media browser + queue-from-selection endpoints."""
+
+import logging
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from transcode_forge.api.deps import get_db
+from transcode_forge.db import DBConnection
+from transcode_forge.models.job import Job, JobStatus
+from transcode_forge.repos import exclusions as excl_repo
+from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import libraries as lib_repo
+from transcode_forge.repos import media as media_repo
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["media"])
+
+
+@router.get("/media/movies")
+async def browse_movies(
+    library_id: str | None = None,
+    codec: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "filename",
+    dir: str = "asc",
+    page: int = 1,
+    per_page: int = 50,
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Browse movie files across all movie libraries."""
+    offset = (page - 1) * per_page
+    files, total = await media_repo.list_media_files(
+        db,
+        media_type="movies",
+        library_id=library_id,
+        video_codec=codec,
+        transcode_status=status,
+        search=search,
+        sort_by=sort,
+        sort_dir=dir,
+        limit=per_page,
+        offset=offset,
+    )
+    return {"data": files, "meta": {"total": total, "page": page, "per_page": per_page}}
+
+
+@router.get("/media/tv")
+async def browse_tv(
+    library_id: str | None = None,
+    codec: str | None = None,
+    status: str | None = None,
+    show: str | None = None,
+    search: str | None = None,
+    sort: str = "show_name",
+    dir: str = "asc",
+    page: int = 1,
+    per_page: int = 50,
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Browse TV files across all TV libraries."""
+    offset = (page - 1) * per_page
+    files, total = await media_repo.list_media_files(
+        db,
+        media_type="tv",
+        library_id=library_id,
+        video_codec=codec,
+        transcode_status=status,
+        show_name=show,
+        search=search,
+        sort_by=sort,
+        sort_dir=dir,
+        limit=per_page,
+        offset=offset,
+    )
+    return {"data": files, "meta": {"total": total, "page": page, "per_page": per_page}}
+
+
+@router.get("/media/tv/shows")
+async def list_tv_shows(
+    library_id: str | None = None,
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """List TV shows with episode counts and transcode stats."""
+    shows = await media_repo.list_tv_shows(db, library_id=library_id)
+    return {"data": shows}
+
+
+class QueueRequest(BaseModel):
+    file_ids: list[str]
+
+
+@router.post("/media/queue")
+async def queue_selected_files(
+    body: QueueRequest,
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Queue selected media files for transcoding.
+
+    Creates jobs in SQLite — workers pick them up via DB polling.
+    Deduplication: skips files that already have an active job.
+    """
+    queued = 0
+    skipped = 0
+
+    # Batch the lookups up front — one query each — instead of ~4 per file.
+    by_id = {m["id"]: m for m in await media_repo.get_by_ids(db, body.file_ids)}
+
+    # First pass: codec/status filter, collect candidates + their paths.
+    candidates: list[dict[str, Any]] = []
+    for file_id in body.file_ids:
+        mf = by_id.get(file_id)
+        if (
+            not mf
+            or mf["video_codec"] != "h264"
+            or mf["transcode_status"] in ("queued", "transcoding", "complete")
+        ):
+            skipped += 1
+            continue
+        candidates.append(mf)
+
+    paths = [m["file_path"] for m in candidates]
+    excluded = await excl_repo.filter_excluded(db, paths)  # "don't try this again"
+    active = await job_repo.active_paths(db, paths)  # dedup vs in-flight jobs
+    presets = {lib["id"]: lib["quality_preset"] for lib in await lib_repo.list_libraries(db)}
+
+    # One transaction for the whole batch: each file's job row and media
+    # status update commit together, and a mid-batch failure rolls the
+    # whole thing back — no half-queued state.
+    seen: set[str] = set()
+    async with db.transaction() as tx:
+        for mf in candidates:
+            path = mf["file_path"]
+            if path in excluded or path in active or path in seen:
+                skipped += 1
+                continue
+            seen.add(path)
+
+            job = Job(
+                source_path=path,
+                library=mf["library_id"],
+                source_codec=mf["video_codec"],
+                source_resolution=mf["resolution"],
+                source_bitrate=mf["bitrate"],
+                source_duration=mf["duration"],
+                source_size=mf["file_size"],
+                quality_value=presets.get(mf["library_id"], 21),
+                status=JobStatus.QUEUED,
+            )
+            await job_repo.create_job(tx, job)
+            await media_repo.update_media_status(
+                tx, mf["id"], transcode_status="queued", job_id=job.id
+            )
+            queued += 1
+
+    return {"queued": queued, "skipped": skipped}
+
+
+class SkipRequest(BaseModel):
+    file_ids: list[str]
+    reason: str = "manual_skip"
+
+
+@router.post("/media/skip")
+async def skip_selected_files(
+    body: SkipRequest,
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Manually skip selected files."""
+    count = await media_repo.bulk_update_status(
+        db,
+        body.file_ids,
+        transcode_status="skipped",
+        skip_reason=body.reason,
+    )
+    return {"skipped": count}
+
+
+@router.post("/media/unskip")
+async def unskip_selected_files(
+    body: QueueRequest,  # reuse — just needs file_ids
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Un-skip selected files (reset to needs_transcode if h264)."""
+    count = await media_repo.bulk_update_status(
+        db,
+        body.file_ids,
+        transcode_status="needs_transcode",
+    )
+    return {"unskipped": count}
+
+
+@router.get("/media/stats")
+async def media_stats(
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Aggregate stats across all media files."""
+    codec_stats = await media_repo.get_codec_stats(db)
+    status_stats = await media_repo.get_status_stats(db)
+    movie_stats = await media_repo.get_status_stats(db, media_type="movies")
+    tv_stats = await media_repo.get_status_stats(db, media_type="tv")
+    return {
+        "data": {
+            "codecs": codec_stats,
+            "statuses": status_stats,
+            "movies": movie_stats,
+            "tv": tv_stats,
+        }
+    }

@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-10">
+
+    <!-- Page header — workshop ledger title -->
+    <header class="flex items-end justify-between gap-6 flex-wrap forge-rise forge-rise-1">
+        <div>
+            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
+                <span class="text-forge-ember">/</span> Section 01 &nbsp;·&nbsp; Operations
+            </p>
+            <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3.5rem, 7vw, 5.5rem);">DASHBOARD</h1>
+            <p class="font-mono text-xs text-forge-ink mt-3 max-w-md">
+                Real-time forge floor &mdash; active transcodes, recent runs, and system temperature.
+            </p>
+        </div>
+        <div class="flex items-center gap-3">
+            <button id="pause-btn" class="forge-btn forge-btn--ember" onclick="togglePause()">
+                <span class="material-symbols-outlined text-base">pause</span>
+                <span>Pause Queue</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Stat readouts — asymmetric: hero number + supporting cluster -->
+    <section id="dashboard-stats"
+             class="forge-rise forge-rise-2"
+             hx-get="/partials/dashboard-stats"
+             hx-trigger="load, every 10s"
+             hx-swap="innerHTML">
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            <div class="lg:col-span-2 forge-panel p-7 h-40 animate-pulse"></div>
+            <div class="lg:col-span-1 forge-panel p-5 h-40 animate-pulse"></div>
+            <div class="lg:col-span-1 forge-panel p-5 h-40 animate-pulse"></div>
+            <div class="lg:col-span-1 forge-panel p-5 h-40 animate-pulse"></div>
+        </div>
+    </section>
+
+    <!-- Active transcodes — the live floor -->
+    <section class="forge-rise forge-rise-3">
+        <div class="flex items-end justify-between mb-4">
+            <div>
+                <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Real-time</p>
+                <h2 class="font-display font-bold text-3xl text-forge-paper tracking-tight">ACTIVE TRANSCODES</h2>
+            </div>
+            <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-stamp text-forge-mute">
+                <span class="forge-dot forge-dot--hot forge-pulse"></span>
+                <span>Live · 3s poll</span>
+            </div>
+        </div>
+        <div class="forge-panel relative" id="active-transcodes"
+             hx-get="/partials/active-transcodes"
+             hx-trigger="load, every 3s"
+             hx-swap="innerHTML">
+            <span class="forge-tick forge-tick-tl"></span>
+            <span class="forge-tick forge-tick-tr"></span>
+            <span class="forge-tick forge-tick-bl"></span>
+            <span class="forge-tick forge-tick-br"></span>
+        </div>
+    </section>
+
+    <!-- Recent activity (left, wide) + system status (right, narrow) -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 forge-rise forge-rise-4">
+
+        <div class="lg:col-span-2 flex flex-col">
+            <div class="flex items-end justify-between mb-4">
+                <div>
+                    <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Ledger</p>
+                    <h2 class="font-display font-bold text-3xl text-forge-paper tracking-tight">RECENT ACTIVITY</h2>
+                </div>
+                <a href="/history" class="font-mono text-[10px] uppercase tracking-stamp text-forge-ember hover:text-forge-ember-hot transition-colors">
+                    View Full Ledger &rarr;
+                </a>
+            </div>
+            <div class="forge-panel relative flex-1" id="recent-activity"
+                 hx-get="/partials/recent-activity"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <span class="forge-tick forge-tick-tl"></span>
+                <span class="forge-tick forge-tick-tr"></span>
+                <span class="forge-tick forge-tick-bl"></span>
+                <span class="forge-tick forge-tick-br"></span>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+
+            <div>
+                <div class="flex items-end justify-between mb-4">
+                    <div>
+                        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">System</p>
+                        <h2 class="font-display font-bold text-2xl text-forge-paper tracking-tight">HEALTH</h2>
+                    </div>
+                </div>
+                <div class="forge-panel relative p-5" id="scheduler-info"
+                     hx-get="/partials/scheduler-info"
+                     hx-trigger="load, every 15s"
+                     hx-swap="innerHTML">
+                    <span class="forge-tick forge-tick-tl"></span>
+                    <span class="forge-tick forge-tick-tr"></span>
+                    <span class="forge-tick forge-tick-bl"></span>
+                    <span class="forge-tick forge-tick-br"></span>
+                </div>
+            </div>
+
+            <div>
+                <div class="flex items-end justify-between mb-4">
+                    <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">Recent</p>
+                </div>
+                <div class="forge-panel relative" id="scan-history"
+                     hx-get="/partials/scan-history"
+                     hx-trigger="load, every 30s"
+                     hx-swap="innerHTML">
+                    <span class="forge-tick forge-tick-tl"></span>
+                    <span class="forge-tick forge-tick-tr"></span>
+                    <span class="forge-tick forge-tick-bl"></span>
+                    <span class="forge-tick forge-tick-br"></span>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+async function togglePause() {
+    try {
+        const btn = document.getElementById('pause-btn');
+        const resp = await fetch('/api/queue/status');
+        if (!resp.ok) { showToast('Error fetching queue status', 'error'); return; }
+        const {paused} = await resp.json();
+        const actionResp = await fetch(paused ? '/api/queue/resume' : '/api/queue/pause', {method: 'POST'});
+        if (!actionResp.ok) { showToast('Error changing queue state', 'error'); return; }
+        applyPauseState(!paused, btn);
+        showToast(paused ? 'Queue resumed' : 'Queue paused', paused ? 'success' : 'warning');
+    } catch (err) {
+        showToast('Failed to change queue state', 'error');
+    }
+}
+
+function applyPauseState(paused, btn) {
+    btn = btn || document.getElementById('pause-btn');
+    if (!btn) return;
+    btn.querySelector('span:last-child').textContent = paused ? 'Resume Queue' : 'Pause Queue';
+    btn.querySelector('.material-symbols-outlined').textContent = paused ? 'play_arrow' : 'pause';
+    btn.classList.toggle('forge-btn--ember', !paused);
+    btn.classList.toggle('forge-btn--danger', paused);
+}
+
+fetch('/api/queue/status').then(r => r.json()).then(({paused}) => applyPauseState(paused)).catch(() => {});
+
+async function cancelJob(jobId) {
+    try {
+        const resp = await fetch(`/api/jobs/${jobId}/cancel`, {method: 'POST'});
+        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
+        showToast('Job cancelled', 'warning');
+        htmx.ajax('GET', '/partials/active-transcodes', {target: '#active-transcodes', swap: 'innerHTML'});
+    } catch (err) {
+        showToast('Failed to cancel job', 'error');
+    }
+}
+</script>
+{% endblock %}

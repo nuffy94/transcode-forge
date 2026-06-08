@@ -1,0 +1,100 @@
+# Transcode Forge — single-host install.
+#
+# Quick start:
+#     ./bootstrap.sh   (or bootstrap.ps1 on Windows)
+#     docker compose up -d
+#
+# Then open http://localhost:8000 to set the admin password.
+#
+# Postgres and Redis are NOT published to the host — they're reachable only
+# on the internal Docker network. Only the web UI is published (TF_PORT,
+# default 8000). Library paths default to ./media — change
+# TF_LIBRARY_MOVIES / TF_LIBRARY_TV to point at your real media drives.
+
+services:
+  redis:
+    image: redis:7-alpine
+    # No host port — Redis stays on the internal Docker network only.
+    volumes:
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    # No host port — Postgres stays on the internal Docker network only.
+    environment:
+      POSTGRES_DB: transcode_forge
+      POSTGRES_USER: tf
+      POSTGRES_PASSWORD: ${TF_PG_PASSWORD:?run ./bootstrap.sh first}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tf -d transcode_forge"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    ports:
+      # Binds 0.0.0.0 by default (LAN-reachable on the local network). On an
+      # untrusted network set TF_BIND=127.0.0.1 and front it with a TLS
+      # reverse proxy (see README → Security).
+      - "${TF_BIND:-0.0.0.0}:${TF_PORT:-8000}:8000"
+    environment:
+      TF_DB_URL: "postgresql://tf:${TF_PG_PASSWORD}@postgres:5432/transcode_forge"
+      TF_REDIS_URL: "redis://redis:6379/0"
+      TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
+      TF_AUTH_SECRET: "${TF_AUTH_SECRET}"
+      # Container-internal paths — host library is mounted to /media/{movies,tv}.
+      TF_LIBRARY_MOVIES: "/media/movies"
+      TF_LIBRARY_TV: "/media/tv"
+    volumes:
+      # Read-only mount — the scheduler scans, workers do the writes.
+      - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:ro"
+      - "${TF_LIBRARY_TV:-./media/tv}:/media/tv:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # Optional local Intel QSV worker. Uncomment if /dev/dri exists on the host.
+  # Generate a token in Settings → Workers, then put it here as TF_WORKER_TOKEN.
+  #
+  # worker:
+  #   build: .
+  #   command: ["python", "-m", "transcode_forge.worker"]
+  #   environment:
+  #     TF_SERVER_URL: "http://scheduler:8000"
+  #     TF_WORKER_TOKEN: "${TF_WORKER_TOKEN:?set in .env after issuing a token}"
+  #     TF_WORKER_NAME: "local-qsv"
+  #     TF_PREFERRED_ENCODER: "auto"
+  #   volumes:
+  #     # Workers do the writes — RW mount.
+  #     - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:rw"
+  #     - "${TF_LIBRARY_TV:-./media/tv}:/media/tv:rw"
+  #   devices:
+  #     - /dev/dri:/dev/dri
+  #   depends_on:
+  #     scheduler:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:

@@ -1,0 +1,132 @@
+{% if workers %}
+{% for worker in workers %}
+{% set is_active = worker.status == 'online' or worker.status == 'busy' %}
+{% set tier = worker.heartbeat_tier or 'dead' %}
+{% set heartbeat_alarm = is_active and tier in ('stale', 'dead') %}
+{% set is_dead = worker.status == 'dead' or tier == 'dead' %}
+{# A worker is removable when its heartbeat is old enough that we know
+   it's not actually doing work, regardless of what 'status' claims.
+   Covers status=offline duplicates from container restarts and
+   status=dead-with-stuck-job rows. #}
+{% set is_removable = tier == 'dead' or worker.status in ('dead', 'offline') %}
+<div data-worker-id="{{ worker.id }}"
+     class="forge-panel{% if is_active and not heartbeat_alarm %} forge-panel--ember{% endif %} relative p-5 flex flex-col gap-5 {% if is_dead and not is_active %}opacity-60{% endif %}"
+     {% if heartbeat_alarm %}style="border-color: rgba(215, 93, 58, 0.55);"{% endif %}>
+
+    {% if not is_active or heartbeat_alarm %}
+    <span class="forge-tick forge-tick-tl"></span>
+    <span class="forge-tick forge-tick-tr"></span>
+    <span class="forge-tick forge-tick-bl"></span>
+    <span class="forge-tick forge-tick-br"></span>
+    {% endif %}
+
+    <!-- Header strip -->
+    <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+                {% if heartbeat_alarm %}
+                <span class="forge-dot forge-dot--err forge-pulse"></span>
+                {% elif is_active %}
+                <span class="forge-dot forge-dot--hot forge-pulse"></span>
+                {% elif is_dead %}
+                <span class="forge-dot forge-dot--err"></span>
+                {% else %}
+                <span class="forge-dot forge-dot--off"></span>
+                {% endif %}
+                <h4 class="font-display font-bold text-xl {% if heartbeat_alarm %}text-forge-rust{% else %}text-forge-paper{% endif %} truncate uppercase tracking-tight">{{ worker.name }}</h4>
+            </div>
+            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">⌖ {{ worker.host }}</p>
+        </div>
+        {% if worker.capabilities %}
+        <span class="forge-pill {% if 'qsv' in worker.capabilities or 'nvenc' in worker.capabilities %}forge-pill--running{% else %}forge-pill--pending{% endif %}">
+            {{ worker.capabilities[0]|upper }}
+        </span>
+        {% endif %}
+    </div>
+
+    {# Stale-heartbeat alert (red bar above the body) #}
+    {% if heartbeat_alarm %}
+    <div class="border border-forge-rust/50 bg-forge-rust/10 px-3 py-2 flex items-center gap-2">
+        <span class="material-symbols-outlined text-forge-rust text-base">warning</span>
+        <div class="flex-1 min-w-0">
+            <p class="font-mono text-[10px] font-bold uppercase tracking-stamp text-forge-rust">
+                {% if tier == 'dead' %}Heartbeat Lost{% else %}Heartbeat Stale{% endif %}
+            </p>
+            <p class="font-mono text-[10px] text-forge-ink mt-0.5">Last seen {{ worker.heartbeat_relative }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Status body -->
+    {% if is_active %}
+        {% if worker.current_job_id %}
+        <div class="space-y-3">
+            <div class="flex items-center justify-between font-mono text-[11px]">
+                <span class="text-forge-mute uppercase tracking-stamp">Now running</span>
+                <span data-progress-pct class="text-forge-ember-hot font-semibold tabular-nums">0%</span>
+            </div>
+            <p class="text-xs text-forge-paper truncate" title="{{ worker.current_job_filename or worker.current_job_id }}">{{ worker.current_job_filename or worker.current_job_id[:24] }}</p>
+            <div class="forge-meter">
+                <div data-progress-bar class="forge-meter-fill" style="width: 0%;"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 pt-2 border-t border-forge-rule/60">
+                <div>
+                    <p class="forge-stat-label">Speed</p>
+                    <p data-speed class="font-mono text-sm font-semibold text-forge-paper mt-1 tabular-nums">—</p>
+                </div>
+                <div>
+                    <p class="forge-stat-label">ETA</p>
+                    <p data-eta class="font-mono text-sm font-semibold text-forge-paper mt-1 tabular-nums">—</p>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center py-5 border border-dashed border-forge-rule/60">
+            <p class="font-mono text-[10px] text-forge-oxide uppercase tracking-stamp font-semibold">Standby</p>
+            <p class="font-mono text-[10px] text-forge-mute mt-1">Awaiting assignment</p>
+        </div>
+        {% endif %}
+    {% elif is_removable %}
+    <div class="space-y-2 border border-forge-rust/30 bg-forge-rust/5 p-3.5">
+        <div class="flex items-center justify-between gap-2 text-forge-rust">
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-base">warning</span>
+                <p class="font-mono text-[11px] font-semibold uppercase tracking-stamp">
+                    {% if worker.status == 'offline' %}Worker Offline{% else %}Worker Dead{% endif %}
+                </p>
+            </div>
+            <button class="forge-iconbtn forge-iconbtn--danger text-forge-rust"
+                    onclick="removeDeadWorker('{{ worker.id }}', '{{ worker.name|replace("'", "\\'") }}')"
+                    title="Remove this worker registration">
+                <span class="material-symbols-outlined text-base">delete</span>
+            </button>
+        </div>
+        <p class="font-mono text-[10px] text-forge-ink leading-relaxed">Last heartbeat <span class="text-forge-mute">{{ worker.last_heartbeat[:19] if worker.last_heartbeat else 'unknown' }}</span></p>
+    </div>
+    {% else %}
+    <div class="text-center py-5 border border-dashed border-forge-rule/60">
+        <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp font-semibold">Standby</p>
+        <p class="font-mono text-[10px] text-forge-mute mt-1">Awaiting next job</p>
+    </div>
+    {% endif %}
+
+    <!-- Footer datum -->
+    <div class="mt-auto pt-3 border-t border-forge-rule/60 flex justify-between items-center font-mono text-[10px] text-forge-mute uppercase tracking-stamp">
+        <span>Slots: <span class="text-forge-ink">{{ worker.max_concurrent }}</span></span>
+        <span title="{{ worker.last_heartbeat or 'never' }}">
+            Seen: <span class="{% if heartbeat_alarm %}text-forge-rust{% else %}text-forge-ink{% endif %}">{{ worker.heartbeat_relative or '—' }}</span>
+        </span>
+    </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="col-span-full text-center py-16 px-6">
+    <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">engineering</span>
+    <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No Workers Registered</p>
+    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp leading-relaxed max-w-xl mx-auto mt-3">
+        Issue a token in <a href="/settings" class="text-forge-ember hover:text-forge-ember-hot">Settings → Workers</a>, then on the worker host set
+        <code class="text-forge-ember">TF_SERVER_URL</code> + <code class="text-forge-ember">TF_WORKER_TOKEN</code> and run
+        <code class="text-forge-ember">python -m transcode_forge.worker</code>.
+    </p>
+</div>
+{% endif %}

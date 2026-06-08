@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Statistics — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-8">
+
+    <header class="forge-rise forge-rise-1">
+        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
+            <span class="text-forge-ember">/</span> Section 08 &nbsp;·&nbsp; Telemetry
+        </p>
+        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">STATISTICS</h1>
+        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
+            Cumulative readouts &mdash; processed volume, library breakdown, worker performance, and skip reasons.
+        </p>
+    </header>
+
+    <div id="stats-container"
+         class="forge-rise forge-rise-2"
+         hx-get="/partials/stats"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML">
+        <div class="flex justify-center p-8">
+            <span class="material-symbols-outlined text-forge-ember animate-spin text-3xl">settings</span>
+        </div>
+    </div>
+</div>
+{% endblock %}

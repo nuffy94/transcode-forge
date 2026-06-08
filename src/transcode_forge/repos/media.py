@@ -1,0 +1,305 @@
+"""Media file repository — inventory of all files across all libraries."""
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from transcode_forge.db import DBConnection
+
+_VALID_TRANSCODE_STATUSES = frozenset(
+    {
+        "pending",
+        "needs_transcode",
+        "queued",
+        "transcoding",
+        "complete",
+        "skipped",
+    }
+)
+
+
+async def upsert_media_file(
+    db: DBConnection,
+    *,
+    library_id: str,
+    file_path: str,
+    filename: str,
+    show_name: str | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+    video_codec: str | None = None,
+    audio_codec: str | None = None,
+    resolution: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    bitrate: int | None = None,
+    duration: float | None = None,
+    file_size: int | None = None,
+    file_modified_at: str | None = None,
+) -> str:
+    """Insert or update a media file in the inventory. Returns file ID."""
+    now = datetime.now(UTC).isoformat()
+    file_id = str(uuid4())
+
+    # Determine initial transcode status based on codec
+    status = "pending"
+    skip_reason = None
+    if video_codec == "hevc":
+        status = "complete"
+        skip_reason = "already_hevc"
+    elif video_codec and video_codec != "h264":
+        status = "skipped"
+        skip_reason = "not_h264"
+    elif video_codec == "h264":
+        status = "needs_transcode"
+
+    await db.execute(
+        """INSERT INTO media_files (id, library_id, file_path, filename,
+            show_name, season, episode,
+            video_codec, audio_codec, resolution, width, height,
+            bitrate, duration, file_size,
+            transcode_status, skip_reason,
+            file_modified_at, scanned_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(file_path) DO UPDATE SET
+            video_codec = excluded.video_codec,
+            audio_codec = excluded.audio_codec,
+            resolution = excluded.resolution,
+            width = excluded.width,
+            height = excluded.height,
+            bitrate = excluded.bitrate,
+            duration = excluded.duration,
+            file_size = excluded.file_size,
+            file_modified_at = excluded.file_modified_at,
+            scanned_at = excluded.scanned_at,
+            updated_at = excluded.updated_at
+        """,
+        (
+            file_id,
+            library_id,
+            file_path,
+            filename,
+            show_name,
+            season,
+            episode,
+            video_codec,
+            audio_codec,
+            resolution,
+            width,
+            height,
+            bitrate,
+            duration,
+            file_size,
+            status,
+            skip_reason,
+            file_modified_at,
+            now,
+            now,
+        ),
+    )
+    await db.commit()
+    return file_id
+
+
+async def get_media_file(db: DBConnection, file_id: str) -> dict[str, Any] | None:
+    async with db.execute("SELECT * FROM media_files WHERE id = ?", (file_id,)) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_by_ids(db: DBConnection, file_ids: list[str]) -> list[dict[str, Any]]:
+    """Fetch many media files in one query (order not preserved)."""
+    if not file_ids:
+        return []
+    placeholders = ",".join("?" * len(file_ids))
+    async with db.execute(
+        f"SELECT * FROM media_files WHERE id IN ({placeholders})", list(file_ids)
+    ) as cur:
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def list_media_files(
+    db: DBConnection,
+    *,
+    media_type: str | None = None,
+    library_id: str | None = None,
+    video_codec: str | None = None,
+    transcode_status: str | None = None,
+    show_name: str | None = None,
+    search: str | None = None,
+    sort_by: str = "filename",
+    sort_dir: str = "asc",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """List media files with filtering, sorting, pagination."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if media_type:
+        conditions.append("l.media_type = ?")
+        params.append(media_type)
+    if library_id:
+        conditions.append("m.library_id = ?")
+        params.append(library_id)
+    if video_codec:
+        conditions.append("m.video_codec = ?")
+        params.append(video_codec)
+    if transcode_status:
+        statuses = [s.strip() for s in transcode_status.split(",")]
+        placeholders = ",".join("?" * len(statuses))
+        conditions.append(f"m.transcode_status IN ({placeholders})")
+        params.extend(statuses)
+    if show_name:
+        conditions.append("m.show_name = ?")
+        params.append(show_name)
+    if search:
+        conditions.append("m.filename LIKE ?")
+        params.append(f"%{search}%")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    # Validate sort column
+    valid_sorts = {
+        "filename": "m.filename",
+        "file_size": "m.file_size",
+        "video_codec": "m.video_codec",
+        "resolution": "m.width",
+        "duration": "m.duration",
+        "scanned_at": "m.scanned_at",
+        "file_modified_at": "m.file_modified_at",
+        "transcode_status": "m.transcode_status",
+        "show_name": "m.show_name",
+    }
+    sort_col = valid_sorts.get(sort_by, "m.filename")
+    direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
+
+    # Count
+    async with db.execute(
+        f"SELECT COUNT(*) FROM media_files m JOIN libraries l ON m.library_id = l.id {where}",
+        params,
+    ) as cur:
+        row = await cur.fetchone()
+        total = row[0] if row else 0
+
+    # Fetch
+    query = f"""
+        SELECT m.*, l.name as library_name, l.media_type, l.path as library_path
+        FROM media_files m
+        JOIN libraries l ON m.library_id = l.id
+        {where}
+        ORDER BY {sort_col} {direction}
+        LIMIT ? OFFSET ?
+    """
+    async with db.execute(query, [*params, limit, offset]) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows], total
+
+
+async def list_tv_shows(
+    db: DBConnection,
+    *,
+    library_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """List TV shows with episode counts and transcode stats."""
+    conditions = ["m.show_name IS NOT NULL"]
+    params: list[Any] = []
+    if library_id:
+        conditions.append("m.library_id = ?")
+        params.append(library_id)
+    where = f"WHERE {' AND '.join(conditions)}"
+
+    query = f"""
+        SELECT
+            m.show_name,
+            COUNT(*) as episode_count,
+            SUM(m.file_size) as total_size,
+            SUM(CASE
+                WHEN m.video_codec = 'hevc'
+                    OR m.transcode_status = 'complete'
+                THEN 1 ELSE 0 END) as transcoded_count,
+            SUM(CASE
+                WHEN m.video_codec = 'h264'
+                    AND m.transcode_status IN ('pending', 'needs_transcode')
+                THEN 1 ELSE 0 END) as needs_transcode_count,
+            MIN(m.library_id) as library_id
+        FROM media_files m
+        {where}
+        GROUP BY m.show_name
+        ORDER BY m.show_name
+    """
+    async with db.execute(query, params) as cur:
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_media_status(
+    db: DBConnection,
+    file_id: str,
+    *,
+    transcode_status: str,
+    skip_reason: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Update the transcode status of a media file."""
+    if transcode_status not in _VALID_TRANSCODE_STATUSES:
+        raise ValueError(f"Invalid transcode_status: {transcode_status!r}")
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "UPDATE media_files SET transcode_status = ?, skip_reason = ?,"
+        " job_id = ?, updated_at = ? WHERE id = ?",
+        (transcode_status, skip_reason, job_id, now, file_id),
+    )
+    await db.commit()
+
+
+async def bulk_update_status(
+    db: DBConnection,
+    file_ids: list[str],
+    *,
+    transcode_status: str,
+    skip_reason: str | None = None,
+) -> int:
+    """Bulk update transcode status. Returns count updated."""
+    if transcode_status not in _VALID_TRANSCODE_STATUSES:
+        raise ValueError(f"Invalid transcode_status: {transcode_status!r}")
+    now = datetime.now(UTC).isoformat()
+    placeholders = ",".join("?" * len(file_ids))
+    cur = await db.execute(
+        "UPDATE media_files SET transcode_status = ?, skip_reason = ?,"
+        f" updated_at = ? WHERE id IN ({placeholders})",
+        [transcode_status, skip_reason, now, *file_ids],
+    )
+    await db.commit()
+    count: int = cur.rowcount
+    return count
+
+
+async def get_codec_stats(db: DBConnection) -> dict[str, Any]:
+    """Get codec distribution across all files."""
+    async with db.execute(
+        """SELECT video_codec, COUNT(*) as count, SUM(file_size) as total_size
+           FROM media_files GROUP BY video_codec ORDER BY count DESC"""
+    ) as cur:
+        return {
+            row["video_codec"] or "unknown": {
+                "count": row["count"],
+                "total_size": row["total_size"],
+            }
+            for row in await cur.fetchall()
+        }
+
+
+async def get_status_stats(db: DBConnection, media_type: str | None = None) -> dict[str, Any]:
+    """Get transcode status distribution."""
+    if media_type:
+        query = """SELECT m.transcode_status, COUNT(*) as count
+                   FROM media_files m JOIN libraries l ON m.library_id = l.id
+                   WHERE l.media_type = ? GROUP BY m.transcode_status"""
+        params: tuple[Any, ...] = (media_type,)
+    else:
+        query = (
+            "SELECT transcode_status, COUNT(*) as count FROM media_files GROUP BY transcode_status"
+        )
+        params = ()
+    async with db.execute(query, params) as cur:
+        return {row["transcode_status"]: row["count"] for row in await cur.fetchall()}
