@@ -16,7 +16,7 @@ import hashlib
 import os
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -633,3 +633,80 @@ class _FailingClientContext:
 
     async def __aexit__(self, *args):
         pass
+
+
+class _BoomError(RuntimeError):
+    """Sentinel raised by mocked clients to stop execution after the call we inspect."""
+
+
+class TestS3ChecksumCompat:
+    """Every S3 client must use the compat config: boto3 >= 1.36 sends CRC32
+    request checksums by default, which Linode E3 (and other S3-alikes)
+    reject with 403."""
+
+    def test_helper_config_values(self):
+        from transcode_forge.s3compat import s3_client_config
+
+        cfg = s3_client_config()
+        assert cfg.request_checksum_calculation == "when_required"
+        assert cfg.response_checksum_validation == "when_required"
+
+    async def test_fetch_client_uses_compat_config(self, s3_config):
+        backend = S3Backend(
+            config=s3_config,
+            db=None,
+            scratch_manager=AsyncMock(),
+            library_id="lib",
+            bucket="bkt",
+        )
+        backend.session = MagicMock()
+        backend.session.client = MagicMock(side_effect=_BoomError("stop before network IO"))
+
+        with pytest.raises(_BoomError):
+            await backend.fetch("masters/movie.mkv")
+
+        cfg = backend.session.client.call_args.kwargs["config"]
+        assert cfg.request_checksum_calculation == "when_required"
+
+    async def test_commit_client_uses_compat_config(self, s3_config, tmp_path):
+        local = tmp_path / "out.mkv"
+        local.write_bytes(b"x" * 64)
+        backend = S3Backend(
+            config=s3_config,
+            db=None,
+            scratch_manager=AsyncMock(),
+            library_id="lib",
+            bucket="bkt",
+        )
+        backend.session = MagicMock()
+        backend.session.client = MagicMock(side_effect=_BoomError("stop before network IO"))
+
+        with pytest.raises(_BoomError):
+            await backend.commit(
+                local_output=local,
+                source="masters/movie.mkv",
+                job={"id": "job-1", "source_path": "masters/movie.mkv"},
+            )
+
+        cfg = backend.session.client.call_args.kwargs["config"]
+        assert cfg.request_checksum_calculation == "when_required"
+
+    async def test_scanner_client_uses_compat_config(self, s3_config, db):
+        from transcode_forge.scanner import s3_scanner
+
+        with patch.object(s3_scanner, "Session") as session_cls:
+            session = session_cls.return_value
+            session.client = MagicMock(side_effect=_BoomError("stop before network IO"))
+
+            with pytest.raises(_BoomError):
+                await s3_scanner.scan_s3_library(
+                    library_id="lib",
+                    library_name="L",
+                    bucket="bkt",
+                    prefix="",
+                    config=s3_config,
+                    db=db,
+                )
+
+        cfg = session.client.call_args.kwargs["config"]
+        assert cfg.request_checksum_calculation == "when_required"

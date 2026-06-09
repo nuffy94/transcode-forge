@@ -142,12 +142,16 @@ class HttpWorkerAgent:
         # Construct the backend for this job's library.
         # The claim-job response includes backend_type, s3_bucket, s3_prefix.
         backend_type_str = getattr(job, "_backend_type", "filesystem")
+        is_s3 = backend_type_str == StorageBackendType.S3 or backend_type_str == "s3"
         backend = await self._get_backend_for_job(job)
 
         # Fetch the source via the backend. For filesystem, this is a no-op
         # (returns the path-mapped path). For S3, this downloads to scratch.
+        # TF_PATH_MAP only applies to filesystem paths — S3 keys are bucket
+        # coordinates, not mount points.
+        source_ref = job.source_path if is_s3 else self._translate_path(job.source_path)
         try:
-            source_path_local = await backend.fetch(job.source_path)
+            source_path_local = await backend.fetch(source_ref)
         except (OSError, Exception) as e:
             logger.error("Failed to fetch source for job %s: %s", job.id, e)
             await self._client.failed(
@@ -160,7 +164,7 @@ class HttpWorkerAgent:
         # Check for dedup/reuse opportunity (S3-only for now).
         # For S3 libraries, compute the derivative key and look it up via the scheduler.
         # If a derivative exists, the scheduler marks the job COMPLETE and we skip encoding.
-        if backend_type_str == StorageBackendType.S3 or backend_type_str == "s3":
+        if is_s3:
             dedup_result = await self._try_dedup(job, backend)
             if dedup_result:
                 # Job was marked COMPLETE via dedup. Report completion with reused output size.
@@ -200,7 +204,6 @@ class HttpWorkerAgent:
             # For filesystem: swap already happened in run_pipeline; commit() validates sizes.
             # For S3: upload the transcoded file to S3 (but don't register yet).
             # For filesystem, space_saved comes from the pipeline result (bak file size).
-            is_s3 = backend_type_str == StorageBackendType.S3 or backend_type_str == "s3"
             space_saved = 0 if is_s3 else int(result.get("space_saved", 0))
             commit_result = await backend.commit(
                 local_output=source_path_local,
@@ -210,7 +213,7 @@ class HttpWorkerAgent:
             )
 
             # For S3, register the derivative on the scheduler side.
-            if backend_type_str == StorageBackendType.S3 or backend_type_str == "s3":
+            if is_s3:
                 from transcode_forge.models.derivative import compute_derivative_key
 
                 source_resolution = getattr(job, "source_resolution", "") or ""

@@ -28,6 +28,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
+from transcode_forge.s3compat import s3_client_config
 from transcode_forge.worker.storage.base import CommitResult
 from transcode_forge.worker.storage.scratch import ScratchManager
 
@@ -137,6 +138,7 @@ class S3Backend:
                 "s3",
                 endpoint_url=self.config.s3_endpoint_url or None,
                 region_name=self.config.s3_region,
+                config=s3_client_config(),
             ) as client:
                 # Get the object metadata to determine actual size.
                 logger.info("Getting S3 object metadata %s/%s", self.bucket, source)
@@ -162,6 +164,7 @@ class S3Backend:
                 "s3",
                 endpoint_url=self.config.s3_endpoint_url or None,
                 region_name=self.config.s3_region,
+                config=s3_client_config(),
             ) as client:
                 logger.info("Downloading S3 object %s/%s to %s", self.bucket, source, local_path)
 
@@ -256,6 +259,7 @@ class S3Backend:
                 "s3",
                 endpoint_url=self.config.s3_endpoint_url or None,
                 region_name=self.config.s3_region,
+                config=s3_client_config(),
             ) as client:
                 # Upload file to S3 with tuned multipart settings.
                 from boto3.s3.transfer import TransferConfig

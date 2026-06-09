@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import JobStatus
+from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.models.worker import Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import worker_tokens as token_repo
@@ -33,7 +33,42 @@ from transcode_forge.repos import workers as worker_repo
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["worker"])
 
-REDIS_PROGRESS_CHANNEL = "tf:pub:progress"
+
+def _progress_channel(request: Request) -> str:
+    """Redis channel for progress events.
+
+    Derived from the configurable redis_prefix so this publisher and the
+    WebSocket subscriber (web/websocket.py) can never drift apart.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    prefix = settings.redis_prefix if settings is not None else "tf"
+    return f"{prefix}:pub:progress"
+
+
+def _require_worker_identity(token_row: dict[str, Any], worker_id: str) -> None:
+    """Reject callers claiming a worker_id other than the one bound to their token."""
+    if token_row.get("worker_id") != worker_id:
+        raise HTTPException(
+            status_code=403,
+            detail="worker_id does not match this token's registered worker",
+        )
+
+
+async def _require_owned_job(db: DBConnection, job_id: str, token_row: dict[str, Any]) -> Job:
+    """Fetch a job and verify it is assigned to the calling worker.
+
+    Guards against a stale worker (crashed or evicted, token still valid)
+    mutating a job that has since been re-queued or claimed by another
+    worker — without this, a slow in-flight /complete or /progress from
+    the old owner would silently corrupt the new owner's job state.
+    """
+    job = await job_repo.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    owner = token_row.get("worker_id")
+    if owner is None or job.worker_id != owner:
+        raise HTTPException(status_code=403, detail="Job is not assigned to this worker")
+    return job
 
 
 async def require_worker_token(
@@ -107,6 +142,7 @@ class RegisterDerivativeRequest(BaseModel):
 @router.post("/worker/register")
 async def register(
     body: RegisterRequest,
+    request: Request,
     db: DBConnection = Depends(get_db),
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> dict[str, Any]:
@@ -166,7 +202,7 @@ async def register(
     return {
         "worker_id": worker.id,
         "name": worker.name,
-        "redis_progress_channel": REDIS_PROGRESS_CHANNEL,
+        "redis_progress_channel": _progress_channel(request),
     }
 
 
@@ -174,8 +210,9 @@ async def register(
 async def heartbeat(
     body: HeartbeatRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
+    _require_worker_identity(token_row, body.worker_id)
     await worker_repo.update_worker_heartbeat(
         db,
         worker_id=body.worker_id,
@@ -188,12 +225,14 @@ async def heartbeat(
 async def claim_job(
     body: ClaimRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> dict[str, Any]:
     """Atomically claim the next pending/queued job, respecting queue
     pause + scheduling windows. Returns the job plus library backend info."""
     from transcode_forge.repos import libraries as library_repo
     from transcode_forge.repos import system as system_repo
+
+    _require_worker_identity(token_row, body.worker_id)
 
     if await system_repo.is_queue_paused(db):
         return {"job": None, "reason": "queue_paused"}
@@ -225,7 +264,7 @@ async def check_derivative(
     job_id: str,
     body: CheckDerivativeRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> dict[str, Any]:
     """Check if a derivative already exists for this job's parameters.
 
@@ -245,6 +284,8 @@ async def check_derivative(
     """
     from transcode_forge.models.job import JobStatus
     from transcode_forge.repos import derivatives as deriv_repo
+
+    await _require_owned_job(db, job_id, token_row)
 
     existing = await deriv_repo.lookup_by_key(db, body.derivative_key)
     if existing:
@@ -278,8 +319,9 @@ async def progress(
     body: ProgressRequest,
     request: Request,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
+    await _require_owned_job(db, job_id, token_row)
     await job_repo.update_job(db, job_id, progress=body.progress)
     redis = getattr(request.app.state, "redis", None)
     if redis is not None:
@@ -290,14 +332,12 @@ async def progress(
             # worker_id. The token row has it (set when the worker first
             # registered) — pass it through so the frontend can target
             # the right card.
-            token_row = getattr(request.state, "worker_token_row", None)
-            worker_id = token_row.get("worker_id") if token_row else None
             await redis.publish(
-                REDIS_PROGRESS_CHANNEL,
+                _progress_channel(request),
                 json.dumps(
                     {
                         "job_id": job_id,
-                        "worker_id": worker_id,
+                        "worker_id": token_row.get("worker_id"),
                         "progress": body.progress,
                         "speed": body.speed,
                     }
@@ -312,8 +352,9 @@ async def complete_job(
     job_id: str,
     body: CompleteRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
+    await _require_owned_job(db, job_id, token_row)
     await job_repo.update_job(
         db,
         job_id,
@@ -331,8 +372,9 @@ async def fail_job(
     job_id: str,
     body: FailedRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
+    await _require_owned_job(db, job_id, token_row)
     await job_repo.update_job(
         db,
         job_id,
@@ -348,7 +390,7 @@ async def register_derivative(
     job_id: str,
     body: RegisterDerivativeRequest,
     db: DBConnection = Depends(get_db),
-    _token: dict[str, Any] = Depends(require_worker_token),
+    token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
     """Register a derivative after S3 upload.
 
@@ -363,10 +405,8 @@ async def register_derivative(
     """
     from transcode_forge.repos import derivatives as deriv_repo
 
-    # Fetch the job to get library_id and source metadata.
-    job = await job_repo.get_job(db, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    # Fetch the job (verifying ownership) to get library_id and source metadata.
+    job = await _require_owned_job(db, job_id, token_row)
 
     # Check if the derivative already exists (dedup race).
     existing = await deriv_repo.lookup_by_key(db, body.derivative_key)

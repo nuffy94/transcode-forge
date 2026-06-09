@@ -19,6 +19,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.repos import media as media_repo
+from transcode_forge.s3compat import s3_client_config
 from transcode_forge.scanner.probe import ProbeError, ffprobe, is_video_file
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ async def scan_s3_library(
             "s3",
             endpoint_url=config.s3_endpoint_url or None,
             region_name=config.s3_region,
+            config=s3_client_config(),
         ) as client:
             paginator = client.get_paginator("list_objects_v2")
             page_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix)

@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
+from transcode_forge.api.routes.auth import SESSION_KEY
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -30,6 +32,15 @@ async def websocket_updates(websocket: WebSocket) -> Any:
             logger.warning("WebSocket rejected: origin=%s, host=%s", origin, host)
             await websocket.close(code=1008)
             return
+
+    # Require an authenticated admin session. AuthMiddleware only guards
+    # HTTP scopes — without this check the job/worker event stream would
+    # be readable by any unauthenticated client that can reach the port.
+    session = websocket.scope.get("session") or {}
+    if not session.get(SESSION_KEY):
+        logger.warning("WebSocket rejected: no authenticated session")
+        await websocket.close(code=1008)
+        return
 
     await websocket.accept()
     redis: Redis | None = websocket.app.state.redis

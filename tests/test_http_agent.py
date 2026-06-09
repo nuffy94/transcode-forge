@@ -241,6 +241,72 @@ class TestProcessJobFilesystemHappyPath:
         assert call_kwargs["space_saved"] == 5000000
 
 
+class TestPathMapTranslation:
+    """TF_PATH_MAP must be applied to filesystem sources before fetch — and
+    never to S3 keys (they're bucket coordinates, not mount points)."""
+
+    @pytest.mark.asyncio
+    async def test_filesystem_fetch_receives_mapped_path(self, test_settings, tmp_path):
+        settings = test_settings.model_copy(update={"path_map": {"/data/media": "/mnt/media"}})
+        agent = HttpWorkerAgent(settings, "http://scheduler", "test-token")
+        agent.worker_id = "worker-1"
+
+        job = Job(
+            source_path="/data/media/movies/test.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        object.__setattr__(job, "_backend_type", "filesystem")
+
+        output_file = tmp_path / "out.mkv"
+        output_file.write_bytes(b"fake video data")
+        mock_backend = AsyncMock()
+        mock_backend.fetch = AsyncMock(return_value=output_file)
+        mock_backend.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=5))
+        mock_backend.cleanup = AsyncMock()
+        agent._client = AsyncMock()
+
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job, "libx265")
+
+        mock_backend.fetch.assert_called_once_with("/mnt/media/movies/test.mkv")
+
+    @pytest.mark.asyncio
+    async def test_s3_fetch_key_is_never_mapped(self, test_settings, tmp_path):
+        # A path_map whose prefix would match the S3 key if (wrongly) applied.
+        settings = test_settings.model_copy(update={"path_map": {"masters": "/mnt/masters"}})
+        agent = HttpWorkerAgent(settings, "http://scheduler", "test-token")
+        agent.worker_id = "worker-1"
+
+        job = Job(
+            source_path="masters/movies/test.mkv",
+            library="s3-movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        object.__setattr__(job, "_backend_type", "s3")
+        object.__setattr__(job, "_s3_bucket", "bkt")
+
+        output_file = tmp_path / "out.mkv"
+        output_file.write_bytes(b"fake video data")
+        mock_backend = AsyncMock()
+        mock_backend.fetch = AsyncMock(return_value=output_file)
+        mock_backend.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=0))
+        mock_backend.cleanup = AsyncMock()
+        agent._client = AsyncMock()
+        agent._client.check_derivative = AsyncMock(return_value={"found": False})
+
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 0}
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job, "libx265")
+
+        mock_backend.fetch.assert_called_once_with("masters/movies/test.mkv")
+
+
 class TestScratchManagerLifecycle:
     """Tests for ScratchManager singleton lifecycle."""
 

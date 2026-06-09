@@ -138,8 +138,8 @@ src/transcode_forge/
 │                        # auth, worker_api, worker_tokens, …)
 ├── models/              # Pydantic DTOs
 ├── repos/               # Data access — one module per resource
-├── worker/              # agent.py (legacy), http_agent.py (current),
-│                        # pipeline.py, encoder.py, hardware.py
+├── worker/              # http_agent.py (worker agent), pipeline.py,
+│                        # encoder.py, hardware.py, storage/
 ├── scanner/             # scanner.py, probe.py
 ├── migrations/          # numbered .sql files + runner
 └── web/                 # routes.py, websocket.py, templates/, static/

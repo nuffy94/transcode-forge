@@ -261,7 +261,7 @@ class TestJobLifecycleViaHttp:
         transport = ASGITransport(app=app)
         async with RawClient(transport=transport, base_url="http://test") as c:
             headers = {"Authorization": f"Bearer {token}"}
-            await c.post(
+            reg = await c.post(
                 "/api/worker/register",
                 json={
                     "name": "w",
@@ -275,9 +275,304 @@ class TestJobLifecycleViaHttp:
 
             r = await c.post(
                 "/api/worker/claim-job",
-                json={"worker_id": "any"},
+                json={"worker_id": reg.json()["worker_id"]},
                 headers=headers,
             )
             data = r.json()
             assert data["job"] is None
             assert data["reason"] == "queue_paused"
+
+
+async def _seed_pending_job(app, source_path: str = "/m/own.mkv"):
+    """Insert a PENDING job directly in the DB; returns the Job model."""
+    from transcode_forge.models.job import Job, JobStatus
+    from transcode_forge.repos import jobs as job_repo
+
+    job = Job(
+        source_path=source_path,
+        library="movies",
+        source_codec="h264",
+        quality_value=21,
+        status=JobStatus.PENDING,
+    )
+    await job_repo.create_job(app.state.db, job)
+    return job
+
+
+async def _register_worker(client, worker_client, label: str):
+    """Issue a token and register a worker with it; returns (headers, worker_id)."""
+    issue = await client.post("/api/worker-tokens", json={"label": label})
+    headers = {"Authorization": f"Bearer {issue.json()['token']}"}
+    reg = await worker_client.post(
+        "/api/worker/register",
+        json={"name": label, "host": "h", "capabilities": ["cpu"]},
+        headers=headers,
+    )
+    assert reg.status_code == 200
+    return headers, reg.json()["worker_id"]
+
+
+class TestWorkerIdentityEnforcement:
+    """claim-job and heartbeat must use the worker_id bound to the caller's token."""
+
+    async def test_claim_with_foreign_worker_id_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, _worker_id = await _register_worker(client, c, "honest")
+            r = await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": "someone-else"},
+                headers=headers,
+            )
+            assert r.status_code == 403
+
+    async def test_heartbeat_with_foreign_worker_id_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "a")
+            _headers_b, worker_b = await _register_worker(client, c, "b")
+            r = await c.post(
+                "/api/worker/heartbeat",
+                json={"worker_id": worker_b, "status": "online"},
+                headers=headers_a,
+            )
+            assert r.status_code == 403
+            r = await c.post(
+                "/api/worker/heartbeat",
+                json={"worker_id": worker_a, "status": "online"},
+                headers=headers_a,
+            )
+            assert r.status_code == 204
+
+    async def test_unregistered_token_cannot_claim(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        issue = await client.post("/api/worker-tokens", json={"label": "never-registered"})
+        headers = {"Authorization": f"Bearer {issue.json()['token']}"}
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            r = await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": "anything"},
+                headers=headers,
+            )
+            assert r.status_code == 403
+
+
+class TestJobOwnership:
+    """Job mutation endpoints reject tokens whose worker doesn't own the job."""
+
+    async def test_non_owner_progress_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "owner")
+            headers_b, _worker_b = await _register_worker(client, c, "intruder")
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a
+            )
+            assert claim.json()["job"]["id"] == job.id
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.5},
+                headers=headers_b,
+            )
+            assert r.status_code == 403
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.5},
+                headers=headers_a,
+            )
+            assert r.status_code == 204
+
+    async def test_non_owner_complete_rejected_and_state_unchanged(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "owner")
+            headers_b, _worker_b = await _register_worker(client, c, "intruder")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a)
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 1, "space_saved": 1, "source_size": 2},
+                headers=headers_b,
+            )
+            assert r.status_code == 403
+
+        current = await job_repo.get_job(app.state.db, job.id)
+        assert current.status == JobStatus.TRANSCODING
+        assert current.worker_id == worker_a
+
+    async def test_non_owner_failed_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "owner")
+            headers_b, _worker_b = await _register_worker(client, c, "intruder")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a)
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "nope", "retry_count": 1},
+                headers=headers_b,
+            )
+            assert r.status_code == 403
+
+    async def test_non_owner_derivative_endpoints_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "owner")
+            headers_b, _worker_b = await _register_worker(client, c, "intruder")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a)
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/check-derivative",
+                json={"job_id": job.id, "derivative_key": "abc"},
+                headers=headers_b,
+            )
+            assert r.status_code == 403
+            r = await c.post(
+                f"/api/worker/job/{job.id}/register-derivative",
+                json={"derivative_key": "abc", "output_size": 1},
+                headers=headers_b,
+            )
+            assert r.status_code == 403
+
+    async def test_complete_unknown_job_is_404(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, _worker_id = await _register_worker(client, c, "w")
+            r = await c.post(
+                "/api/worker/job/no-such-job/complete",
+                json={"output_size": 1, "space_saved": 1, "source_size": 2},
+                headers=headers,
+            )
+            assert r.status_code == 404
+
+    async def test_stale_worker_cannot_complete_requeued_job(self, client: AsyncClient, app):
+        """The double-completion race: worker A claims, crashes, and re-registers
+        (releasing the job); worker B claims it. A's stale in-flight /complete
+        must be rejected and B's job state preserved."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "stale")
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a
+            )
+            assert claim.json()["job"]["id"] == job.id
+
+            # A "crashes" and re-registers with the SAME token — the register
+            # endpoint releases its orphan job back to the queue.
+            rereg = await c.post(
+                "/api/worker/register",
+                json={"name": "stale", "host": "h", "capabilities": ["cpu"]},
+                headers=headers_a,
+            )
+            assert rereg.json()["worker_id"] == worker_a
+
+            # B picks the job up.
+            headers_b, worker_b = await _register_worker(client, c, "fresh")
+            claim_b = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_b}, headers=headers_b
+            )
+            assert claim_b.json()["job"]["id"] == job.id
+
+            # A's stale completion arrives late.
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 1, "space_saved": 1, "source_size": 2},
+                headers=headers_a,
+            )
+            assert r.status_code == 403
+
+            # B can still finish its job normally.
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 1, "space_saved": 1, "source_size": 2},
+                headers=headers_b,
+            )
+            assert r.status_code == 204
+
+        final = await job_repo.get_job(app.state.db, job.id)
+        assert final.status == JobStatus.COMPLETE
+        assert final.worker_id == worker_b
+
+
+class TestProgressChannelPrefix:
+    """The progress publish channel must derive from the configurable
+    redis_prefix — hardcoding it silently breaks live updates for any
+    deployment that sets TF_REDIS_PREFIX (websocket.py subscribes by prefix)."""
+
+    async def test_progress_publishes_to_prefix_derived_channel(self, client: AsyncClient, app):
+        import json
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        app.state.settings.redis_prefix = "custom"
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.25, "speed": 2.0},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        channel, payload = app.state.redis.publish.call_args.args
+        assert channel == "custom:pub:progress"
+        assert json.loads(payload)["job_id"] == job.id
+
+    async def test_register_reports_prefix_derived_channel(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        app.state.settings.redis_prefix = "custom2"
+        issue = await client.post("/api/worker-tokens", json={"label": "w"})
+        headers = {"Authorization": f"Bearer {issue.json()['token']}"}
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            reg = await c.post(
+                "/api/worker/register",
+                json={"name": "w", "host": "h", "capabilities": ["cpu"]},
+                headers=headers,
+            )
+            assert reg.json()["redis_progress_channel"] == "custom2:pub:progress"

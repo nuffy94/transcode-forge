@@ -389,3 +389,54 @@ class TestPartials:
         resp = await client.get("/partials/skipped?sort=file_size&dir=asc")
         assert resp.status_code == 200
         assert "sortSkipped(" in resp.text
+
+
+class _FakeWebSocket:
+    """Minimal stand-in for starlette's WebSocket — just enough surface
+    for websocket_updates (scope, headers, app.state, accept/close)."""
+
+    def __init__(self, *, session=None, headers=None, redis=None, settings=None):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        self.scope = {"session": session or {}}
+        self.headers = headers or {}
+        self.app = SimpleNamespace(state=SimpleNamespace(redis=redis, settings=settings))
+        self.accept = AsyncMock()
+        self.close = AsyncMock()
+        self.send_json = AsyncMock()
+
+
+class TestWebSocketAuth:
+    """/ws/updates must require an authenticated session — AuthMiddleware
+    only guards HTTP scopes, so the endpoint checks on its own."""
+
+    async def test_unauthenticated_rejected_before_accept(self):
+        from transcode_forge.web.websocket import websocket_updates
+
+        ws = _FakeWebSocket()
+        await websocket_updates(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_called_once_with(code=1008)
+
+    async def test_authenticated_session_accepted(self):
+        from transcode_forge.api.routes.auth import SESSION_KEY
+        from transcode_forge.web.websocket import websocket_updates
+
+        ws = _FakeWebSocket(session={SESSION_KEY: "admin"}, redis=None)
+        await websocket_updates(ws)
+        ws.accept.assert_called_once()
+        # No Redis → graceful close; HTMX polling is the fallback.
+        ws.close.assert_called_once_with(code=1001, reason="Redis not available")
+
+    async def test_cross_origin_rejected_before_accept(self):
+        from transcode_forge.api.routes.auth import SESSION_KEY
+        from transcode_forge.web.websocket import websocket_updates
+
+        ws = _FakeWebSocket(
+            session={SESSION_KEY: "admin"},
+            headers={"origin": "http://evil.test", "host": "app.test"},
+        )
+        await websocket_updates(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_called_once_with(code=1008)
