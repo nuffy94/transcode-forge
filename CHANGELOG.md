@@ -158,15 +158,15 @@ run this on an internet-exposed host.
 - Worker tokens stored hashed, login throttled, and documented TLS-first
   exposure (never serve plain HTTP to an untrusted network).
 
-## [0.5.0] - 2025
+## [0.5.0] - 2026-05-05
 - HTTP-only worker API with server-issued bearer tokens (no DB/Redis
   credentials on workers), schema migrations, and single-admin authentication.
 
-## [0.3.0] - 2025
+## [0.3.0] - 2026-05-04
 - Worker stale-heartbeat alerts, history filtering, containerized scheduler.
 
-## [0.2.0] - 2025
+## [0.2.0] - 2026-03-25
 - Multi-node deploy groundwork and the Forge Console UI redesign.
 
-## [0.1.0] - 2025
+## [0.1.0] - 2026-03-23
 - Initial release: scanner, queue, 8-step transcode pipeline, dashboard.
