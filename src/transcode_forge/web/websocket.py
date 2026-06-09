@@ -60,7 +60,12 @@ async def websocket_updates(websocket: WebSocket) -> Any:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message["type"] == "message":
-                data = json.loads(message["data"])
+                try:
+                    data = json.loads(message["data"])
+                except (json.JSONDecodeError, TypeError):
+                    # One malformed event must not tear down the connection.
+                    logger.warning("Skipping malformed pub/sub message on %s", channel)
+                    continue
                 # Send as JSON — the client JS can update the DOM
                 await websocket.send_json(data)
 

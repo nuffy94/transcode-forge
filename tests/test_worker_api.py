@@ -576,3 +576,52 @@ class TestProgressChannelPrefix:
                 headers=headers,
             )
             assert reg.json()["redis_progress_channel"] == "custom2:pub:progress"
+
+
+class TestWorkerInputBounds:
+    """Worker-supplied numbers and strings are bounded at the boundary."""
+
+    async def test_negative_sizes_rejected(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": -1, "space_saved": 0, "source_size": 0},
+                headers=headers,
+            )
+            assert r.status_code == 422
+            r = await c.post(
+                f"/api/worker/job/{job.id}/register-derivative",
+                json={"derivative_key": "k", "output_size": -5},
+                headers=headers,
+            )
+            assert r.status_code == 422
+
+    async def test_error_message_truncated_not_rejected(self, client: AsyncClient, app):
+        """A worker carrying a huge ffmpeg stderr dump must still be able to
+        mark its job failed — the message is truncated server-side."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "x" * 50_000, "retry_count": 1},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        failed = await job_repo.get_job(app.state.db, job.id)
+        assert len(failed.error_message) == 10_000

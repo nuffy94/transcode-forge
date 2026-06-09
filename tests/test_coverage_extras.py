@@ -480,7 +480,9 @@ class TestScanLibrary:
                 height=1080,
                 bitrate=5000000,
                 duration=7200.0,
-                file_size=2_000_000_000,
+                # Like real ffprobe, report the actual on-disk size — the
+                # rescan dedup compares it against stat().st_size.
+                file_size=Path(path).stat().st_size,
             )
 
         # First scan

@@ -496,3 +496,39 @@ class TestDatabaseValidation:
         finally:
             if "asyncpg" in sys.modules:
                 del sys.modules["asyncpg"]
+
+
+class TestPlaceholderTranslation:
+    """? -> $N translation must leave quoted literals/identifiers alone."""
+
+    def test_basic_translation(self):
+        from transcode_forge.db import _translate_placeholders
+
+        assert (
+            _translate_placeholders("SELECT * FROM t WHERE a = ? AND b = ?")
+            == "SELECT * FROM t WHERE a = $1 AND b = $2"
+        )
+
+    def test_question_mark_in_single_quoted_literal_untouched(self):
+        from transcode_forge.db import _translate_placeholders
+
+        assert (
+            _translate_placeholders("SELECT * FROM t WHERE a = ? AND b = 'lit?eral' AND c = ?")
+            == "SELECT * FROM t WHERE a = $1 AND b = 'lit?eral' AND c = $2"
+        )
+
+    def test_question_mark_in_double_quoted_identifier_untouched(self):
+        from transcode_forge.db import _translate_placeholders
+
+        assert (
+            _translate_placeholders('SELECT "weird?col" FROM t WHERE x = ?')
+            == 'SELECT "weird?col" FROM t WHERE x = $1'
+        )
+
+    def test_doubled_quote_escape(self):
+        from transcode_forge.db import _translate_placeholders
+
+        assert (
+            _translate_placeholders("INSERT INTO t VALUES ('it''s a ?', ?)")
+            == "INSERT INTO t VALUES ('it''s a ?', $1)"
+        )

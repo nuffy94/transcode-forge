@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db, get_settings
@@ -21,7 +21,9 @@ router = APIRouter(tags=["scans"])
 
 class ScanRequest(BaseModel):
     library: str | None = None  # None = scan all libraries
-    limit: int = Field(default=0, ge=0, description="Max files to queue (0 = unlimited)")
+    limit: int = Field(
+        default=0, ge=0, le=1_000_000, description="Max files to queue (0 = unlimited)"
+    )
 
 
 class ScanResponse(BaseModel):
@@ -149,8 +151,8 @@ async def _run_scan(
 
 @router.get("/scans")
 async def list_scans(
-    limit: int = 20,
-    page: int = 1,
+    limit: int = Query(20, ge=1, le=200),
+    page: int = Query(1, ge=1),
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """List scan history with pagination."""

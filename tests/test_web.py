@@ -440,3 +440,57 @@ class TestWebSocketAuth:
         await websocket_updates(ws)
         ws.accept.assert_not_called()
         ws.close.assert_called_once_with(code=1008)
+
+
+class TestWebSocketStreamRobustness:
+    async def test_malformed_pubsub_message_skipped_not_fatal(self):
+        """One bad event on the Redis channel must not tear down the
+        WebSocket — it's skipped and the stream continues."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from starlette.websockets import WebSocketDisconnect
+
+        from transcode_forge.api.routes.auth import SESSION_KEY
+        from transcode_forge.web.websocket import websocket_updates
+
+        pubsub = MagicMock()
+        pubsub.subscribe = AsyncMock()
+        pubsub.unsubscribe = AsyncMock()
+        pubsub.aclose = AsyncMock()
+        pubsub.get_message = AsyncMock(
+            side_effect=[
+                {"type": "message", "data": "not-json{{"},
+                {"type": "message", "data": '{"job_id": "j1"}'},
+                WebSocketDisconnect(1000),
+            ]
+        )
+        redis = MagicMock()
+        redis.pubsub = MagicMock(return_value=pubsub)
+
+        ws = _FakeWebSocket(
+            session={SESSION_KEY: "admin"},
+            redis=redis,
+            settings=SimpleNamespace(redis_prefix="tf"),
+        )
+        await websocket_updates(ws)
+
+        # Malformed message skipped; valid one forwarded; clean teardown.
+        ws.send_json.assert_called_once_with({"job_id": "j1"})
+        pubsub.unsubscribe.assert_called_once()
+
+
+class TestTemplatePaginationContract:
+    def test_no_template_exceeds_api_per_page_cap(self):
+        """Templates must not hardcode a per_page above the API's le=200
+        cap — the request would 422 and silently break the UI feature."""
+        import re
+        from pathlib import Path
+
+        templates = Path("src/transcode_forge/web/templates")
+        offenders = []
+        for f in templates.rglob("*.html"):
+            for m in re.finditer(r"per_page=(\d+)", f.read_text(encoding="utf-8")):
+                if int(m.group(1)) > 200:
+                    offenders.append(f"{f.name}: per_page={m.group(1)}")
+        assert not offenders, f"Templates exceed the API per_page cap: {offenders}"

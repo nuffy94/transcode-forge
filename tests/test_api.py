@@ -404,3 +404,20 @@ class TestStatsEndpoint:
         assert data["completed"] == 1
         assert data["total_space_saved_bytes"] == 1_000_000_000
         assert data["jobs_by_status"]["complete"] == 1
+
+
+class TestPaginationBounds:
+    """Unbounded per_page/limit must be rejected, not honored."""
+
+    async def test_media_per_page_bounded(self, client):
+        assert (
+            await client.get("/api/media/movies", params={"per_page": 999_999})
+        ).status_code == 422
+        assert (await client.get("/api/media/tv", params={"per_page": 0})).status_code == 422
+        assert (await client.get("/api/media/movies", params={"per_page": 200})).status_code == 200
+        assert (await client.get("/api/media/movies", params={"page": 0})).status_code == 422
+
+    async def test_scans_limit_bounded(self, client):
+        assert (await client.get("/api/scans", params={"limit": 999_999})).status_code == 422
+        assert (await client.get("/api/scans", params={"page": 0})).status_code == 422
+        assert (await client.get("/api/scans")).status_code == 200

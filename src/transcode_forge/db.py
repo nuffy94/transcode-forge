@@ -15,7 +15,6 @@ requires TLS — use `?sslmode=require`.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -125,15 +124,30 @@ class _SqliteTransaction:
 
 
 def _translate_placeholders(sql: str) -> str:
-    """Convert ? placeholders to $1, $2, ... for asyncpg."""
+    """Convert ? placeholders to $1, $2, ... for asyncpg.
+
+    A ? inside a single-quoted string literal or double-quoted identifier
+    is left untouched. The doubled-quote escape ('' / "") needs no special
+    casing: the scanner closes on the first quote and reopens on the
+    second, and both halves stay protected.
+    """
+    out: list[str] = []
     counter = 0
-
-    def _replacer(_match: re.Match[str]) -> str:
-        nonlocal counter
-        counter += 1
-        return f"${counter}"
-
-    return re.sub(r"\?", _replacer, sql)
+    quote: str | None = None
+    for ch in sql:
+        if quote is not None:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        elif ch == "?":
+            counter += 1
+            out.append(f"${counter}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 class _PgCursor:

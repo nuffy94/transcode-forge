@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from transcode_forge.api.deps import get_db
@@ -27,8 +27,8 @@ async def browse_movies(
     search: str | None = None,
     sort: str = "filename",
     dir: str = "asc",
-    page: int = 1,
-    per_page: int = 50,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Browse movie files across all movie libraries."""
@@ -57,8 +57,8 @@ async def browse_tv(
     search: str | None = None,
     sort: str = "show_name",
     dir: str = "asc",
-    page: int = 1,
-    per_page: int = 50,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Browse TV files across all TV libraries."""
@@ -125,13 +125,15 @@ async def queue_selected_files(
     paths = [m["file_path"] for m in candidates]
     excluded = await excl_repo.filter_excluded(db, paths)  # "don't try this again"
     active = await job_repo.active_paths(db, paths)  # dedup vs in-flight jobs
-    presets = {lib["id"]: lib["quality_preset"] for lib in await lib_repo.list_libraries(db)}
 
     # One transaction for the whole batch: each file's job row and media
     # status update commit together, and a mid-batch failure rolls the
-    # whole thing back — no half-queued state.
+    # whole thing back — no half-queued state. Presets are read inside the
+    # transaction so a concurrent library-settings change can't produce
+    # jobs with a stale quality value.
     seen: set[str] = set()
     async with db.transaction() as tx:
+        presets = {lib["id"]: lib["quality_preset"] for lib in await lib_repo.list_libraries(tx)}
         for mf in candidates:
             path = mf["file_path"]
             if path in excluded or path in active or path in seen:

@@ -116,24 +116,30 @@ class ProgressRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
-    output_size: int
-    space_saved: int
-    source_size: int
+    output_size: int = Field(ge=0)
+    space_saved: int = Field(ge=0)
+    source_size: int = Field(ge=0)
+
+
+# Worker-reported error messages can embed ffmpeg stderr; cap what we
+# persist. Truncated server-side (not rejected with 422) so a worker
+# carrying a huge message can still mark its job failed.
+MAX_ERROR_MESSAGE_LEN = 10_000
 
 
 class FailedRequest(BaseModel):
     error_message: str
-    retry_count: int = 0
+    retry_count: int = Field(default=0, ge=0)
 
 
 class CheckDerivativeRequest(BaseModel):
     job_id: str
-    derivative_key: str
+    derivative_key: str = Field(min_length=1, max_length=512)
 
 
 class RegisterDerivativeRequest(BaseModel):
-    derivative_key: str
-    output_size: int
+    derivative_key: str = Field(min_length=1, max_length=512)
+    output_size: int = Field(ge=0)
 
 
 # ── Routes ────────────────────────────────────────────────────────────
@@ -379,7 +385,7 @@ async def fail_job(
         db,
         job_id,
         status=JobStatus.FAILED,
-        error_message=body.error_message,
+        error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN],
         retry_count=body.retry_count,
         completed_at=datetime.now(UTC).isoformat(),
     )

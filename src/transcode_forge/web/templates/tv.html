@@ -314,15 +314,29 @@ function renderShowRow(show) {
     </div>`;
 }
 
+async function fetchAllShowEpisodeIds(showName) {
+    // The API caps per_page at 200 — page through; long-running shows
+    // (anime especially) can easily exceed one page.
+    const ids = [];
+    let page = 1, total = Infinity;
+    while (ids.length < total) {
+        const resp = await fetch(`/api/media/tv?show=${encodeURIComponent(showName)}&status=needs_transcode&per_page=200&page=${page}`);
+        if (!resp.ok) throw new Error(resp.statusText);
+        const {data, meta} = await resp.json();
+        if (!data.length) break;
+        ids.push(...data.map(f => f.id));
+        total = meta.total;
+        page += 1;
+    }
+    return ids;
+}
+
 async function queueShowFromCard(showName, btn) {
     const original = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="material-symbols-outlined animate-spin align-middle text-base">settings</span>';
     try {
-        const resp = await fetch(`/api/media/tv?show=${encodeURIComponent(showName)}&status=needs_transcode&per_page=1000`);
-        if (!resp.ok) throw new Error(resp.statusText);
-        const {data} = await resp.json();
-        const ids = data.map(f => f.id);
+        const ids = await fetchAllShowEpisodeIds(showName);
         if (!ids.length) { showToast('Nothing to queue for this show', 'info'); return; }
         const queueResp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -490,10 +504,7 @@ async function queueSelected() {
 
 async function queueShow(showName) {
     try {
-        const resp = await fetch(`/api/media/tv?show=${encodeURIComponent(showName)}&status=needs_transcode&per_page=1000`);
-        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
-        const {data} = await resp.json();
-        const ids = data.map(f => f.id);
+        const ids = await fetchAllShowEpisodeIds(showName);
         if (!ids.length) return;
         const queueResp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},

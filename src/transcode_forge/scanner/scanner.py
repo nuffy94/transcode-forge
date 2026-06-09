@@ -88,7 +88,12 @@ async def scan_library(
     files_skipped = 0
 
     try:
-        video_files = [f for f in root.rglob("*") if f.is_file() and is_video_file(f)]
+        # Skip symlinks: following them can catalog files outside the
+        # library root, and the pipeline's lock/bak files would land at
+        # the link path instead of the real file.
+        video_files = [
+            f for f in root.rglob("*") if f.is_file() and not f.is_symlink() and is_video_file(f)
+        ]
         video_files.sort()
 
         for file_path in video_files:
@@ -98,15 +103,23 @@ async def scan_library(
             files_found += 1
             str_path = str(file_path)
 
-            # Check if already in inventory with same mtime
+            # Check if already in inventory with same mtime AND size — mtime
+            # alone misses replacements within the filesystem's timestamp
+            # granularity (1s on some NFS exports).
             async with db.execute(
-                "SELECT id, file_modified_at FROM media_files WHERE file_path = ?", (str_path,)
+                "SELECT id, file_modified_at, file_size FROM media_files WHERE file_path = ?",
+                (str_path,),
             ) as cur:
                 existing = await cur.fetchone()
 
-            file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC).isoformat()
+            stat = file_path.stat()
+            file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
 
-            if existing and existing["file_modified_at"] == file_mtime:
+            if (
+                existing
+                and existing["file_modified_at"] == file_mtime
+                and existing["file_size"] == stat.st_size
+            ):
                 files_skipped += 1
                 continue
 
