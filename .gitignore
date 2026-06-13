@@ -69,7 +69,7 @@ htmlcov/
 /skipped*.png
 /diff.txt
 
-# External tool sandboxes (e.g., Simplifi MCP) that landed in the workspace
+# External tool sandboxes / local-only data that landed in the workspace
 /data/
 
 # Internal dev/process artifacts — kept locally, not shipped in the repo.
