@@ -22,7 +22,13 @@ from transcode_forge.models.job import Job
 from transcode_forge.models.library import StorageBackendType
 from transcode_forge.worker.hardware import HardwareCapabilities, detect_capabilities
 from transcode_forge.worker.http_client import WorkerHttpClient
-from transcode_forge.worker.pipeline import PipelineError, SizeRegressionError, run_pipeline
+from transcode_forge.worker.pipeline import (
+    PipelineError,
+    SizeRegressionError,
+    VmafGateError,
+    run_pipeline,
+)
+from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +72,25 @@ class HttpWorkerAgent:
                 # Windows: signal handlers via add_signal_handler not supported
                 signal.signal(sig, lambda *_a: self._handle_shutdown())
 
-        self.capabilities = await detect_capabilities(self.settings.preferred_encoder)
-        encoder = self.capabilities.best_encoder(self.settings.preferred_encoder)
-        logger.info("Selected encoder: %s (available: %s)", encoder, self.capabilities.encoders)
+        self.capabilities = await detect_capabilities()
+        logger.info(
+            "Capabilities: pairs=%s codecs=%s (preferred backend: %s)",
+            self.capabilities.pairs,
+            self.capabilities.supported_codecs,
+            self.settings.preferred_backend,
+        )
+        if not await has_libvmaf():
+            logger.warning(
+                "ffmpeg on this worker has no libvmaf — the VMAF quality gate "
+                "cannot run here. Update the worker image to restore it."
+            )
 
         try:
             registration = await self._client.register(
                 name=self.worker_name,
                 host=self.host,
                 capabilities=self.capabilities.encoders,
+                supported_codecs=self.capabilities.supported_codecs,
                 ffmpeg_version=self.capabilities.ffmpeg_version,
                 max_concurrent=self.settings.worker_max_concurrent,
             )
@@ -90,7 +106,7 @@ class HttpWorkerAgent:
         try:
             await asyncio.gather(
                 self._heartbeat_loop(),
-                self._job_loop(encoder),
+                self._job_loop(),
             )
         finally:
             await self._cleanup()
@@ -117,7 +133,7 @@ class HttpWorkerAgent:
                 logger.warning("Heartbeat failed (will retry): %s", e)
             await asyncio.sleep(self.settings.heartbeat_interval)
 
-    async def _job_loop(self, encoder: str) -> None:
+    async def _job_loop(self) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
         while not self._shutting_down:
@@ -130,14 +146,48 @@ class HttpWorkerAgent:
             if not job_dict:
                 await asyncio.sleep(2)
                 continue
-            await self._process_job(Job.model_validate(job_dict), encoder)
+            job = Job.model_validate(job_dict)
+            # Claim-time extras (library backend, media type, VMAF floor)
+            # ride on private attrs outside the validated model.
+            for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
+                if extra in job_dict:
+                    object.__setattr__(job, extra, job_dict[extra])
+            await self._process_job(job, vmaf_floor=job_dict.get("_vmaf_min_floor"))
 
-    async def _process_job(self, job: Job, encoder: str) -> None:
+    def _resolve_backend(self, codec: str) -> str | None:
+        """Best backend for the job's codec — preferred if capable, else
+        qsv > nvenc > cpu, else None (worker can't encode this codec)."""
+        if self.capabilities is None:
+            return None
+        return self.capabilities.best_backend_for(codec, self.settings.preferred_backend)
+
+    async def _process_job(self, job: Job, vmaf_floor: float | None = None) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
         self._current_job_id = job.id
         self._current_progress = 0.0
-        logger.info("Processing job %s: %s", job.id, job.source_path)
+        codec = job.target_codec or "hevc"
+        backend = self._resolve_backend(codec)
+        if backend is None:
+            # The claim filter should make this unreachable; if capability
+            # drifted (driver died between register and claim), fail loudly
+            # rather than encoding with the wrong codec.
+            logger.error("No backend for codec %s — failing job %s", codec, job.id)
+            await self._client.failed(
+                job_id=job.id,
+                error_message=f"Worker has no backend capable of encoding {codec}",
+                retry_count=job.retry_count + 1,
+            )
+            self._current_job_id = None
+            return
+        logger.info(
+            "Processing job %s: %s (%s→%s via %s)",
+            job.id,
+            job.source_path,
+            job.source_codec,
+            codec,
+            backend,
+        )
 
         # Construct the backend for this job's library.
         # The claim-job response includes backend_type, s3_bucket, s3_prefix.
@@ -189,14 +239,20 @@ class HttpWorkerAgent:
             except (httpx.HTTPError, OSError):
                 logger.debug("Progress update failed", exc_info=True)
 
+        media_type = getattr(job, "_media_type", "") or ""
         try:
             result = await run_pipeline(
                 source_path=str(source_path_local),
-                encoder=encoder,
+                codec=codec,
+                backend=backend,
                 quality=job.quality_value,
                 source_duration=job.source_duration or 0,
                 job_id=job.id,
                 worker_id=self.worker_id,
+                target_vmaf=job.target_vmaf,
+                vmaf_perc5_floor=vmaf_floor,
+                crf_search=self.settings.crf_search_enabled,
+                content="anime" if media_type == "anime" else None,
                 progress_callback=on_progress,
             )
 
@@ -214,33 +270,16 @@ class HttpWorkerAgent:
 
             # For S3, register the derivative on the scheduler side.
             if is_s3:
-                from transcode_forge.models.derivative import compute_derivative_key
-
-                source_resolution = getattr(job, "source_resolution", "") or ""
-                source_audio_codec = getattr(job, "source_audio_codec", "") or ""
-                target_resolution = getattr(job, "target_resolution", "")
-                target_audio_codec = getattr(job, "target_audio_codec", "")
-                encoder = getattr(job, "encoder", "")
-                crf = getattr(job, "quality_value", 0)
-                preset = getattr(job, "preset", "medium")
-
-                derivative_key = compute_derivative_key(
-                    source_path=job.source_path,
-                    source_resolution=source_resolution,
-                    source_audio_codec=source_audio_codec,
-                    target_resolution=target_resolution,
-                    target_audio_codec=target_audio_codec,
-                    encoder=encoder,
-                    crf=int(crf) if crf else 0,
-                    preset=preset,
-                    local_output=source_path_local,
-                )
+                derivative_key = self._derivative_key_for(job, source_path_local)
 
                 try:
                     await self._client.register_derivative(
                         job_id=job.id,
                         derivative_key=derivative_key,
                         output_size=int(commit_result.output_size),
+                        achieved_vmaf=result.get("vmaf_mean"),
+                        resolved_crf=result.get("resolved_crf"),
+                        backend_used=result.get("backend", backend),
                     )
                     logger.info("Derivative registered on scheduler: %s", derivative_key)
                 except (httpx.HTTPError, OSError) as e:
@@ -255,17 +294,28 @@ class HttpWorkerAgent:
                 output_size=int(commit_result.output_size),
                 space_saved=int(commit_result.space_saved),
                 source_size=int(result["source_size"]),
+                achieved_vmaf=result.get("vmaf_mean"),
+                resolved_crf=result.get("resolved_crf"),
+                backend_used=result.get("backend", backend),
             )
             logger.info(
                 "Job %s complete — saved %d bytes",
                 job.id,
                 int(commit_result.space_saved),
             )
-        except SizeRegressionError as e:
-            await self._client.failed(
+        except VmafGateError as e:
+            await self._client.skipped(
                 job_id=job.id,
+                reason="below_vmaf_floor",
                 error_message=str(e),
-                retry_count=job.retry_count,
+                achieved_vmaf=e.vmaf_mean,
+            )
+            logger.info("Job %s skipped (below VMAF floor): %s", job.id, e)
+        except SizeRegressionError as e:
+            await self._client.skipped(
+                job_id=job.id,
+                reason="size_regression",
+                error_message=str(e),
             )
             logger.info("Job %s skipped (size regression)", job.id)
         except PipelineError as e:
@@ -287,12 +337,33 @@ class HttpWorkerAgent:
                 return path.replace(linux_prefix, local_prefix, 1)
         return path
 
+    def _derivative_key_for(self, job: Job, local_output: Path | str) -> str:
+        """Goal-keyed derivative key for a job (D6): source identity +
+        target codec/resolution/audio + target VMAF. Recipe details
+        (backend/crf/preset) deliberately don't participate — any worker's
+        gate-passing encode satisfies the same goal."""
+        from transcode_forge.models.derivative import compute_derivative_key
+
+        return compute_derivative_key(
+            source_path=job.source_path,
+            source_resolution=job.source_resolution or "",
+            source_audio_codec=getattr(job, "source_audio_codec", "") or "",
+            # No rescaling / audio transcoding in the pipeline: the target
+            # keeps the source resolution and copies audio streams.
+            target_resolution=getattr(job, "target_resolution", "")
+            or (job.source_resolution or ""),
+            target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
+            target_codec=job.target_codec or "hevc",
+            target_vmaf=job.target_vmaf,
+            local_output=Path(local_output),
+        )
+
     async def _try_dedup(self, job: Job, backend: Any) -> dict[str, Any] | None:
         """Check for a reusable derivative (S3 only).
 
-        Computes the derivative key based on the job's parameters and
-        calls the scheduler API to check if it already exists. If found,
-        the scheduler marks the job COMPLETE and returns the derivative info.
+        Computes the goal-keyed derivative key and calls the scheduler API
+        to check if it already exists. If found, the scheduler marks the
+        job COMPLETE and returns the derivative info.
 
         Args:
             job: The job object.
@@ -301,29 +372,7 @@ class HttpWorkerAgent:
         Returns:
             A dict with output_size and derivative_key if found, None otherwise.
         """
-        from transcode_forge.models.derivative import compute_derivative_key
-
-        source_path = getattr(job, "source_path", "")
-        source_resolution = getattr(job, "source_resolution", "") or ""
-        source_audio_codec = getattr(job, "source_audio_codec", "") or ""
-        target_resolution = getattr(job, "target_resolution", "")
-        target_audio_codec = getattr(job, "target_audio_codec", "")
-        encoder = getattr(job, "encoder", "")
-        crf = getattr(job, "quality_value", 0)
-        preset = getattr(job, "preset", "medium")
-
-        # Use shared function to compute derivative key.
-        derivative_key = compute_derivative_key(
-            source_path=source_path,
-            source_resolution=source_resolution,
-            source_audio_codec=source_audio_codec,
-            target_resolution=target_resolution,
-            target_audio_codec=target_audio_codec,
-            encoder=encoder,
-            crf=int(crf) if crf else 0,
-            preset=preset,
-            local_output=Path(source_path),
-        )
+        derivative_key = self._derivative_key_for(job, Path(job.source_path))
 
         logger.debug("Checking for derivative: %s", derivative_key)
 

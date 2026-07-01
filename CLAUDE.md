@@ -5,9 +5,11 @@ repository. End-users don't need to read this — see `README.md`.
 
 ## Project overview
 
-Transcode Forge is a self-hosted h264→HEVC media transcoder. Scheduler + workers,
-hardware-accelerated encoding (Intel QSV, NVIDIA NVENC, software x265 fallback),
-atomic 8-step pipeline that never loses an original file.
+Transcode Forge is a self-hosted h264→HEVC/AV1 media transcoder. Scheduler +
+workers, hardware-accelerated encoding on two axes — codec (HEVC, AV1) ×
+backend (Intel QSV, NVIDIA NVENC, software x265/SVT-AV1 fallback) — an atomic
+8-step pipeline that never loses an original file, and a VMAF quality gate so
+a bad encode can never silently replace one either.
 
 **Stack**: Python 3.12 · FastAPI · Redis (pub/sub + WebSocket relay) ·
 PostgreSQL (prod) / SQLite (dev/test) · asyncpg + aiosqlite · ffmpeg/ffprobe ·
@@ -58,10 +60,15 @@ LOCK → TRANSCODE → VERIFY → COMPARE → SWAP → CONFIRM → CLEANUP → U
 ```
 
 VERIFY does an ffprobe AND a real decode of frames at three offsets — files
-ffprobe accepts but that won't decode are caught here. If output is larger
-than source, `SizeRegressionError` (skipped, not failed). If post-swap
-verification fails, the original is restored from `.tf_bak`. The lock file
-(`.tf_lock`) prevents concurrent transcodes of the same path.
+ffprobe accepts but that won't decode are caught here. COMPARE checks size
+(larger than source → `SizeRegressionError`) and, when the job carries a
+target VMAF, the quality gate: full-file VMAF (resolution-matched model,
+worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the floor or the
+encode is discarded (`VmafGateError`) — both are skip outcomes (job ends
+SKIPPED, original kept), not failures. TRANSCODE is optionally preceded by
+an ab-av1-style CRF search on short samples. If post-swap verification
+fails, the original is restored from `.tf_bak`. The lock file (`.tf_lock`)
+prevents concurrent transcodes of the same path.
 
 ### Data flow
 
@@ -155,12 +162,23 @@ Common knobs:
 - `TF_AUTH_SECRET` — cookie-signing secret. Generated random per boot if
   not set; pin it in production so sessions survive restarts.
 - `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` — library paths.
-- `TF_QUALITY_*` — CRF (lower = better quality, bigger file).
+- `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
+  file); mapped per encoder in `worker/encoder.py`.
+- `TF_DEFAULT_CODEC` — pre-fills the queue-time codec selector (hevc).
+- `TF_TARGET_VMAF` / `TF_VMAF_MIN_FLOOR` — quality goal + worst-scenes
+  floor for the VMAF gate; `TF_CRF_SEARCH_ENABLED` toggles the per-file
+  CRF search. These three plus the quality presets are DB-overridable
+  from the Settings page (`repos/settings.py`, `effective(key)` = DB
+  override else env).
 
 Worker-side:
 - `TF_SERVER_URL` — scheduler URL (presence selects HTTP mode).
 - `TF_WORKER_TOKEN` — bearer token issued from the scheduler UI.
-- `TF_WORKER_NAME`, `TF_PREFERRED_ENCODER`, `TF_PATH_MAP` — per-worker.
+- `TF_WORKER_NAME`, `TF_PREFERRED_BACKEND` (old `TF_PREFERRED_ENCODER`
+  is a deprecated alias), `TF_PATH_MAP` — per-worker.
+- `TF_VMAF_FFMPEG` — ffmpeg binary used for VMAF measurement only (the
+  Docker image bundles a static libvmaf build; distro ffmpeg lacks the
+  filter). Missing libvmaf → gate skipped with a loud warning.
 
 ## Testing
 
@@ -199,7 +217,11 @@ Worker-side:
 
 ## Encoder selection
 
-Hardware detection runs once at worker startup (`worker/hardware.py`).
-Priority: `TF_PREFERRED_ENCODER` (if available) > QSV > NVENC > CPU. QSV
-detection tries multiple init methods because different ffmpeg builds
-expose it differently. CPU fallback (libx265) always works.
+Hardware detection runs once at worker startup (`worker/hardware.py`) and
+produces (codec, backend) pairs — which of libx265 / libsvtav1 / hevc_qsv /
+av1_qsv / hevc_nvenc / av1_nvenc actually work. Hardware probes are real
+10-bit test encodes (all pipeline output is 10-bit now), so Skylake-era
+QSV that can't encode 10-bit HEVC is not advertised. Per-job backend:
+`TF_PREFERRED_BACKEND` (if it supports the job's codec) > QSV > NVENC >
+CPU; software is the universal per-codec fallback. Workers advertise
+`supported_codecs` at registration and only claim jobs they can encode.

@@ -21,6 +21,10 @@ class Worker(BaseModel):
     name: str
     host: str
     capabilities: list[str] = Field(default_factory=lambda: ["cpu"])
+    # Codecs this worker can actually encode (probed at startup). Workers
+    # predating the multi-codec release don't advertise — default to hevc
+    # so a rolling update never hands them an AV1 job.
+    supported_codecs: list[str] = Field(default_factory=lambda: ["hevc"])
     ffmpeg_version: str | None = None
     max_concurrent: int = 1
     status: WorkerStatus = WorkerStatus.OFFLINE

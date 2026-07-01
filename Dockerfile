@@ -9,9 +9,32 @@ RUN sed -i 's|^Components: main$|Components: main contrib non-free non-free-firm
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ffmpeg curl ca-certificates \
+        ffmpeg curl ca-certificates xz-utils \
         intel-media-va-driver-non-free libmfx1 vainfo \
     && rm -rf /var/lib/apt/lists/*
+
+# VMAF quality gate: Debian's ffmpeg 5.1 ships libsvtav1 (AV1 encode) but
+# NOT the libvmaf filter (verified on 5.1.8-0+deb12u1). Encodes keep using
+# the distro ffmpeg (QSV driver stack works there); measurement uses this
+# static BtbN build, which links libvmaf with the built-in models
+# (vmaf_v0.6.1 + vmaf_4k_v0.6.1 — no external model files needed).
+# The build fails loudly if either encoder or the scoring path is missing.
+ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+RUN curl -fsSL "$VMAF_FFMPEG_URL" -o /tmp/ffmpeg-static.tar.xz \
+    && mkdir -p /opt/ffmpeg-vmaf \
+    && tar -xJf /tmp/ffmpeg-static.tar.xz --strip-components=2 -C /opt/ffmpeg-vmaf \
+        --wildcards '*/bin/ffmpeg' \
+    && rm /tmp/ffmpeg-static.tar.xz \
+    && ffmpeg -hide_banner -encoders | grep -q libsvtav1 \
+    && for model in vmaf_v0.6.1 vmaf_4k_v0.6.1; do \
+        /opt/ffmpeg-vmaf/ffmpeg -hide_banner -v error \
+            -f lavfi -i "nullsrc=s=192x108:d=0.2" \
+            -f lavfi -i "nullsrc=s=192x108:d=0.2" \
+            -lavfi "[0:v]format=yuv420p10le[a];[1:v]format=yuv420p10le[b];[a][b]libvmaf=model=version=$model" \
+            -f null - || exit 1; \
+    done
+
+ENV TF_VMAF_FFMPEG=/opt/ffmpeg-vmaf/ffmpeg
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 

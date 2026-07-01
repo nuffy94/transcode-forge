@@ -117,10 +117,21 @@
                 <span class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">
                     <span id="tv-selected-count">0</span> selected
                 </span>
-                <button id="tv-queue-selected" class="forge-btn forge-btn--ember disabled:opacity-40 disabled:cursor-not-allowed"
-                        onclick="queueSelected()" disabled>
-                    Queue Selected
-                </button>
+                <div class="flex items-center gap-3">
+                    <span id="codec-warning" class="font-mono text-[10px]" style="display:none; color: var(--forge-brass);">
+                        <span class="material-symbols-outlined text-xs align-middle">warning</span>
+                        AV1: best compression, but older devices/clients may not decode it.
+                    </span>
+                    <select id="queue-codec" class="forge-select" aria-label="Target codec" onchange="codecWarning()">
+                        <option value="">Codec: Default</option>
+                        <option value="hevc">&rarr; HEVC</option>
+                        <option value="av1">&rarr; AV1</option>
+                    </select>
+                    <button id="tv-queue-selected" class="forge-btn forge-btn--ember disabled:opacity-40 disabled:cursor-not-allowed"
+                            onclick="queueSelected()" disabled>
+                        Queue Selected
+                    </button>
+                </div>
             </div>
             <div id="tv-table" class="overflow-x-auto">
                 <div class="flex justify-center p-12">
@@ -340,7 +351,7 @@ async function queueShowFromCard(showName, btn) {
         if (!ids.length) { showToast('Nothing to queue for this show', 'info'); return; }
         const queueResp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: ids})
+            body: queueBody(ids)
         });
         if (!queueResp.ok) throw new Error(queueResp.statusText);
         const result = await queueResp.json();
@@ -484,13 +495,23 @@ function getSelectedIds() {
     return [...document.querySelectorAll('.file-select:checked')].map(cb => cb.value);
 }
 
+function codecWarning() {
+    const codec = document.getElementById('queue-codec').value;
+    document.getElementById('codec-warning').style.display = codec === 'av1' ? 'inline' : 'none';
+}
+
+function queueBody(ids) {
+    const codec = document.getElementById('queue-codec').value;
+    return JSON.stringify(codec ? {file_ids: ids, codec} : {file_ids: ids});
+}
+
 async function queueSelected() {
     const ids = getSelectedIds();
     if (!ids.length) return;
     try {
         const resp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: ids})
+            body: queueBody(ids)
         });
         if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
         const data = await resp.json();
@@ -508,7 +529,7 @@ async function queueShow(showName) {
         if (!ids.length) return;
         const queueResp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: ids})
+            body: queueBody(ids)
         });
         if (!queueResp.ok) { showToast(`Error: ${queueResp.statusText}`, 'error'); return; }
         showToast(`Queued ${ids.length} episode${ids.length !== 1 ? 's' : ''}`, 'success');
@@ -522,7 +543,7 @@ async function queueFile(id) {
     try {
         const resp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: [id]})
+            body: queueBody([id])
         });
         if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
         const data = await resp.json();

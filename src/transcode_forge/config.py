@@ -4,14 +4,14 @@ import hashlib
 import secrets
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Transcode Forge configuration. All values overridable via TF_* env vars."""
 
-    model_config = SettingsConfigDict(env_prefix="TF_")
+    model_config = SettingsConfigDict(env_prefix="TF_", populate_by_name=True)
 
     # Demo mode — fake data, no Redis/ffmpeg required, for UI testing
     demo_mode: bool = False
@@ -34,10 +34,26 @@ class Settings(BaseSettings):
     library_tv: str = ""
     library_anime: str = ""
 
-    # Quality presets (global_quality for QSV, CRF for software x265)
+    # Quality presets on the x265-CRF reference scale. The worker maps
+    # them per encoder (nvenc cq ≈ crf+11, SVT-AV1 crf ≈ x265 crf+7, …) —
+    # see worker/encoder.py. With a target VMAF set these are the CRF-search
+    # fallback, not the primary knob.
     quality_movies: int = Field(default=21, ge=1, le=51)
-    quality_tv: int = Field(default=24, ge=1, le=51)
+    quality_tv: int = Field(default=21, ge=1, le=51)
     quality_anime: int = Field(default=19, ge=1, le=51)
+
+    # Codec + quality-goal defaults. default_codec pre-fills the queue-time
+    # selector (per-job job.target_codec stays the source of truth). The
+    # VMAF gate skips (never replaces) any encode whose full-file score
+    # lands below mean ≥ target_vmaf AND worst-scenes perc5 ≥ vmaf_min_floor.
+    # All three are DB-overridable via the settings page (repos/settings.py).
+    default_codec: str = Field(default="hevc", pattern=r"^(hevc|av1)$")
+    target_vmaf: float = Field(default=97.0, ge=0.0, le=100.0)
+    vmaf_min_floor: float = Field(default=95.0, ge=0.0, le=100.0)
+
+    # Per-file target-VMAF CRF search (ab-av1 style, worker-side). Disable
+    # to always encode at the fixed quality preset; the VMAF gate still runs.
+    crf_search_enabled: bool = True
 
     # Worker coordination
     heartbeat_interval: int = Field(default=10, ge=1, description="Seconds between heartbeats")
@@ -46,10 +62,16 @@ class Settings(BaseSettings):
     )
     max_retries: int = Field(default=3, ge=0)
 
-    # Worker-specific (set per node, not on scheduler)
+    # Worker-specific (set per node, not on scheduler). The hardware axis
+    # was renamed encoder → backend (D2); TF_PREFERRED_ENCODER remains a
+    # deprecated alias for one release so live workers keep working.
     worker_name: str = ""
     worker_max_concurrent: int = Field(default=1, ge=1, le=4)
-    preferred_encoder: str = Field(default="auto", pattern=r"^(auto|qsv|nvenc|cpu)$")
+    preferred_backend: str = Field(
+        default="auto",
+        pattern=r"^(auto|qsv|nvenc|cpu)$",
+        validation_alias=AliasChoices("tf_preferred_backend", "tf_preferred_encoder"),
+    )
     path_map: dict[str, str] = Field(default_factory=dict)
 
     # Auth — admin session cookie signing.

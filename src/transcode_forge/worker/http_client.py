@@ -56,6 +56,7 @@ class WorkerHttpClient:
         name: str,
         host: str,
         capabilities: list[str],
+        supported_codecs: list[str] | None = None,
         ffmpeg_version: str | None,
         max_concurrent: int,
     ) -> dict[str, Any]:
@@ -65,6 +66,7 @@ class WorkerHttpClient:
                 "name": name,
                 "host": host,
                 "capabilities": capabilities,
+                "supported_codecs": supported_codecs or ["hevc"],
                 "ffmpeg_version": ffmpeg_version,
                 "max_concurrent": max_concurrent,
             },
@@ -111,6 +113,9 @@ class WorkerHttpClient:
         output_size: int,
         space_saved: int,
         source_size: int,
+        achieved_vmaf: float | None = None,
+        resolved_crf: int | None = None,
+        backend_used: str | None = None,
     ) -> None:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/complete",
@@ -118,6 +123,9 @@ class WorkerHttpClient:
                 "output_size": output_size,
                 "space_saved": space_saved,
                 "source_size": source_size,
+                "achieved_vmaf": achieved_vmaf,
+                "resolved_crf": resolved_crf,
+                "backend_used": backend_used,
             },
         )
         _raise_for_status(r)
@@ -126,6 +134,26 @@ class WorkerHttpClient:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/failed",
             json={"error_message": error_message, "retry_count": retry_count},
+        )
+        _raise_for_status(r)
+
+    async def skipped(
+        self,
+        *,
+        job_id: str,
+        reason: str,
+        error_message: str = "",
+        achieved_vmaf: float | None = None,
+    ) -> None:
+        """Report a skip outcome (VMAF gate / size regression) — the
+        original was kept and the job should end SKIPPED, not FAILED."""
+        r = await self._client.post(
+            f"/api/worker/job/{job_id}/skipped",
+            json={
+                "reason": reason,
+                "error_message": error_message,
+                "achieved_vmaf": achieved_vmaf,
+            },
         )
         _raise_for_status(r)
 
@@ -148,20 +176,34 @@ class WorkerHttpClient:
         return data
 
     async def register_derivative(
-        self, *, job_id: str, derivative_key: str, output_size: int
+        self,
+        *,
+        job_id: str,
+        derivative_key: str,
+        output_size: int,
+        achieved_vmaf: float | None = None,
+        resolved_crf: int | None = None,
+        backend_used: str | None = None,
     ) -> None:
         """Register a derivative after S3 upload.
 
         Called by the worker after uploading a transcoded file to S3.
-        The scheduler inserts the row in the derivatives table.
+        The scheduler inserts the row in the derivatives table; the recipe
+        (backend/crf) and achieved VMAF ride along as attributes.
 
         Args:
             job_id: The job ID.
-            derivative_key: The content-addressed derivative key.
+            derivative_key: The goal-keyed derivative key.
             output_size: Size of the derivative in bytes.
         """
         r = await self._client.post(
             f"/api/worker/job/{job_id}/register-derivative",
-            json={"derivative_key": derivative_key, "output_size": output_size},
+            json={
+                "derivative_key": derivative_key,
+                "output_size": output_size,
+                "achieved_vmaf": achieved_vmaf,
+                "resolved_crf": resolved_crf,
+                "backend_used": backend_used,
+            },
         )
         _raise_for_status(r)

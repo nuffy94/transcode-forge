@@ -2,9 +2,16 @@
 
 Steps:
 1. LOCK      — Write lock file alongside original
-2. TRANSCODE — ffmpeg → .tf_tmp file
+2. TRANSCODE — ffmpeg → .tf_tmp file (optionally preceded by a
+               target-VMAF CRF search on short samples)
 3. VERIFY    — ffprobe output: duration match, codec correct, file > 0
-4. COMPARE   — output_size < source_size (skip if bigger)
+4. COMPARE   — output_size < source_size (skip if bigger) AND, when a
+               target VMAF is set, the quality gate: full-file VMAF with
+               the resolution-matched model must clear mean ≥ target and
+               worst-scenes perc5 ≥ floor — below either, the encode is
+               discarded and the original kept (VmafGateError → SKIPPED,
+               never FAILED). A degraded or bloated result is caught here,
+               not shipped.
 5. SWAP      — Atomic: original → .tf_bak, tmp → original
 6. CONFIRM   — ffprobe the final file one more time
 7. CLEANUP   — Delete .tf_bak
@@ -29,13 +36,20 @@ from pathlib import Path
 from typing import Any
 
 from transcode_forge.scanner.probe import ProbeError, ffprobe
-from transcode_forge.worker.encoder import build_encode_command, run_encode
+from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
 from transcode_forge.worker.storage.filesystem import (
     _acquire_lock,
     _atomic_swap,
     _preserve_metadata,
     _rollback_swap,
     _safe_delete,
+)
+from transcode_forge.worker.vmaf import (
+    VmafError,
+    VmafUnavailableError,
+    find_quality_for_target,
+    has_libvmaf,
+    measure_vmaf,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,33 +83,76 @@ class SizeRegressionError(PipelineError):
         )
 
 
+class VmafGateError(PipelineError):
+    """Raised when the encode's measured VMAF lands below the quality floor.
+
+    The outcome is SKIP (keep the original, never replace) — the same
+    discipline as SizeRegressionError, not a retryable failure."""
+
+    def __init__(
+        self,
+        *,
+        vmaf_mean: float,
+        vmaf_perc5: float,
+        mean_floor: float,
+        perc5_floor: float,
+    ):
+        self.vmaf_mean = vmaf_mean
+        self.vmaf_perc5 = vmaf_perc5
+        self.mean_floor = mean_floor
+        self.perc5_floor = perc5_floor
+        super().__init__(
+            "COMPARE",
+            f"VMAF below floor: mean {vmaf_mean:.2f} (floor {mean_floor:.1f}),"
+            f" perc5 {vmaf_perc5:.2f} (floor {perc5_floor:.1f}) — keeping original",
+        )
+
+
 async def run_pipeline(
     *,
     source_path: str,
-    encoder: str,
+    codec: str = "hevc",
+    backend: str,
     quality: int,
     source_duration: float,
     job_id: str,
     worker_id: str,
+    target_vmaf: float | None = None,
+    vmaf_perc5_floor: float | None = None,
+    crf_search: bool = False,
+    content: str | None = None,
     progress_callback: Callable[[float, float | None], Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the full 8-step transcode pipeline.
 
     Args:
         source_path: Path to the original media file.
-        encoder: Encoder type ('qsv', 'nvenc', 'cpu').
-        quality: Quality value (global_quality for QSV, CRF for software).
+        codec: Target codec ('hevc' | 'av1').
+        backend: Hardware axis ('qsv' | 'nvenc' | 'cpu').
+        quality: Reference-scale quality (mapped per encoder); with
+            crf_search this is the fallback, not the primary knob.
         source_duration: Duration of source file in seconds.
         job_id: Transcode job ID (for lock file metadata).
         worker_id: Worker ID (for lock file metadata).
+        target_vmaf: Quality goal — enables the VMAF gate (mean floor) and,
+            with crf_search, the per-file quality search. None = no gate
+            (pre-feature behavior).
+        vmaf_perc5_floor: Worst-scenes floor for the gate (defaults to
+            target_vmaf - 2 when unset).
+        crf_search: Search samples for the largest quality value that
+            meets target_vmaf before the full encode.
+        content: Optional content hint forwarded to the builder ('anime').
         progress_callback: Async callable(progress, speed) for progress updates.
 
     Returns:
-        Dict with output_size, space_saved, source_size.
+        Dict with source_size, output_size, space_saved, backend,
+        resolved_crf (native-scale value actually used), and — when the
+        gate ran — vmaf_mean / vmaf_perc5.
 
     Raises:
         PipelineError: If any step fails (original file is always safe).
-        SizeRegressionError: If output is larger than source.
+        SizeRegressionError: If output is larger than source (skip outcome).
+        VmafGateError: If measured VMAF is below the floor (skip outcome).
     """
     src = Path(source_path)
     # Keep original extension so ffmpeg recognizes the container format
@@ -107,30 +164,70 @@ async def run_pipeline(
     src_stat = await asyncio.to_thread(src.stat)
     source_size = src_stat.st_size
 
-    # Pre-flight bit-depth check. hevc_qsv on Skylake (gen6-9) cannot
-    # encode 10-bit input — it fails with 'Current pixel format is
-    # unsupported' and the whole job retries. Probe and downgrade to
-    # libx265 once instead of the retry loop.
-    if encoder == "qsv":
+    source_height: int | None = None
+    # Pre-flight probe: the VMAF model choice needs the source height, and
+    # hevc_qsv on Skylake (gen6-9) cannot encode 10-bit input — it fails
+    # with 'Current pixel format is unsupported' and the whole job retries.
+    # Probe once and downgrade to the software encoder instead of the
+    # retry loop.
+    if backend == "qsv" or target_vmaf is not None:
         try:
             src_probe = await ffprobe(src)
-            if src_probe.is_10bit:
+            source_height = src_probe.height or None
+            if backend == "qsv" and src_probe.is_10bit:
                 logger.info(
-                    "Source is 10-bit (%s); using libx265 — Skylake QSV "
-                    "doesn't encode 10-bit HEVC.",
+                    "Source is 10-bit (%s); using the software encoder — Skylake "
+                    "QSV doesn't encode 10-bit HEVC.",
                     src_probe.pix_fmt,
                 )
-                encoder = "cpu"
+                backend = "cpu"
         except ProbeError as e:
-            logger.warning("Could not probe source for bit-depth: %s", e)
+            logger.warning("Could not probe source: %s", e)
+
+    if target_vmaf is not None and vmaf_perc5_floor is None:
+        vmaf_perc5_floor = target_vmaf - 2.0
 
     try:
         # Step 1: LOCK
         await asyncio.to_thread(_acquire_lock, lock_path, job_id=job_id, worker_id=worker_id)
         logger.info("[LOCK] Acquired: %s", lock_path)
 
+        # Optional pre-step: target-VMAF quality search on short samples.
+        # Any failure here falls back to the fixed preset — the full-file
+        # gate below still has the final word on quality.
+        vmaf_available = True
+        if target_vmaf is not None:
+            vmaf_available = await has_libvmaf()
+            if not vmaf_available:
+                logger.warning(
+                    "ffmpeg on this worker has no libvmaf — the VMAF gate and "
+                    "CRF search are DISABLED for this encode (pre-VMAF behavior). "
+                    "Update the worker image to restore the quality guarantee."
+                )
+        if crf_search and target_vmaf is not None and vmaf_available:
+            assert vmaf_perc5_floor is not None
+            try:
+                search = await find_quality_for_target(
+                    src,
+                    codec,
+                    backend,
+                    target_vmaf=target_vmaf,
+                    perc5_floor=vmaf_perc5_floor,
+                    duration=source_duration,
+                    height=source_height,
+                )
+                if search is not None:
+                    quality = search.quality
+            except VmafUnavailableError:
+                vmaf_available = False
+                logger.warning("libvmaf unavailable mid-search — using the fixed preset")
+            except VmafError as e:
+                logger.warning("CRF search failed (%s) — using the fixed preset", e)
+
         # Step 2: TRANSCODE
-        cmd = build_encode_command(encoder, str(src), str(tmp_path), quality)
+        cmd = build_encode_command(
+            codec, backend, str(src), str(tmp_path), quality, content=content
+        )
         result = await run_encode(
             cmd,
             total_duration=source_duration,
@@ -141,10 +238,10 @@ async def run_pipeline(
         logger.info("[TRANSCODE] Complete: %s", tmp_path)
 
         # Step 3: VERIFY
-        await _verify_output(tmp_path, source_duration)
-        logger.info("[VERIFY] Output verified: codec=hevc, duration OK")
+        await _verify_output(tmp_path, source_duration, expected_codec=codec)
+        logger.info("[VERIFY] Output verified: codec=%s, duration OK", codec)
 
-        # Step 4: COMPARE
+        # Step 4: COMPARE — size first, then the quality gate.
         output_size = (await asyncio.to_thread(tmp_path.stat)).st_size
         if output_size >= source_size:
             raise SizeRegressionError(source_size, output_size)
@@ -155,13 +252,45 @@ async def run_pipeline(
             (space_saved / source_size) * 100,
         )
 
+        vmaf_mean: float | None = None
+        vmaf_perc5: float | None = None
+        if target_vmaf is not None and vmaf_available:
+            assert vmaf_perc5_floor is not None
+            try:
+                score = await measure_vmaf(src, tmp_path, height=source_height)
+                vmaf_mean, vmaf_perc5 = score.mean, score.perc5
+            except VmafUnavailableError:
+                logger.warning(
+                    "ffmpeg on this worker has no libvmaf — VMAF gate skipped "
+                    "for this encode (pre-VMAF behavior)."
+                )
+            except VmafError as e:
+                # A gate we *should* be able to run but couldn't is a real
+                # failure — do not silently ship an unverified replacement.
+                raise PipelineError("COMPARE", f"VMAF measurement failed: {e}") from e
+            if vmaf_mean is not None and vmaf_perc5 is not None:
+                if vmaf_mean < target_vmaf or vmaf_perc5 < vmaf_perc5_floor:
+                    raise VmafGateError(
+                        vmaf_mean=vmaf_mean,
+                        vmaf_perc5=vmaf_perc5,
+                        mean_floor=target_vmaf,
+                        perc5_floor=vmaf_perc5_floor,
+                    )
+                logger.info(
+                    "[COMPARE] VMAF gate passed: mean=%.2f (≥%.1f) perc5=%.2f (≥%.1f)",
+                    vmaf_mean,
+                    target_vmaf,
+                    vmaf_perc5,
+                    vmaf_perc5_floor,
+                )
+
         # Step 5: SWAP
         await asyncio.to_thread(_atomic_swap, src, tmp_path, bak_path)
         logger.info("[SWAP] Original → .tf_bak, tmp → original")
 
         # Step 6: CONFIRM
         try:
-            await _verify_output(src, source_duration)
+            await _verify_output(src, source_duration, expected_codec=codec)
             logger.info("[CONFIRM] Final file verified")
         except (PipelineError, ProbeError) as e:
             # Rollback: restore backup
@@ -182,17 +311,27 @@ async def run_pipeline(
             "source_size": source_size,
             "output_size": output_size,
             "space_saved": space_saved,
+            "backend": backend,
+            "resolved_crf": map_quality(codec, backend, quality),
+            "vmaf_mean": vmaf_mean,
+            "vmaf_perc5": vmaf_perc5,
         }
 
     finally:
         # Step 8: UNLOCK (always runs)
         await asyncio.to_thread(_safe_delete, lock_path)
-        # Clean up tmp if it still exists (failed encode)
+        # Clean up tmp if it still exists (failed encode or gate skip)
         await asyncio.to_thread(_safe_delete, tmp_path)
         logger.info("[UNLOCK] Lock released")
 
 
-async def _verify_output(path: Path, expected_duration: float, *, deep_check: bool = True) -> None:
+async def _verify_output(
+    path: Path,
+    expected_duration: float,
+    *,
+    expected_codec: str = "hevc",
+    deep_check: bool = True,
+) -> None:
     """Verify transcoded output via ffprobe + (optionally) a decode sample.
 
     ffprobe accepts files with corrupted streams as long as the
@@ -211,8 +350,10 @@ async def _verify_output(path: Path, expected_duration: float, *, deep_check: bo
     except ProbeError as e:
         raise PipelineError("VERIFY", f"ffprobe failed on output: {e}") from e
 
-    if probe.video_codec != "hevc":
-        raise PipelineError("VERIFY", f"Output codec is '{probe.video_codec}', expected 'hevc'")
+    if probe.video_codec != expected_codec:
+        raise PipelineError(
+            "VERIFY", f"Output codec is '{probe.video_codec}', expected '{expected_codec}'"
+        )
 
     duration_diff = abs(probe.duration - expected_duration)
     if duration_diff > DURATION_TOLERANCE:

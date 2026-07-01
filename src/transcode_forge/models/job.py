@@ -19,6 +19,14 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class TargetCodec(StrEnum):
+    """Output codecs a job can target. Extending (VP9/AV2 later) means a new
+    value here plus builder entries in worker/encoder.py — nothing structural."""
+
+    HEVC = "hevc"
+    AV1 = "av1"
+
+
 class Job(BaseModel):
     """A single transcode job tracking source file through the pipeline."""
 
@@ -32,6 +40,12 @@ class Job(BaseModel):
     source_size: int | None = None
     target_codec: str = "hevc"
     quality_value: int
+    # Quality goal (snapshot at queue time) + encode outcome. NULL
+    # target_vmaf = no VMAF gate/search — pre-feature jobs behave as before.
+    target_vmaf: float | None = None
+    resolved_crf: int | None = None
+    achieved_vmaf: float | None = None
+    backend_used: str | None = None
     status: JobStatus = JobStatus.PENDING
     worker_id: str | None = None
     progress: float = Field(default=0.0, ge=0.0, le=1.0)

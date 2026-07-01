@@ -83,7 +83,7 @@ services:
   #     TF_SERVER_URL: "http://scheduler:8000"
   #     TF_WORKER_TOKEN: "${TF_WORKER_TOKEN:?set in .env after issuing a token}"
   #     TF_WORKER_NAME: "local-qsv"
-  #     TF_PREFERRED_ENCODER: "auto"
+  #     TF_PREFERRED_BACKEND: "auto"
   #   volumes:
   #     # Workers do the writes — RW mount.
   #     - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:rw"

@@ -84,12 +84,15 @@ class TestExistingInstallBootstrap:
         try:
             # Simulate v0.4: the hand-created schema (jobs + libraries + ...) exists,
             # but schema_migrations does not. A real pre-migrations install had the
-            # full table set including libraries, which later migrations (e.g. 0005)
-            # ALTER — so the simulation must include it, not just jobs.
+            # full table set including libraries and workers, which later migrations
+            # (0005 ALTERs libraries, 0006 ALTERs workers) touch — so the simulation
+            # must include them, not just jobs.
             await conn.execute(
                 "CREATE TABLE jobs (id TEXT PRIMARY KEY, "
                 "source_path TEXT NOT NULL, library TEXT NOT NULL, "
-                "source_codec TEXT NOT NULL, quality_value INTEGER NOT NULL, "
+                "source_codec TEXT NOT NULL, "
+                "target_codec TEXT NOT NULL DEFAULT 'hevc', "
+                "quality_value INTEGER NOT NULL, "
                 "status TEXT NOT NULL DEFAULT 'pending', "
                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
@@ -100,6 +103,12 @@ class TestExistingInstallBootstrap:
                 "enabled INTEGER NOT NULL DEFAULT 1, auto_scan INTEGER NOT NULL DEFAULT 0, "
                 "scan_interval_hours INTEGER DEFAULT 24, "
                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            await conn.execute(
+                "CREATE TABLE workers (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                "host TEXT NOT NULL, capabilities TEXT NOT NULL, "
+                "status TEXT NOT NULL DEFAULT 'offline', "
+                "registered_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
             # Insert a row to make sure data is preserved through bootstrap
             await conn.execute(

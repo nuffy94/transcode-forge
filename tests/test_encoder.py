@@ -3,86 +3,114 @@
 import pytest
 
 from transcode_forge.worker.encoder import (
+    ENCODER_BUILDERS,
     build_encode_command,
-    build_nvenc_command,
-    build_qsv_command,
-    build_software_command,
+    map_quality,
     parse_progress,
     parse_speed,
 )
 
+ALL_PAIRS = sorted(ENCODER_BUILDERS.keys())
+
 
 class TestBuildCommands:
     def test_qsv_command(self):
-        cmd = build_qsv_command("/input.mkv", "/output.mkv", 21)
+        cmd = build_encode_command("hevc", "qsv", "/input.mkv", "/output.mkv", 21)
         assert cmd[0] == "ffmpeg"
         assert "-hwaccel" in cmd
         assert "qsv" in cmd
-        assert "-c:v" in cmd
-        assert "hevc_qsv" in cmd
-        assert "-global_quality" in cmd
-        assert "21" in cmd
-        assert "-c:a" in cmd
-        assert "copy" in cmd
-        assert "-map" in cmd
-        assert "0" in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "hevc_qsv"
+        assert cmd[cmd.index("-global_quality") + 1] == "21"
         assert cmd[-1] == "/output.mkv"
 
-    def test_nvenc_command(self):
-        cmd = build_nvenc_command("/input.mkv", "/output.mkv", 22)
-        assert "hevc_nvenc" in cmd
-        assert "-cq" in cmd
-        assert "22" in cmd
+    def test_nvenc_command_maps_quality(self):
+        """nvenc -cq must be mapped (≈ crf+11), never the raw reference value."""
+        cmd = build_encode_command("hevc", "nvenc", "/input.mkv", "/output.mkv", 22)
+        assert cmd[cmd.index("-c:v") + 1] == "hevc_nvenc"
+        assert cmd[cmd.index("-cq") + 1] == "33"
         assert "cuda" in cmd
+        assert cmd[cmd.index("-b:v") + 1] == "0"  # cq is the sole rate control
 
     def test_software_command(self):
-        cmd = build_software_command("/input.mkv", "/output.mkv", 20)
-        assert "libx265" in cmd
-        assert "-crf" in cmd
-        assert "20" in cmd
+        cmd = build_encode_command("hevc", "cpu", "/input.mkv", "/output.mkv", 20)
+        assert cmd[cmd.index("-c:v") + 1] == "libx265"
+        assert cmd[cmd.index("-crf") + 1] == "20"
         assert "-hwaccel" not in cmd
 
-    def test_build_encode_command_dispatch(self):
-        assert "hevc_qsv" in build_encode_command("qsv", "/in", "/out", 21)
-        assert "hevc_nvenc" in build_encode_command("nvenc", "/in", "/out", 21)
-        assert "libx265" in build_encode_command("cpu", "/in", "/out", 21)
+    def test_svtav1_command(self):
+        cmd = build_encode_command("av1", "cpu", "/input.mkv", "/output.mkv", 20)
+        assert cmd[cmd.index("-c:v") + 1] == "libsvtav1"
+        assert cmd[cmd.index("-crf") + 1] == "27"  # reference 20 + AV1 offset 7
+        assert cmd[cmd.index("-svtav1-params") + 1] == "tune=0:scm=0"
 
     def test_build_encode_command_unknown(self):
-        with pytest.raises(ValueError, match="Unknown encoder"):
-            build_encode_command("vaapi", "/in", "/out", 21)
+        with pytest.raises(ValueError, match="Unknown"):
+            build_encode_command("hevc", "vaapi", "/in", "/out", 21)
+        with pytest.raises(ValueError, match="Unknown"):
+            build_encode_command("vp8", "cpu", "/in", "/out", 21)
 
-    def test_all_commands_copy_audio(self):
-        for encoder in ("qsv", "nvenc", "cpu"):
-            cmd = build_encode_command(encoder, "/in", "/out", 21)
-            idx = cmd.index("-c:a")
-            assert cmd[idx + 1] == "copy"
+    def test_anime_content_enables_aq_mode(self):
+        cmd = build_encode_command("hevc", "cpu", "/in", "/out", 19, content="anime")
+        assert cmd[cmd.index("-x265-params") + 1] == "aq-mode=3"
+        plain = build_encode_command("hevc", "cpu", "/in", "/out", 19)
+        assert "-x265-params" not in plain
 
-    def test_all_commands_copy_subtitles(self):
-        for encoder in ("qsv", "nvenc", "cpu"):
-            cmd = build_encode_command(encoder, "/in", "/out", 21)
-            idx = cmd.index("-c:s")
-            assert cmd[idx + 1] == "copy"
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_copy_audio(self, codec, backend):
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert cmd[cmd.index("-c:a") + 1] == "copy"
 
-    def test_all_commands_map_all_streams(self):
-        for encoder in ("qsv", "nvenc", "cpu"):
-            cmd = build_encode_command(encoder, "/in", "/out", 21)
-            idx = cmd.index("-map")
-            assert cmd[idx + 1] == "0"
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_copy_subtitles(self, codec, backend):
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert cmd[cmd.index("-c:s") + 1] == "copy"
 
-    def test_all_commands_overwrite(self):
-        for encoder in ("qsv", "nvenc", "cpu"):
-            cmd = build_encode_command(encoder, "/in", "/out", 21)
-            assert "-y" in cmd
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_map_all_streams(self, codec, backend):
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert cmd[cmd.index("-map") + 1] == "0"
 
-    def test_all_commands_request_progress_pipe(self):
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_overwrite(self, codec, backend):
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert "-y" in cmd
+
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_request_progress_pipe(self, codec, backend):
         """Progress must come through -progress pipe:2 with -nostats —
         the default rolling stats use \\r and never reach readline().
         """
-        for encoder in ("qsv", "nvenc", "cpu"):
-            cmd = build_encode_command(encoder, "/in", "/out", 21)
-            assert "-progress" in cmd, f"{encoder} encoder is missing -progress"
-            assert cmd[cmd.index("-progress") + 1] == "pipe:2"
-            assert "-nostats" in cmd, f"{encoder} encoder is missing -nostats"
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert "-progress" in cmd, f"{codec}/{backend} is missing -progress"
+        assert cmd[cmd.index("-progress") + 1] == "pipe:2"
+        assert "-nostats" in cmd, f"{codec}/{backend} is missing -nostats"
+
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_all_commands_are_10bit(self, codec, backend):
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
+        assert cmd[cmd.index("-pix_fmt") + 1] in ("yuv420p10le", "p010le")
+
+
+class TestMapQuality:
+    def test_reference_passthrough_for_x265(self):
+        assert map_quality("hevc", "cpu", 21) == 21
+
+    def test_nvenc_offset(self):
+        assert map_quality("hevc", "nvenc", 20) == 31
+
+    def test_av1_offsets(self):
+        assert map_quality("av1", "cpu", 20) == 27
+        assert map_quality("av1", "nvenc", 20) == 26
+        assert map_quality("av1", "qsv", 20) == 24
+
+    def test_clamped_to_native_range(self):
+        assert map_quality("hevc", "nvenc", 51) == 51  # 62 clamped
+        assert map_quality("av1", "cpu", 60) == 63  # 67 clamped
+        assert map_quality("hevc", "qsv", 0) == 1  # global_quality min 1
+
+    def test_unknown_pair_raises(self):
+        with pytest.raises(ValueError, match="Unknown"):
+            map_quality("hevc", "vaapi", 20)
 
 
 class TestParseProgress:

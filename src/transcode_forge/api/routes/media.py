@@ -3,8 +3,8 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
@@ -13,6 +13,7 @@ from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.repos import media as media_repo
+from transcode_forge.repos import settings as settings_repo
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +92,31 @@ async def list_tv_shows(
 
 class QueueRequest(BaseModel):
     file_ids: list[str]
+    # Per-job output codec (D1). Omitted → the default_codec setting
+    # (DB override else TF_DEFAULT_CODEC else hevc). AV1 is opt-in via
+    # the UI selector, which carries the compatibility warning.
+    codec: str | None = Field(default=None, pattern=r"^(hevc|av1)$")
 
 
 @router.post("/media/queue")
 async def queue_selected_files(
     body: QueueRequest,
+    request: Request,
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Queue selected media files for transcoding.
 
-    Creates jobs in SQLite — workers pick them up via DB polling.
+    Creates jobs in the DB — workers pick them up via claim polling.
     Deduplication: skips files that already have an active job.
     """
     queued = 0
     skipped = 0
+
+    settings = getattr(request.app.state, "settings", None)
+    target_codec = body.codec or await settings_repo.effective(db, "default_codec", settings)
+    # Snapshot the quality goal on the job (one source of truth) — the
+    # worker's VMAF gate and CRF search read it from there.
+    target_vmaf = float(await settings_repo.effective(db, "target_vmaf", settings))
 
     # Batch the lookups up front — one query each — instead of ~4 per file.
     by_id = {m["id"]: m for m in await media_repo.get_by_ids(db, body.file_ids)}
@@ -149,7 +161,9 @@ async def queue_selected_files(
                 source_bitrate=mf["bitrate"],
                 source_duration=mf["duration"],
                 source_size=mf["file_size"],
+                target_codec=target_codec,
                 quality_value=presets.get(mf["library_id"], 21),
+                target_vmaf=target_vmaf,
                 status=JobStatus.QUEUED,
             )
             await job_repo.create_job(tx, job)

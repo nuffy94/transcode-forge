@@ -17,6 +17,8 @@ def _row_to_worker(row: aiosqlite.Row) -> Worker:
     data = dict(row)
     if data.get("capabilities"):
         data["capabilities"] = json.loads(data["capabilities"])
+    if data.get("supported_codecs"):
+        data["supported_codecs"] = json.loads(data["supported_codecs"])
     for field in ("last_heartbeat", "registered_at", "updated_at"):
         if data.get(field):
             data[field] = datetime.fromisoformat(data[field])
@@ -27,16 +29,19 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
     """Insert or update a worker (heartbeat IS registration)."""
     now = datetime.now(UTC).isoformat()
     caps_json = json.dumps(worker.capabilities)
+    codecs_json = json.dumps(worker.supported_codecs)
 
     await db.execute(
         """INSERT INTO workers (
-            id, name, host, capabilities, ffmpeg_version, max_concurrent,
-            status, current_job_id, last_heartbeat, registered_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, host, capabilities, supported_codecs, ffmpeg_version,
+            max_concurrent, status, current_job_id, last_heartbeat,
+            registered_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             host = excluded.host,
             capabilities = excluded.capabilities,
+            supported_codecs = excluded.supported_codecs,
             ffmpeg_version = excluded.ffmpeg_version,
             max_concurrent = excluded.max_concurrent,
             status = excluded.status,
@@ -49,6 +54,7 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
             worker.name,
             worker.host,
             caps_json,
+            codecs_json,
             worker.ffmpeg_version,
             worker.max_concurrent,
             worker.status.value,
