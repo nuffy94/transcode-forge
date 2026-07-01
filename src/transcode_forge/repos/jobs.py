@@ -42,8 +42,8 @@ async def create_job(db: DBConnection, job: Job) -> str:
         """INSERT INTO jobs (
             id, source_path, library, source_codec, source_resolution,
             source_bitrate, source_duration, source_size, target_codec,
-            quality_value, status, retry_count, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            quality_value, target_vmaf, status, retry_count, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.id,
             job.source_path,
@@ -55,6 +55,7 @@ async def create_job(db: DBConnection, job: Job) -> str:
             job.source_size,
             job.target_codec,
             job.quality_value,
+            job.target_vmaf,
             job.status.value,
             job.retry_count,
             now,
@@ -158,6 +159,10 @@ _VALID_JOB_COLUMNS = frozenset(
         "source_size",
         "target_codec",
         "quality_value",
+        "target_vmaf",
+        "resolved_crf",
+        "achieved_vmaf",
+        "backend_used",
         "status",
         "worker_id",
         "progress",
@@ -239,22 +244,31 @@ async def find_orphan_active_jobs(db: DBConnection) -> list[dict[str, object]]:
         return [dict(r) for r in rows]
 
 
-async def claim_next_job(db: DBConnection, worker_id: str) -> Job | None:
-    """Atomically claim the next pending/queued job for a worker.
+async def claim_next_job(
+    db: DBConnection, worker_id: str, supported_codecs: list[str] | None = None
+) -> Job | None:
+    """Atomically claim the next pending/queued job this worker can encode.
 
     A single ``UPDATE ... RETURNING`` claims and returns the row in one
     statement. On PostgreSQL the inner SELECT takes ``FOR UPDATE SKIP
     LOCKED`` so concurrent workers grab *different* rows instead of
     contending for the oldest; SQLite serializes writers itself, so the
     plain subquery is race-safe there.
+
+    Only jobs whose target_codec the worker advertised are eligible — a
+    job with no capable worker simply stays PENDING (never fails at
+    claim time). Workers that predate codec advertisement default to hevc.
     """
+    codecs = supported_codecs or ["hevc"]
     now = datetime.now(UTC).isoformat()
     lock_clause = " FOR UPDATE SKIP LOCKED" if db.dialect == "postgres" else ""
+    codec_placeholders = ",".join("?" * len(codecs))
     sql = f"""UPDATE jobs
         SET status = ?, worker_id = ?, started_at = ?, updated_at = ?
         WHERE id = (
             SELECT id FROM jobs
             WHERE status IN (?, ?)
+              AND target_codec IN ({codec_placeholders})
             ORDER BY created_at ASC
             LIMIT 1{lock_clause}
         )
@@ -268,6 +282,7 @@ async def claim_next_job(db: DBConnection, worker_id: str) -> Job | None:
             now,
             JobStatus.PENDING.value,
             JobStatus.QUEUED.value,
+            *codecs,
         ),
     ) as cur:
         row = await cur.fetchone()

@@ -13,6 +13,7 @@ class SkipReason(StrEnum):
     SIZE_REGRESSION = "size_regression"
     TOO_SMALL = "too_small"
     MANUAL_SKIP = "manual_skip"
+    BELOW_VMAF_FLOOR = "below_vmaf_floor"
 
 
 class SkippedFile(BaseModel):

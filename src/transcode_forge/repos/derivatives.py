@@ -17,13 +17,19 @@ async def create_derivative(
     source_audio_codec: str | None,
     target_resolution: str,
     target_audio_codec: str,
-    encoder: str,
+    target_codec: str = "hevc",
+    target_vmaf: float | None = None,
+    achieved_vmaf: float | None = None,
+    backend: str,
     crf: int,
     preset: str,
     derivative_key: str,
     output_size: int,
 ) -> str:
     """Create a new derivative record. Returns derivative ID.
+
+    The derivative_key is goal-keyed (codec + quality goal); backend, crf,
+    preset, and achieved_vmaf are recipe/outcome attributes on the row.
 
     Idempotent: if the derivative_key already exists (UNIQUE constraint),
     return the existing ID (treated as a benign dedup race win).
@@ -38,8 +44,9 @@ async def create_derivative(
             """INSERT INTO derivatives
             (id, library_id, source_key, source_path, source_resolution,
              source_audio_codec, target_resolution, target_audio_codec,
-             encoder, crf, preset, derivative_key, output_size, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             target_codec, target_vmaf, achieved_vmaf,
+             backend, crf, preset, derivative_key, output_size, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 deriv_id,
                 library_id,
@@ -49,7 +56,10 @@ async def create_derivative(
                 source_audio_codec,
                 target_resolution,
                 target_audio_codec,
-                encoder,
+                target_codec,
+                target_vmaf,
+                achieved_vmaf,
+                backend,
                 crf,
                 preset,
                 derivative_key,

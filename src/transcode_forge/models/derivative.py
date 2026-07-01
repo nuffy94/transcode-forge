@@ -7,7 +7,12 @@ from pydantic import BaseModel
 
 
 class Derivative(BaseModel):
-    """A cached transcoded output, identified by content-addressed key."""
+    """A cached transcoded output, identified by a goal-keyed content address.
+
+    The key captures the *goal* (what rendition of which source); the recipe
+    that produced it (backend, crf, preset) is recorded as attributes only —
+    any worker's passing encode satisfies future same-goal requests.
+    """
 
     id: str
     library_id: str
@@ -17,7 +22,10 @@ class Derivative(BaseModel):
     source_audio_codec: str | None = None
     target_resolution: str
     target_audio_codec: str
-    encoder: str
+    target_codec: str = "hevc"
+    target_vmaf: float | None = None
+    achieved_vmaf: float | None = None
+    backend: str
     crf: int
     preset: str
     derivative_key: str
@@ -26,39 +34,38 @@ class Derivative(BaseModel):
 
 
 def compute_derivative_key(
+    *,
     source_path: str,
-    source_resolution: str,
-    source_audio_codec: str,
+    source_resolution: str | None,
+    source_audio_codec: str | None,
     target_resolution: str,
     target_audio_codec: str,
-    encoder: str,
-    crf: int,
-    preset: str,
-    local_output: Path,
+    target_codec: str,
+    target_vmaf: float | int | None,
+    backend: str | None = None,
+    crf: int | None = None,
+    preset: str | None = None,
+    local_output: Path | None = None,
 ) -> str:
-    """Compute the content-addressed derivative key deterministically.
+    """Compute the goal-keyed derivative key deterministically.
 
-    All parameters that affect the output contribute to the hash, ensuring
-    that identical source + parameters → identical key → transparent dedup.
-
-    Args:
-        source_path: Source file path/key.
-        source_resolution: Source video resolution.
-        source_audio_codec: Source audio codec.
-        target_resolution: Target video resolution.
-        target_audio_codec: Target audio codec.
-        encoder: Video encoder (libx265, hevc_nvenc, etc.).
-        crf: Constant rate factor (quality).
-        preset: Encoding preset (fast, medium, slow).
-        local_output: Path to the transcoded output (for extension).
+    The key is a function of the GOAL only: (source identity, target codec,
+    target resolution, target audio codec, target VMAF) — all computable at
+    queue time, before any CRF search. Recipe details (backend/crf/preset)
+    are accepted for caller convenience but deliberately excluded from the
+    hash: the VMAF gate guarantees the quality, so "an av1, VMAF≥97
+    rendition of this source" is the dedup identity regardless of which
+    worker or hardware produced it.
 
     Returns:
-        Content-addressed derivative key (e.g., "abc123_hevc-crf21.mkv").
+        Goal-keyed derivative filename (e.g., "abc123…_av1.mkv").
     """
+    del backend, crf, preset  # recipe attributes — never part of the goal key
+    vmaf_part = "" if target_vmaf is None else f"{float(target_vmaf):g}"
     hash_input = (
         f"{source_path}|{source_resolution or ''}|{source_audio_codec or ''}"
-        f"|{target_resolution}|{target_audio_codec}|{encoder}|{crf}|{preset}"
+        f"|{target_resolution}|{target_audio_codec}|{target_codec}|{vmaf_part}"
     )
     key_hash = hashlib.blake2b(hash_input.encode(), digest_size=16).hexdigest()
-    ext = local_output.suffix.lstrip(".") or "mkv"
-    return f"{key_hash}_{encoder}-crf{crf}.{ext}"
+    ext = (local_output.suffix.lstrip(".") if local_output else "") or "mkv"
+    return f"{key_hash}_{target_codec}.{ext}"
