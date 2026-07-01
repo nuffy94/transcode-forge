@@ -5,17 +5,19 @@ How changes flow through this repo. Small project, but run like a real one.
 ## Branching model
 
 ```
-feature branch  ──PR──▶  dev  ──PR──▶  main
-(feat/*, fix/*)        (staging,      (protected,
-                        CI-gated)      releasable)
+feature branch  ──PR──▶  main
+(feat/*, fix/*)        (protected,
+                        releasable)
 ```
 
 - **`main`** — always releasable. Protected: no direct pushes, no force-push, no
   deletion. Every change arrives via a pull request with green CI.
-- **`dev`** — integration / staging. Day-to-day work merges here first; CI runs on
-  every PR into it. Releases are cut by opening a PR from `dev` → `main`.
-- **feature branches** — short-lived, branched from `dev`, named for the change:
-  `feat/av1-encoder`, `fix/orphan-job-release`, `chore/ci-foundation`.
+- **feature branches** — short-lived, branched from `main`, named for the change:
+  `feat/av1-encoder`, `fix/orphan-job-release`, `docs/contributing-flow`.
+- **`dev`** — reserved as the future staging tier. It slots into the middle
+  (`feature → dev → main`) once there's a staging *deploy* to test against — i.e.
+  when the release pipeline lands (post-StackScripts). Until then, work goes
+  straight to `main`.
 
 ## Commits
 
@@ -37,10 +39,9 @@ uv run pytest                      # unit + integration
 
 ## Pull requests
 
-1. Branch from `dev`, make atomic commits.
-2. Open a PR into `dev` (use the template). CI's **`test`** job must pass.
+1. Branch from `main`, make atomic commits.
+2. Open a PR into `main` (use the template). CI's **`test`** job must pass.
 3. Squash or rebase merge (history stays linear), then delete the branch.
-4. To release: open a PR `dev` → `main`. Same gate.
 
 The `qa-sweep` CI job (axe + screenshots) runs on every PR for visibility but is
 not yet a hard merge blocker — treat its output as a signal.
