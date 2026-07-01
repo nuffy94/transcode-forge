@@ -591,28 +591,24 @@ async def test_s3_commit_scratch_released_after_success(s3_backend: S3Backend, d
 
 
 async def _compute_expected_derivative_key(job: dict) -> str:
-    """Compute the expected content-addressed derivative key.
+    """Compute the expected goal-keyed derivative key.
 
-    Mirrors the logic in S3Backend.commit().
+    Mirrors the logic in S3Backend.commit() (which mirrors
+    http_agent._derivative_key_for): the key is the GOAL — recipe details
+    like encoder/crf/preset never participate.
     """
-    import hashlib
+    from transcode_forge.models.derivative import compute_derivative_key
 
-    source_path = job.get("source_path", "")
     source_resolution = job.get("source_resolution") or ""
-    source_audio_codec = job.get("source_audio_codec") or ""
-    target_resolution = job.get("target_resolution", "")
-    target_audio_codec = job.get("target_audio_codec", "")
-    encoder = job.get("encoder", "")
-    crf = job.get("crf", 0)
-    preset = job.get("preset", "")
-
-    hash_input = (
-        f"{source_path}|{source_resolution}|{source_audio_codec}"
-        f"|{target_resolution}|{target_audio_codec}|{encoder}|{crf}|{preset}"
+    return compute_derivative_key(
+        source_path=job.get("source_path", ""),
+        source_resolution=source_resolution,
+        source_audio_codec=job.get("source_audio_codec") or "",
+        target_resolution=job.get("target_resolution", "") or source_resolution,
+        target_audio_codec=job.get("target_audio_codec", "") or "copy",
+        target_codec=job.get("target_codec", "hevc") or "hevc",
+        target_vmaf=job.get("target_vmaf"),
     )
-    key_hash = hashlib.blake2b(hash_input.encode(), digest_size=16).hexdigest()
-    ext = "mkv"
-    return f"{key_hash}_{encoder}-crf{crf}.{ext}"
 
 
 class _FailingClient:

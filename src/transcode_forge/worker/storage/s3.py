@@ -226,23 +226,23 @@ class S3Backend:
         source_path = _get_field(job, "source_path", "")
         source_resolution = _get_field(job, "source_resolution", "") or ""
         source_audio_codec = _get_field(job, "source_audio_codec", "") or ""
-        target_resolution = _get_field(job, "target_resolution", "")
-        target_audio_codec = _get_field(job, "target_audio_codec", "")
-        encoder = _get_field(job, "encoder", "")
-        crf = _get_field(job, "crf", 0)
-        preset = _get_field(job, "preset", "medium")
+        # Mirror http_agent._derivative_key_for exactly — the upload key must
+        # equal the key the agent registers/dedup-checks with the scheduler.
+        target_resolution = _get_field(job, "target_resolution", "") or source_resolution
+        target_audio_codec = _get_field(job, "target_audio_codec", "") or "copy"
+        target_codec = _get_field(job, "target_codec", "hevc") or "hevc"
+        target_vmaf = _get_field(job, "target_vmaf", None)
         job_id = _get_field(job, "id", "")
 
-        # Compute the content-addressed derivative key.
+        # Compute the goal-keyed derivative key.
         derivative_key = compute_derivative_key(
             source_path=source_path,
             source_resolution=source_resolution,
             source_audio_codec=source_audio_codec,
             target_resolution=target_resolution,
             target_audio_codec=target_audio_codec,
-            encoder=encoder,
-            crf=int(crf) if crf else 0,
-            preset=preset,
+            target_codec=target_codec,
+            target_vmaf=target_vmaf,
             local_output=local_output,
         )
 
