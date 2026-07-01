@@ -256,7 +256,8 @@ class TestRunPipeline:
         ):
             result = await run_pipeline(
                 source_path=str(source),
-                encoder="cpu",
+                codec="hevc",
+                backend="cpu",
                 quality=21,
                 source_duration=3600.0,
                 job_id="test-job",
@@ -304,7 +305,8 @@ class TestRunPipeline:
             with pytest.raises(SizeRegressionError):
                 await run_pipeline(
                     source_path=str(source),
-                    encoder="cpu",
+                    codec="hevc",
+                    backend="cpu",
                     quality=21,
                     source_duration=3600.0,
                     job_id="test-job",
@@ -333,7 +335,8 @@ class TestRunPipeline:
             with pytest.raises(PipelineError, match="encoder crashed"):
                 await run_pipeline(
                     source_path=str(source),
-                    encoder="cpu",
+                    codec="hevc",
+                    backend="cpu",
                     quality=21,
                     source_duration=3600.0,
                     job_id="test-job",
@@ -355,7 +358,8 @@ class TestRunPipeline:
         with pytest.raises(PipelineError, match="Lock file already exists"):
             await run_pipeline(
                 source_path=str(source),
-                encoder="cpu",
+                codec="hevc",
+                backend="cpu",
                 quality=21,
                 source_duration=3600.0,
                 job_id="test-job",
