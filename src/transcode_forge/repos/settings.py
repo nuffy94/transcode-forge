@@ -97,7 +97,9 @@ async def effective(db: DBConnection, key: str, settings: Settings | None = None
         ValueError: If the key is not a tunable setting.
     """
     if key not in TUNABLE_KEYS:
-        raise ValueError(f"Setting {key!r} is not a tunable setting. Tunable: {sorted(TUNABLE_KEYS)}")
+        raise ValueError(
+            f"Setting {key!r} is not a tunable setting. Tunable: {sorted(TUNABLE_KEYS)}"
+        )
     override = await get_override(db, key)
     if override is not None:
         return override

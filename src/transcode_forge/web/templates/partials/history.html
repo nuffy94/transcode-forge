@@ -51,7 +51,12 @@
                 {% elif job.source_size and job.output_size %}
                 <div class="flex flex-col">
                     <span class="text-xs text-forge-ink">{{ (job.source_size / 1073741824)|round(1) }} → {{ (job.output_size / 1073741824)|round(1) }} <span class="text-forge-mute">GiB</span></span>
-                    <span class="text-[10px] font-semibold text-forge-oxide">−{{ job.savings_percent|round(1) if job.savings_percent else 0 }}%</span>
+                    <div class="flex items-center gap-2 text-[10px]">
+                        <span class="font-semibold text-forge-oxide">−{{ job.savings_percent|round(1) if job.savings_percent else 0 }}%</span>
+                        {% if job.achieved_vmaf %}
+                        <span class="font-mono text-forge-steel" title="Measured VMAF of the encode vs. the original (mean)">VMAF {{ job.achieved_vmaf|round(1) }}</span>
+                        {% endif %}
+                    </div>
                 </div>
                 {% else %}
                 <span class="text-forge-mute/60">—</span>
@@ -90,6 +95,15 @@
             <td colspan="7" class="!py-2.5 !px-6">
                 <div class="flex items-center gap-2 font-mono text-[11px] text-forge-rust">
                     <span class="material-symbols-outlined text-xs">warning</span>
+                    {{ job.error_message }}
+                </div>
+            </td>
+        </tr>
+        {% elif job.status == 'skipped' and job.error_message %}
+        <tr>
+            <td colspan="7" class="!py-2.5 !px-6">
+                <div class="flex items-center gap-2 font-mono text-[11px]" style="color: var(--forge-brass);">
+                    <span class="material-symbols-outlined text-xs">shield</span>
                     {{ job.error_message }}
                 </div>
             </td>

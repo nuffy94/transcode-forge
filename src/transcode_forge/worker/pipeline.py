@@ -37,19 +37,19 @@ from typing import Any
 
 from transcode_forge.scanner.probe import ProbeError, ffprobe
 from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
-from transcode_forge.worker.vmaf import (
-    VmafError,
-    VmafUnavailableError,
-    find_quality_for_target,
-    has_libvmaf,
-    measure_vmaf,
-)
 from transcode_forge.worker.storage.filesystem import (
     _acquire_lock,
     _atomic_swap,
     _preserve_metadata,
     _rollback_swap,
     _safe_delete,
+)
+from transcode_forge.worker.vmaf import (
+    VmafError,
+    VmafUnavailableError,
+    find_quality_for_target,
+    has_libvmaf,
+    measure_vmaf,
 )
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,9 @@ async def run_pipeline(
                 logger.warning("CRF search failed (%s) — using the fixed preset", e)
 
         # Step 2: TRANSCODE
-        cmd = build_encode_command(codec, backend, str(src), str(tmp_path), quality, content=content)
+        cmd = build_encode_command(
+            codec, backend, str(src), str(tmp_path), quality, content=content
+        )
         result = await run_encode(
             cmd,
             total_duration=source_duration,

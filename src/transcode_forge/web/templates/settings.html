@@ -93,9 +93,23 @@
                 <h3 class="font-display font-bold text-2xl text-forge-paper uppercase tracking-tight mt-0.5">TRANSCODING</h3>
             </div>
             <div class="space-y-3 font-mono text-xs">
-                <div class="flex justify-between border-b border-forge-rule/60 pb-2">
-                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Target Codec</span>
-                    <span class="text-forge-ember">HEVC (H.265)</span>
+                <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Default Codec</span>
+                    <select id="tune-default-codec" class="forge-select" aria-label="Default target codec">
+                        <option value="hevc">HEVC (H.265)</option>
+                        <option value="av1">AV1</option>
+                    </select>
+                </div>
+                <p id="tune-av1-warning" class="font-mono text-[10px] leading-relaxed" style="display:none; color: var(--forge-brass);">
+                    AV1 as the global default applies to every queue action — older devices/clients may not decode AV1.
+                </p>
+                <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]" title="New jobs target this mean VMAF; the gate skips encodes landing below it.">Target VMAF</span>
+                    <input id="tune-target-vmaf" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right" aria-label="Target VMAF">
+                </div>
+                <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+                    <span class="text-forge-mute uppercase tracking-stamp text-[10px]" title="Worst-scenes (5th percentile) floor — encodes below it are skipped, originals kept.">VMAF Floor (perc5)</span>
+                    <input id="tune-vmaf-floor" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right" aria-label="VMAF minimum floor">
                 </div>
                 <div class="flex justify-between border-b border-forge-rule/60 pb-2">
                     <span class="text-forge-mute uppercase tracking-stamp text-[10px]">Encoder Priority</span>
@@ -114,9 +128,12 @@
                     <span id="sys-timeout" class="text-forge-paper font-semibold tabular-nums">30s</span>
                 </div>
             </div>
-            <p class="font-mono text-[10px] text-forge-mute italic mt-4 leading-relaxed">
-                Configured via <code class="text-forge-ember">TF_*</code> env vars.
-            </p>
+            <div class="flex items-center justify-between mt-4">
+                <p class="font-mono text-[10px] text-forge-mute italic leading-relaxed">
+                    Codec + VMAF are saved here; the rest via <code class="text-forge-ember">TF_*</code> env vars.
+                </p>
+                <button class="forge-btn forge-btn--ember" onclick="saveTuning()">Save</button>
+            </div>
         </section>
 
         <!-- System Info -->
@@ -578,6 +595,50 @@ fetch('/api/health').then(r => r.json()).then(data => {
 }).catch(() => {});
 
 loadLibraries();
+
+// ── Tuning settings (default codec + VMAF goal, DB-overridable) ──────
+async function loadTuning() {
+    try {
+        const r = await fetch('/api/settings/tuning');
+        if (!r.ok) return;
+        const body = await r.json();
+        const codecSel = document.getElementById('tune-default-codec');
+        codecSel.value = body.data.default_codec || 'hevc';
+        document.getElementById('tune-target-vmaf').value = body.data.target_vmaf || '';
+        document.getElementById('tune-vmaf-floor').value = body.data.vmaf_min_floor || '';
+        toggleAv1Warning();
+    } catch (e) { /* panel stays at defaults */ }
+}
+
+function toggleAv1Warning() {
+    const isAv1 = document.getElementById('tune-default-codec').value === 'av1';
+    document.getElementById('tune-av1-warning').style.display = isAv1 ? 'block' : 'none';
+}
+document.getElementById('tune-default-codec').addEventListener('change', toggleAv1Warning);
+
+async function saveTuning() {
+    const values = {
+        default_codec: document.getElementById('tune-default-codec').value,
+        target_vmaf: document.getElementById('tune-target-vmaf').value,
+        vmaf_min_floor: document.getElementById('tune-vmaf-floor').value,
+    };
+    try {
+        const r = await fetch('/api/settings/tuning', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({values})
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            showToast(err.detail || 'Save failed', 'error');
+            return;
+        }
+        showToast('Transcoding defaults saved', 'success');
+    } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+    }
+}
+
+loadTuning();
 
 document.getElementById('libraries-list').addEventListener('click', (e) => {
     const editBtn = e.target.closest('[data-edit-id]');

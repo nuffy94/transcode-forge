@@ -279,6 +279,12 @@ async def jobs_partial(
         limit=per_page,
         offset=offset,
     )
+    # Codecs at least one live worker can encode — pending jobs whose
+    # target codec isn't covered get a "waiting for a capable worker" hint.
+    online_codecs: set[str] = set()
+    for w in await worker_repo.list_workers(db):
+        if w.status in ("online", "busy"):
+            online_codecs.update(w.supported_codecs)
     return _render(
         request,
         "partials/jobs.html",
@@ -289,6 +295,7 @@ async def jobs_partial(
             "per_page": per_page,
             "sort": sort,
             "dir": dir,
+            "online_codecs": online_codecs,
         },
     )
 

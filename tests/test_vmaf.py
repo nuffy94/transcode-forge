@@ -9,7 +9,6 @@ from transcode_forge.worker.vmaf import (
     VMAF_MODEL_4K,
     VMAF_MODEL_HD,
     VmafError,
-    VmafScore,
     VmafUnavailableError,
     _pool,
     find_quality_for_target,

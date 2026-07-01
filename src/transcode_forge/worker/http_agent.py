@@ -350,7 +350,8 @@ class HttpWorkerAgent:
             source_audio_codec=getattr(job, "source_audio_codec", "") or "",
             # No rescaling / audio transcoding in the pipeline: the target
             # keeps the source resolution and copies audio streams.
-            target_resolution=getattr(job, "target_resolution", "") or (job.source_resolution or ""),
+            target_resolution=getattr(job, "target_resolution", "")
+            or (job.source_resolution or ""),
             target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
             target_codec=job.target_codec or "hevc",
             target_vmaf=job.target_vmaf,

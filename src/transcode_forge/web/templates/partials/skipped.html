@@ -30,6 +30,8 @@
                 <span class="forge-pill forge-pill--running">Not H.264</span>
                 {% elif f.skip_reason == 'size_regression' %}
                 <span class="forge-pill forge-pill--failed">Size Regression</span>
+                {% elif f.skip_reason == 'below_vmaf_floor' %}
+                <span class="forge-pill forge-pill--failed" title="The encode's measured VMAF fell below the quality floor — the original was kept.">Below VMAF Floor</span>
                 {% elif f.skip_reason == 'too_small' %}
                 <span class="forge-pill" style="color: var(--forge-brass); border-color: rgba(217, 179, 92, 0.4);">Too Small</span>
                 {% elif f.skip_reason == 'manual_skip' %}

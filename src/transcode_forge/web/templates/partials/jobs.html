@@ -26,7 +26,11 @@
             <td>
                 <div class="flex flex-col gap-1">
                     <span class="text-sm font-medium {% if job.status == 'transcoding' %}text-forge-ember-hot{% else %}text-forge-paper{% endif %}" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
-                    <span class="font-mono text-[10px] uppercase tracking-wider text-forge-mute">{{ job.library }}</span>
+                    <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
+                        <span class="text-forge-mute">{{ job.library }}</span>
+                        <span class="text-forge-rule-bright">·</span>
+                        <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
+                    </div>
                 </div>
             </td>
             <td>
@@ -62,9 +66,17 @@
                     <span class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp w-10 text-right">Done</span>
                 </div>
                 {% elif job.status == 'pending' %}
-                <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">Awaiting capacity</span>
+                    {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
+                    <span class="font-mono text-[10px] italic uppercase tracking-stamp" style="color: var(--forge-brass);" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job stays pending until one joins.">Waiting for an {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
+                    {% else %}
+                    <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">Awaiting capacity</span>
+                    {% endif %}
                 {% elif job.status == 'queued' %}
-                <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">In library queue</span>
+                    {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
+                    <span class="font-mono text-[10px] italic uppercase tracking-stamp" style="color: var(--forge-brass);" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job stays queued until one joins.">Waiting for an {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
+                    {% else %}
+                    <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">In library queue</span>
+                    {% endif %}
                 {% elif job.status == 'failed' %}
                 <span class="font-mono text-[10px] text-forge-rust">{{ job.error_message or 'Transcode failed' }}</span>
                 {% endif %}

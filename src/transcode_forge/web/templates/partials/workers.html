@@ -113,6 +113,9 @@
     <!-- Footer datum -->
     <div class="mt-auto pt-3 border-t border-forge-rule/60 flex justify-between items-center font-mono text-[10px] text-forge-mute uppercase tracking-stamp">
         <span>Slots: <span class="text-forge-ink">{{ worker.max_concurrent }}</span></span>
+        <span title="Codecs this worker can encode">
+            <span class="text-forge-ink">{{ worker.supported_codecs|join(' · ')|upper if worker.supported_codecs else 'HEVC' }}</span>
+        </span>
         <span title="{{ worker.last_heartbeat or 'never' }}">
             Seen: <span class="{% if heartbeat_alarm %}text-forge-rust{% else %}text-forge-ink{% endif %}">{{ worker.heartbeat_relative or '—' }}</span>
         </span>

@@ -8,6 +8,8 @@ import pytest
 from transcode_forge.models.job import Job
 from transcode_forge.worker.hardware import HardwareCapabilities
 from transcode_forge.worker.http_agent import HttpWorkerAgent
+from transcode_forge.worker.storage.filesystem import FilesystemBackend
+from transcode_forge.worker.storage.s3 import S3Backend
 
 
 def _cpu_caps() -> HardwareCapabilities:
@@ -17,8 +19,6 @@ def _cpu_caps() -> HardwareCapabilities:
         ffmpeg_version="ffmpeg 7.0",
         os_platform="Linux",
     )
-from transcode_forge.worker.storage.filesystem import FilesystemBackend
-from transcode_forge.worker.storage.s3 import S3Backend
 
 
 class TestGetBackendForJob:

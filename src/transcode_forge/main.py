@@ -177,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from transcode_forge.api.routes.media import router as media_router
     from transcode_forge.api.routes.scan import router as scan_router
     from transcode_forge.api.routes.schedules import router as schedules_router
+    from transcode_forge.api.routes.settings import router as settings_router
     from transcode_forge.api.routes.skipped import router as skipped_router
     from transcode_forge.api.routes.stats import router as stats_router
     from transcode_forge.api.routes.worker_api import router as worker_api_router
@@ -194,6 +195,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit_router, prefix="/api")
     app.include_router(exclusions_router, prefix="/api")
     app.include_router(schedules_router, prefix="/api")
+    app.include_router(settings_router, prefix="/api")
     app.include_router(auth_router, prefix="/api")
     app.include_router(worker_api_router, prefix="/api")
     app.include_router(worker_tokens_router, prefix="/api")

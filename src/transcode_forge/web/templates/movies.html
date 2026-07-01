@@ -99,18 +99,29 @@
 </div>
 
 <!-- Floating bulk action bar -->
-<div id="bulk-bar" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[60] forge-panel forge-panel--ember items-center gap-4 px-5 py-3" style="display:none">
-    <span class="forge-stat-label" style="color: var(--forge-ember-hot);">
-        <span id="bulk-count" class="font-mono text-base font-bold text-forge-ember-hot tabular-nums">0</span>
-        Selected
-    </span>
-    <button class="forge-btn forge-btn--ember" onclick="queueSelected()">
-        <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
-        <span>Queue Selected</span>
-    </button>
-    <button class="forge-iconbtn forge-iconbtn--danger" onclick="clearSelection()" aria-label="Clear selection">
-        <span class="material-symbols-outlined text-base">close</span>
-    </button>
+<div id="bulk-bar" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[60] forge-panel forge-panel--ember flex-col gap-2 px-5 py-3" style="display:none">
+    <div class="flex items-center gap-4">
+        <span class="forge-stat-label" style="color: var(--forge-ember-hot);">
+            <span id="bulk-count" class="font-mono text-base font-bold text-forge-ember-hot tabular-nums">0</span>
+            Selected
+        </span>
+        <select id="queue-codec" class="forge-select" aria-label="Target codec" onchange="codecWarning()">
+            <option value="">Codec: Default</option>
+            <option value="hevc">→ HEVC</option>
+            <option value="av1">→ AV1</option>
+        </select>
+        <button class="forge-btn forge-btn--ember" onclick="queueSelected()">
+            <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+            <span>Queue Selected</span>
+        </button>
+        <button class="forge-iconbtn forge-iconbtn--danger" onclick="clearSelection()" aria-label="Clear selection">
+            <span class="material-symbols-outlined text-base">close</span>
+        </button>
+    </div>
+    <p id="codec-warning" class="font-mono text-[10px] text-forge-brass items-center gap-1.5" style="display:none; color: var(--forge-brass);">
+        <span class="material-symbols-outlined text-xs align-middle">warning</span>
+        AV1: best compression, but older devices/clients may not decode it.
+    </p>
 </div>
 
 <script>
@@ -348,13 +359,23 @@ function updateBulkBar() {
     bar.style.display = count > 0 ? 'inline-flex' : 'none';
 }
 
+function codecWarning() {
+    const codec = document.getElementById('queue-codec').value;
+    document.getElementById('codec-warning').style.display = codec === 'av1' ? 'flex' : 'none';
+}
+
+function queueBody(ids) {
+    const codec = document.getElementById('queue-codec').value;
+    return JSON.stringify(codec ? {file_ids: ids, codec} : {file_ids: ids});
+}
+
 async function queueSelected() {
     const ids = [...selectedIds];
     if (!ids.length) return;
     try {
         const resp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: ids})
+            body: queueBody(ids)
         });
         if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
         const data = await resp.json();
@@ -370,7 +391,7 @@ async function queueFile(id) {
     try {
         const resp = await fetch('/api/media/queue', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file_ids: [id]})
+            body: queueBody([id])
         });
         if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
         const data = await resp.json();

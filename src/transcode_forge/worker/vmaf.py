@@ -22,6 +22,7 @@ updates safe.
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,12 @@ from pathlib import Path
 from transcode_forge.worker.encoder import build_encode_command, run_encode
 
 logger = logging.getLogger(__name__)
+
+# ffmpeg binary used for MEASUREMENT only (encodes keep using `ffmpeg`).
+# Debian's distro ffmpeg ships libsvtav1 but not the libvmaf filter, so the
+# worker image carries a second, static ffmpeg for scoring and points this
+# env var at it. Default: the regular ffmpeg on PATH.
+VMAF_FFMPEG = os.environ.get("TF_VMAF_FFMPEG", "ffmpeg")
 
 VMAF_MODEL_HD = "vmaf_v0.6.1"
 VMAF_MODEL_4K = "vmaf_4k_v0.6.1"
@@ -98,10 +105,11 @@ def _pool(scores: list[float]) -> VmafScore:
 
 
 async def has_libvmaf() -> bool:
-    """True if this worker's ffmpeg is built with the libvmaf filter."""
+    """True if the measurement ffmpeg (TF_VMAF_FFMPEG or plain ffmpeg) is
+    built with the libvmaf filter."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg",
+            VMAF_FFMPEG,
             "-hide_banner",
             "-filters",
             stdout=asyncio.subprocess.PIPE,
@@ -144,7 +152,7 @@ async def measure_vmaf(
             f":n_subsample={n_subsample}:n_threads=0"
         )
         cmd = [
-            "ffmpeg",
+            VMAF_FFMPEG,
             "-hide_banner",
             "-i",
             str(encoded),
@@ -196,12 +204,10 @@ async def measure_vmaf(
 
 async def _extract_samples(source: Path, duration: float, out_dir: Path) -> list[Path]:
     """Stream-copy short clips from the source at the sample offsets."""
-    if duration <= SAMPLE_SECONDS * 2:
-        # Short file — one sample is the whole thing (still stream-copied so
-        # the encode candidates all start from identical input).
-        offsets = [0.0]
-    else:
-        offsets = [duration * f for f in SAMPLE_OFFSETS]
+    # Short file → one sample is the whole thing (still stream-copied so the
+    # encode candidates all start from identical input).
+    short = duration <= SAMPLE_SECONDS * 2
+    offsets = [0.0] if short else [duration * f for f in SAMPLE_OFFSETS]
 
     samples: list[Path] = []
     for i, offset in enumerate(offsets):

@@ -572,6 +572,47 @@ async def test_invalid_override_values_rejected(db):
         await settings_repo.set_override(db, "target_vmaf", "not-a-number")
 
 
+# ── D9 — tuning API (the editable-settings surface) ─────────────────────────────────
+
+
+async def test_tuning_api_roundtrip(client: AsyncClient):
+    """D9: GET returns effective values; PUT sets overrides; empty clears them."""
+    r = await client.get("/api/settings/tuning")
+    assert r.status_code == 200
+    assert r.json()["data"]["default_codec"] == "hevc"
+
+    r = await client.put(
+        "/api/settings/tuning",
+        json={"values": {"default_codec": "av1", "target_vmaf": "95"}},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"]["default_codec"] == "av1"
+    assert body["overrides"]["target_vmaf"] == "95"
+
+    r = await client.put("/api/settings/tuning", json={"values": {"default_codec": ""}})
+    assert r.json()["data"]["default_codec"] == "hevc"  # env default restored
+
+
+async def test_tuning_api_rejects_invalid_and_non_editable(client: AsyncClient):
+    """D9: bad values and non-allowlisted keys are 400; nothing partially applies."""
+    r = await client.put("/api/settings/tuning", json={"values": {"default_codec": "vp8"}})
+    assert r.status_code == 400
+    r = await client.put(
+        "/api/settings/tuning",
+        json={"values": {"target_vmaf": "93", "auth_secret": "x"}},
+    )
+    assert r.status_code == 400
+    # The valid half of the rejected request must NOT have been applied.
+    r = await client.get("/api/settings/tuning")
+    assert "target_vmaf" not in r.json()["overrides"]
+
+
+async def test_tuning_api_requires_auth(unauthed_client: AsyncClient):
+    r = await unauthed_client.get("/api/settings/tuning")
+    assert r.status_code == 401
+
+
 # ── D10 — env back-compat: TF_PREFERRED_ENCODER alias ───────────────────────────────
 
 

@@ -6,6 +6,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **AV1 output codec** (SVT-AV1 software, av1_nvenc, av1_qsv), selectable
+  per job at queue time — HEVC stays the default; AV1 is opt-in with a
+  compatibility warning. Workers advertise which codecs they can encode and
+  only claim jobs they can handle; an AV1 job with no capable worker waits
+  in the queue instead of failing.
+- **VMAF quality gate**: after every encode the result is scored against the
+  original (resolution-matched model, worst-scenes percentile pooling). An
+  encode below the floor is discarded and the original kept — the job ends
+  *skipped*, never silently degraded. New `TF_TARGET_VMAF` /
+  `TF_VMAF_MIN_FLOOR` knobs; achieved VMAF shows in History.
+- **Per-file CRF search** (`TF_CRF_SEARCH_ENABLED`, on by default): short
+  samples are test-encoded to find the smallest file that still meets the
+  VMAF target, instead of trusting one fixed CRF for every file.
+- **Editable settings**: default codec and VMAF targets can now be changed
+  from the Settings page (stored as DB overrides; env vars remain the
+  defaults). Secrets and infra settings stay env-only.
+- 10-bit output everywhere (kills banding, even from 8-bit sources), and
+  per-encoder quality mapping — the same quality preset now produces
+  comparable visual quality on x265, QSV, NVENC, and SVT-AV1.
+
+### Changed
+- `TF_PREFERRED_ENCODER` is renamed `TF_PREFERRED_BACKEND` (the old name
+  still works as a deprecated alias for one release).
+- Derivative cache keys are now goal-based (source + codec + quality goal),
+  so the same rendition produced by different hardware deduplicates.
+- Worker image bundles a static ffmpeg with libvmaf for measurement;
+  hardware capability detection now probes with 10-bit input (Skylake-era
+  QSV that can't encode 10-bit HEVC falls back to software x265).
+- TV quality preset default corrected from CRF 24 to 21 ("don't degrade"
+  research: 24 was too aggressive for replace-the-original encodes).
+
 ### Fixed
 - Simplified PostgreSQL SSL handling — the connection URL's `sslmode` is now
   parsed natively by asyncpg instead of a redundant manual mapping. This also
