@@ -45,91 +45,66 @@ class EncodeResult:
     error_message: str | None = None
 
 
-def build_qsv_command(input_path: str, output_path: str, quality: int) -> list[str]:
-    """Build ffmpeg command for Intel QSV (hevc_qsv) encoding.
-
-    Uses -hwaccel qsv with explicit device path for Linux VAAPI-backed QSV.
-    Preset 'fast' matches common defaults — the QSV difference between
-    'slow' and 'fast' is ~3x in throughput for ~0.5dB PSNR. We're not
-    archival mastering here, we're just shrinking h264 to hevc.
-    """
-    return [
-        "ffmpeg",
-        "-hwaccel",
-        "qsv",
-        "-hwaccel_device",
-        "/dev/dri/renderD128",
-        "-hwaccel_output_format",
-        "qsv",
-        "-i",
-        input_path,
-        "-c:v",
-        "hevc_qsv",
-        "-global_quality",
-        str(quality),
-        "-preset",
-        "fast",
-        "-look_ahead",
-        "0",
-        "-low_power",
-        "0",
-        "-c:a",
-        "copy",
-        "-c:s",
-        "copy",
-        "-map",
-        "0",
-        # Newline-terminated progress on stderr; default rolling stats use \r
-        # which readline() never returns until the process exits.
-        "-progress",
-        "pipe:2",
-        "-nostats",
-        "-y",
-        output_path,
-    ]
+# ── Quality mapping ────────────────────────────────────────────────────
+#
+# `quality` everywhere in this project is on the x265-CRF reference scale
+# (the historical TF_QUALITY_* presets). Feeding that one number verbatim
+# to every encoder produces three different qualities — nvenc -cq 21 is
+# roughly x265 crf ~8, i.e. massively bloated. Each (codec, backend) maps
+# the reference value onto its native scale instead. Offsets come from the
+# VMAF-matched research in plans/codec-quality-defaults.md:
+#   hevc/nvenc  cq  ≈ crf + 11   (rigorous match: cq 33.4 ↔ crf 20.6)
+#   av1/cpu     crf ≈ crf + 7    (SVT-AV1 crf 27 ≈ x265 crf 20)
+#   av1/nvenc   cq  ≈ crf + 6
+#   av1/qsv     gq  ≈ crf + 4
+# (offset, min, max) per pair — clamped to the encoder's native range.
+_QUALITY_MAP: dict[tuple[str, str], tuple[int, int, int]] = {
+    ("hevc", "cpu"): (0, 0, 51),
+    ("hevc", "qsv"): (0, 1, 51),
+    ("hevc", "nvenc"): (11, 0, 51),
+    ("av1", "cpu"): (7, 0, 63),
+    ("av1", "nvenc"): (6, 0, 51),
+    ("av1", "qsv"): (4, 1, 51),
+}
 
 
-def build_nvenc_command(input_path: str, output_path: str, quality: int) -> list[str]:
-    """Build ffmpeg command for NVIDIA NVENC (hevc_nvenc) encoding."""
-    return [
-        "ffmpeg",
-        "-hwaccel",
-        "cuda",
-        "-hwaccel_output_format",
-        "cuda",
-        "-i",
-        input_path,
-        "-c:v",
-        "hevc_nvenc",
-        "-cq",
-        str(quality),
-        "-preset",
-        "p7",
-        "-tune",
-        "hq",
-        "-rc",
-        "vbr",
-        "-c:a",
-        "copy",
-        "-c:s",
-        "copy",
-        "-map",
-        "0",
-        "-progress",
-        "pipe:2",
-        "-nostats",
-        "-y",
-        output_path,
-    ]
+def map_quality(codec: str, backend: str, quality: int) -> int:
+    """Map a reference-scale quality value onto the native scale of the
+    (codec, backend) encoder. Raises ValueError for unknown pairs."""
+    entry = _QUALITY_MAP.get((codec, backend))
+    if entry is None:
+        raise ValueError(
+            f"Unknown (codec, backend) pair: ({codec}, {backend})."
+            f" Valid: {sorted(_QUALITY_MAP.keys())}"
+        )
+    offset, lo, hi = entry
+    return max(lo, min(hi, quality + offset))
 
 
-def build_software_command(input_path: str, output_path: str, quality: int) -> list[str]:
-    """Build ffmpeg command for software x265 (libx265) encoding.
+# Shared tail: copy audio/subs, keep every stream, newline-terminated
+# progress on stderr (default rolling stats use \r which readline() never
+# returns until the process exits).
+_COMMON_TAIL = [
+    "-c:a",
+    "copy",
+    "-c:s",
+    "copy",
+    "-map",
+    "0",
+    "-progress",
+    "pipe:2",
+    "-nostats",
+    "-y",
+]
 
-    Preset 'fast' uses every available CPU thread well and is a
-    common default. 'medium' and 'slow' more than double the encode
-    time for marginal PSNR gains.
-    """
+
+def build_hevc_cpu_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """Software x265. Preset slow: this is a replace-the-original archival
+    encode — quality-per-byte beats throughput. 10-bit output kills banding
+    even from 8-bit sources. Anime gets aq-mode=3 (mandatory for banding)."""
+    x265_params = ["-x265-params", "aq-mode=3"] if content == "anime" else []
     return [
         "ffmpeg",
         "-i",
@@ -137,38 +112,197 @@ def build_software_command(input_path: str, output_path: str, quality: int) -> l
         "-c:v",
         "libx265",
         "-crf",
-        str(quality),
+        str(map_quality("hevc", "cpu", quality)),
         "-preset",
-        "fast",
-        "-c:a",
-        "copy",
-        "-c:s",
-        "copy",
-        "-map",
-        "0",
-        "-progress",
-        "pipe:2",
-        "-nostats",
-        "-y",
+        "slow",
+        *x265_params,
+        "-pix_fmt",
+        "yuv420p10le",
+        *_COMMON_TAIL,
         output_path,
     ]
 
 
-ENCODER_BUILDERS = {
-    "qsv": build_qsv_command,
-    "nvenc": build_nvenc_command,
-    "cpu": build_software_command,
+def build_hevc_qsv_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """Intel QSV HEVC. Decodes via QSV to system memory (no
+    -hwaccel_output_format qsv) so the 8→10-bit p010le conversion happens
+    before upload — required for Main10 output. Skylake-and-older iGPUs
+    can't encode 10-bit HEVC; capability detection probes with p010le so
+    such nodes never advertise qsv."""
+    return [
+        "ffmpeg",
+        "-hwaccel",
+        "qsv",
+        "-hwaccel_device",
+        "/dev/dri/renderD128",
+        "-i",
+        input_path,
+        "-c:v",
+        "hevc_qsv",
+        "-global_quality",
+        str(map_quality("hevc", "qsv", quality)),
+        "-preset",
+        "fast",
+        "-look_ahead",
+        "1",
+        "-low_power",
+        "0",
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+def build_hevc_nvenc_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """NVIDIA NVENC HEVC — the modern VBR+cq/p7/10-bit recipe. -b:v 0 makes
+    -cq the sole rate control (true constant quality)."""
+    return [
+        "ffmpeg",
+        "-hwaccel",
+        "cuda",
+        "-i",
+        input_path,
+        "-c:v",
+        "hevc_nvenc",
+        "-cq",
+        str(map_quality("hevc", "nvenc", quality)),
+        "-preset",
+        "p7",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-b:v",
+        "0",
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+def build_av1_cpu_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """SVT-AV1 — the real AV1 path for the CPU fleet. tune=0 (VQ mode),
+    scm=0 (film content, not screen content)."""
+    return [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-c:v",
+        "libsvtav1",
+        "-crf",
+        str(map_quality("av1", "cpu", quality)),
+        "-preset",
+        "6",
+        "-svtav1-params",
+        "tune=0:scm=0",
+        "-pix_fmt",
+        "yuv420p10le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+def build_av1_nvenc_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """NVIDIA NVENC AV1 (Ada / RTX 40xx+)."""
+    return [
+        "ffmpeg",
+        "-hwaccel",
+        "cuda",
+        "-i",
+        input_path,
+        "-c:v",
+        "av1_nvenc",
+        "-cq",
+        str(map_quality("av1", "nvenc", quality)),
+        "-preset",
+        "p7",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-b:v",
+        "0",
+        "-multipass",
+        "fullres",
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+def build_av1_qsv_command(
+    input_path: str, output_path: str, quality: int, content: str | None = None
+) -> list[str]:
+    """Intel QSV AV1 (Arc / gen12+). Detection-gated seam — no such
+    hardware in the current fleet, but the builder is real."""
+    return [
+        "ffmpeg",
+        "-hwaccel",
+        "qsv",
+        "-hwaccel_device",
+        "/dev/dri/renderD128",
+        "-i",
+        input_path,
+        "-c:v",
+        "av1_qsv",
+        "-global_quality",
+        str(map_quality("av1", "qsv", quality)),
+        "-preset",
+        "veryslow",
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+# Two-axis lookup: (codec, backend) → builder. Adding VP9/AV2 later is a
+# new codec value plus builder entries here — nothing structural.
+ENCODER_BUILDERS: dict[tuple[str, str], Callable[..., list[str]]] = {
+    ("hevc", "cpu"): build_hevc_cpu_command,
+    ("hevc", "qsv"): build_hevc_qsv_command,
+    ("hevc", "nvenc"): build_hevc_nvenc_command,
+    ("av1", "cpu"): build_av1_cpu_command,
+    ("av1", "nvenc"): build_av1_nvenc_command,
+    ("av1", "qsv"): build_av1_qsv_command,
 }
 
 
 def build_encode_command(
-    encoder: str, input_path: str, output_path: str, quality: int
+    codec: str,
+    backend: str,
+    input_path: str,
+    output_path: str,
+    quality: int,
+    *,
+    content: str | None = None,
 ) -> list[str]:
-    """Build the ffmpeg command for the given encoder type."""
-    builder = ENCODER_BUILDERS.get(encoder)
+    """Build the ffmpeg command for the given (codec, backend) pair.
+
+    Args:
+        codec: Target codec ('hevc' | 'av1').
+        backend: Hardware axis ('cpu' | 'qsv' | 'nvenc').
+        quality: Reference-scale quality (x265-CRF-like); mapped per encoder.
+        content: Optional content hint ('anime' enables x265 aq-mode=3).
+    """
+    builder = ENCODER_BUILDERS.get((codec, backend))
     if builder is None:
-        raise ValueError(f"Unknown encoder: {encoder}. Valid: {list(ENCODER_BUILDERS.keys())}")
-    return builder(input_path, output_path, quality)
+        raise ValueError(
+            f"Unknown (codec, backend) pair: ({codec}, {backend})."
+            f" Valid: {sorted(ENCODER_BUILDERS.keys())}"
+        )
+    return builder(input_path, output_path, quality, content)
 
 
 def parse_progress(line: str, total_duration: float) -> float | None:
