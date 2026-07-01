@@ -6,7 +6,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from transcode_forge.models.job import Job
+from transcode_forge.worker.hardware import HardwareCapabilities
 from transcode_forge.worker.http_agent import HttpWorkerAgent
+
+
+def _cpu_caps() -> HardwareCapabilities:
+    return HardwareCapabilities(
+        encoders=["cpu"],
+        pairs=[("av1", "cpu"), ("hevc", "cpu")],
+        ffmpeg_version="ffmpeg 7.0",
+        os_platform="Linux",
+    )
 from transcode_forge.worker.storage.filesystem import FilesystemBackend
 from transcode_forge.worker.storage.s3 import S3Backend
 
@@ -138,6 +148,7 @@ class TestProcessJobS3HappyPath:
 
         agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
         agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
 
         job = Job(
             source_path="s3://bucket/masters/test.mkv",
@@ -175,9 +186,7 @@ class TestProcessJobS3HappyPath:
             }
             # Mock _get_backend_for_job to return our mock
             with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
-                # Call _process_job
-                encoder = "libx265"
-                await agent._process_job(job, encoder)
+                await agent._process_job(job)
 
         # Verify register_derivative was called for S3
         agent._client.register_derivative.assert_called_once()
@@ -201,6 +210,7 @@ class TestProcessJobFilesystemHappyPath:
 
         agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
         agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
 
         job = Job(
             source_path="/media/movies/test.mkv",
@@ -232,8 +242,7 @@ class TestProcessJobFilesystemHappyPath:
 
             # Mock _get_backend_for_job to return our mock
             with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
-                encoder = "libx265"
-                await agent._process_job(job, encoder)
+                await agent._process_job(job)
 
         # Verify complete was called with space_saved from pipeline result
         agent._client.complete.assert_called_once()
@@ -250,6 +259,7 @@ class TestPathMapTranslation:
         settings = test_settings.model_copy(update={"path_map": {"/data/media": "/mnt/media"}})
         agent = HttpWorkerAgent(settings, "http://scheduler", "test-token")
         agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
 
         job = Job(
             source_path="/data/media/movies/test.mkv",
@@ -270,7 +280,7 @@ class TestPathMapTranslation:
         with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
             mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
             with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
-                await agent._process_job(job, "libx265")
+                await agent._process_job(job)
 
         mock_backend.fetch.assert_called_once_with("/mnt/media/movies/test.mkv")
 
@@ -280,6 +290,7 @@ class TestPathMapTranslation:
         settings = test_settings.model_copy(update={"path_map": {"masters": "/mnt/masters"}})
         agent = HttpWorkerAgent(settings, "http://scheduler", "test-token")
         agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
 
         job = Job(
             source_path="masters/movies/test.mkv",
@@ -302,7 +313,7 @@ class TestPathMapTranslation:
         with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
             mock_pipeline.return_value = {"source_size": 10, "space_saved": 0}
             with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
-                await agent._process_job(job, "libx265")
+                await agent._process_job(job)
 
         mock_backend.fetch.assert_called_once_with("masters/movies/test.mkv")
 
@@ -331,6 +342,7 @@ class TestScratchManagerLifecycle:
         """Scratch manager cleanup_on_shutdown is called during agent cleanup."""
         agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
         agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
 
         # Mock the scratch manager
         agent.scratch_manager = AsyncMock()
@@ -347,7 +359,7 @@ class TestScratchManagerLifecycle:
 
 
 class TestDerivativeKeyConsistency:
-    """Tests to ensure derivative key computation is consistent."""
+    """Tests to ensure derivative key computation is consistent (goal-keyed)."""
 
     def test_compute_derivative_key_consistent(self):
         """compute_derivative_key produces the same hash for identical parameters."""
@@ -360,9 +372,8 @@ class TestDerivativeKeyConsistency:
             "source_audio_codec": "aac",
             "target_resolution": "1280x720",
             "target_audio_codec": "aac",
-            "encoder": "libx265",
-            "crf": 21,
-            "preset": "medium",
+            "target_codec": "hevc",
+            "target_vmaf": 97,
             "local_output": local_output,
         }
 
@@ -370,8 +381,9 @@ class TestDerivativeKeyConsistency:
         key2 = compute_derivative_key(**params)
         assert key1 == key2
 
-    def test_compute_derivative_key_differs_by_crf(self):
-        """compute_derivative_key differs when CRF changes."""
+    def test_compute_derivative_key_ignores_recipe(self):
+        """The key is the GOAL — backend/crf/preset must not change it
+        (same goal via a different recipe is the same derivative)."""
         from transcode_forge.models.derivative import compute_derivative_key
 
         local_output = Path("/output/test.mkv")
@@ -381,14 +393,13 @@ class TestDerivativeKeyConsistency:
             "source_audio_codec": "aac",
             "target_resolution": "1280x720",
             "target_audio_codec": "aac",
-            "encoder": "libx265",
+            "target_codec": "hevc",
+            "target_vmaf": 97,
+            "backend": "cpu",
             "crf": 21,
-            "preset": "medium",
+            "preset": "slow",
             "local_output": local_output,
         }
-        params2 = params1.copy()
-        params2["crf"] = 24
+        params2 = {**params1, "backend": "nvenc", "crf": 32, "preset": "p7"}
 
-        key1 = compute_derivative_key(**params1)
-        key2 = compute_derivative_key(**params2)
-        assert key1 != key2
+        assert compute_derivative_key(**params1) == compute_derivative_key(**params2)

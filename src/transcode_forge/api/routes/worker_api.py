@@ -96,6 +96,9 @@ class RegisterRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     host: str = Field(min_length=1, max_length=120)
     capabilities: list[str]
+    # Workers predating codec advertisement omit this — default to hevc so
+    # a rolling update never hands an old worker an AV1 job.
+    supported_codecs: list[str] | None = None
     ffmpeg_version: str | None = None
     max_concurrent: int = Field(default=1, ge=1, le=8)
 
@@ -119,6 +122,10 @@ class CompleteRequest(BaseModel):
     output_size: int = Field(ge=0)
     space_saved: int = Field(ge=0)
     source_size: int = Field(ge=0)
+    # Encode outcome (None for workers predating the VMAF gate).
+    achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
+    resolved_crf: int | None = Field(default=None, ge=0, le=63)
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
 
 
 # Worker-reported error messages can embed ffmpeg stderr; cap what we
@@ -132,6 +139,15 @@ class FailedRequest(BaseModel):
     retry_count: int = Field(default=0, ge=0)
 
 
+class SkippedRequest(BaseModel):
+    """A skip outcome the worker decided (VMAF gate / size regression) —
+    the original file was kept; this is not a retryable failure."""
+
+    reason: str = Field(pattern=r"^(below_vmaf_floor|size_regression)$")
+    error_message: str = ""
+    achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
+
+
 class CheckDerivativeRequest(BaseModel):
     job_id: str
     derivative_key: str = Field(min_length=1, max_length=512)
@@ -140,6 +156,11 @@ class CheckDerivativeRequest(BaseModel):
 class RegisterDerivativeRequest(BaseModel):
     derivative_key: str = Field(min_length=1, max_length=512)
     output_size: int = Field(ge=0)
+    # Outcome attributes for the derivative row (complete arrives after
+    # register-derivative, so the job row doesn't have these yet).
+    achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
+    resolved_crf: int | None = Field(default=None, ge=0, le=63)
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
 
 
 # ── Routes ────────────────────────────────────────────────────────────
@@ -172,6 +193,7 @@ async def register(
         name=body.name,
         host=body.host,
         capabilities=body.capabilities,
+        supported_codecs=body.supported_codecs or ["hevc"],
         ffmpeg_version=body.ffmpeg_version,
         max_concurrent=body.max_concurrent,
         status=WorkerStatus.ONLINE,
@@ -230,12 +252,15 @@ async def heartbeat(
 @router.post("/worker/claim-job")
 async def claim_job(
     body: ClaimRequest,
+    request: Request,
     db: DBConnection = Depends(get_db),
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> dict[str, Any]:
-    """Atomically claim the next pending/queued job, respecting queue
-    pause + scheduling windows. Returns the job plus library backend info."""
+    """Atomically claim the next pending/queued job the worker can encode,
+    respecting queue pause + scheduling windows. Returns the job plus
+    library backend info and the scheduler-owned VMAF floor."""
     from transcode_forge.repos import libraries as library_repo
+    from transcode_forge.repos import settings as settings_repo
     from transcode_forge.repos import system as system_repo
 
     _require_worker_identity(token_row, body.worker_id)
@@ -243,7 +268,10 @@ async def claim_job(
     if await system_repo.is_queue_paused(db):
         return {"job": None, "reason": "queue_paused"}
 
-    job = await job_repo.claim_next_job(db, body.worker_id)
+    worker = await worker_repo.get_worker(db, body.worker_id)
+    supported_codecs = worker.supported_codecs if worker else ["hevc"]
+
+    job = await job_repo.claim_next_job(db, body.worker_id, supported_codecs)
     if job is not None:
         # claim_next_job returns ASSIGNED; bump it to TRANSCODING here so the
         # job doesn't sit in ASSIGNED for the whole encode (which broke any
@@ -253,13 +281,20 @@ async def claim_job(
         await job_repo.update_job(db, job.id, status=JobStatus.TRANSCODING)
         job = job.model_copy(update={"status": JobStatus.TRANSCODING})
 
-        # Fetch the library to include backend info in the response.
+        # Fetch the library to include backend + content info in the response.
         library = await library_repo.get_library(db, job.library)
         job_dict = job.model_dump(mode="json")
         if library:
             job_dict["_backend_type"] = library.get("backend", "filesystem")
             job_dict["_s3_bucket"] = library.get("s3_bucket", "")
             job_dict["_s3_prefix"] = library.get("s3_prefix", "")
+            job_dict["_media_type"] = library.get("media_type", "")
+        # The VMAF floor is scheduler-owned config (DB override else env) —
+        # workers get it with the job so there's one source of truth.
+        settings = getattr(request.app.state, "settings", None)
+        job_dict["_vmaf_min_floor"] = float(
+            await settings_repo.effective(db, "vmaf_min_floor", settings)
+        )
         return {"job": job_dict}
 
     return {"job": None}
@@ -368,9 +403,48 @@ async def complete_job(
         output_size=body.output_size,
         space_saved=body.space_saved,
         source_size=body.source_size,
+        achieved_vmaf=body.achieved_vmaf,
+        resolved_crf=body.resolved_crf,
+        backend_used=body.backend_used,
         progress=1.0,
         completed_at=datetime.now(UTC).isoformat(),
     )
+
+
+@router.post("/worker/job/{job_id}/skipped", status_code=204)
+async def skip_job(
+    job_id: str,
+    body: SkippedRequest,
+    db: DBConnection = Depends(get_db),
+    token_row: dict[str, Any] = Depends(require_worker_token),
+) -> None:
+    """Record a worker-decided skip outcome (VMAF gate / size regression).
+
+    The original file was kept — the job ends SKIPPED (not FAILED) with the
+    measured score, and the file lands on the skipped page with its reason.
+    """
+    from transcode_forge.models.skipped import SkipReason
+    from transcode_forge.repos import skipped as skip_repo
+
+    job = await _require_owned_job(db, job_id, token_row)
+    await job_repo.update_job(
+        db,
+        job_id,
+        status=JobStatus.SKIPPED,
+        error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
+        achieved_vmaf=body.achieved_vmaf,
+        completed_at=datetime.now(UTC).isoformat(),
+    )
+    await skip_repo.record_skip(
+        db,
+        file_path=job.source_path,
+        library=job.library,
+        codec=job.source_codec,
+        resolution=job.source_resolution,
+        file_size=job.source_size,
+        skip_reason=SkipReason(body.reason),
+    )
+    logger.info("Job %s skipped by worker: %s (%s)", job_id, body.reason, body.error_message[:120])
 
 
 @router.post("/worker/job/{job_id}/failed", status_code=204)
@@ -424,14 +498,14 @@ async def register_derivative(
         )
         return
 
-    # Extract the job fields needed for derivative registration.
+    # Extract the job fields needed for derivative registration. The key
+    # is goal-keyed; backend/crf/preset are recipe attributes on the row.
     source_resolution = getattr(job, "source_resolution", "") or None
     source_audio_codec = getattr(job, "source_audio_codec", "") or None
-    target_resolution = getattr(job, "target_resolution", "")
-    target_audio_codec = getattr(job, "target_audio_codec", "")
-    encoder = getattr(job, "encoder", "")
-    crf = getattr(job, "quality_value", 0)
-    preset = getattr(job, "preset", "medium")
+    target_resolution = getattr(job, "target_resolution", "") or (job.source_resolution or "")
+    target_audio_codec = getattr(job, "target_audio_codec", "") or "copy"
+    crf = body.resolved_crf if body.resolved_crf is not None else job.quality_value
+    preset = getattr(job, "preset", "") or ""
 
     # Register the derivative. If a UNIQUE violation occurs (another worker
     # registered the same key), catch it and treat as a benign dedup win.
@@ -445,7 +519,10 @@ async def register_derivative(
             source_audio_codec=source_audio_codec,
             target_resolution=target_resolution,
             target_audio_codec=target_audio_codec,
-            encoder=encoder,
+            target_codec=job.target_codec,
+            target_vmaf=job.target_vmaf,
+            achieved_vmaf=body.achieved_vmaf,
+            backend=body.backend_used or "cpu",
             crf=int(crf) if crf else 0,
             preset=preset,
             derivative_key=body.derivative_key,
