@@ -249,6 +249,86 @@ class TestProcessJobFilesystemHappyPath:
         call_kwargs = agent._client.complete.call_args.kwargs
         assert call_kwargs["space_saved"] == 5000000
 
+    @pytest.mark.asyncio
+    async def test_process_job_passes_encoder_backend_string_to_pipeline(
+        self, test_settings, tmp_path
+    ):
+        """Regression (fleet crash-loop, 2026-07-01): the encoder axis and the
+        STORAGE backend are different things. run_pipeline must receive the
+        (codec, backend) strings — a FilesystemBackend object leaking into
+        `backend` blew up build_encode_command on every AV1 job."""
+        output_file = tmp_path / "output.mkv"
+        output_file.write_bytes(b"fake video data")
+
+        agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
+        agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
+
+        job = Job(
+            source_path="/media/tv/ep.mkv",
+            library="tv",
+            source_codec="h264",
+            quality_value=21,
+            target_codec="av1",
+            target_vmaf=97.0,
+        )
+        object.__setattr__(job, "_backend_type", "filesystem")
+
+        mock_storage = AsyncMock()
+        mock_storage.fetch = AsyncMock(return_value=output_file)
+        mock_storage.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=5))
+        mock_storage.cleanup = AsyncMock()
+        agent._client = AsyncMock()
+
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_storage):
+                await agent._process_job(job, vmaf_floor=95.0)
+
+        kwargs = mock_pipeline.call_args.kwargs
+        assert kwargs["codec"] == "av1"
+        assert kwargs["backend"] == "cpu"  # a string, never the storage object
+        assert isinstance(kwargs["backend"], str)
+        assert kwargs["target_vmaf"] == 97.0
+        assert kwargs["vmaf_perc5_floor"] == 95.0
+
+    @pytest.mark.asyncio
+    async def test_process_job_unexpected_error_fails_job_not_worker(self, test_settings, tmp_path):
+        """Hardening from the same incident: an unexpected exception inside the
+        pipeline must FAIL the job, not crash the agent — a crashing agent
+        restarts, re-registers, releases the job, and the next worker eats the
+        same bug (fleet-wide crash-loop)."""
+        output_file = tmp_path / "output.mkv"
+        output_file.write_bytes(b"x")
+
+        agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
+        agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
+
+        job = Job(
+            source_path="/media/tv/ep.mkv",
+            library="tv",
+            source_codec="h264",
+            quality_value=21,
+        )
+        object.__setattr__(job, "_backend_type", "filesystem")
+
+        mock_storage = AsyncMock()
+        mock_storage.fetch = AsyncMock(return_value=output_file)
+        mock_storage.cleanup = AsyncMock()
+        agent._client = AsyncMock()
+
+        with patch(
+            "transcode_forge.worker.http_agent.run_pipeline",
+            side_effect=ValueError("boom — not a PipelineError"),
+        ):
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_storage):
+                await agent._process_job(job)  # must NOT raise
+
+        agent._client.failed.assert_called_once()
+        assert "boom" in agent._client.failed.call_args.kwargs["error_message"]
+        assert agent._current_job_id is None
+
 
 class TestPathMapTranslation:
     """TF_PATH_MAP must be applied to filesystem sources before fetch — and

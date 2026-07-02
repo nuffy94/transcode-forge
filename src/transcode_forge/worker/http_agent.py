@@ -189,19 +189,21 @@ class HttpWorkerAgent:
             backend,
         )
 
-        # Construct the backend for this job's library.
+        # Construct the STORAGE backend for this job's library (distinct from
+        # `backend`, the encoder hardware axis — shadowing the two crashed
+        # every AV1 job fleet-wide on 2026-07-01).
         # The claim-job response includes backend_type, s3_bucket, s3_prefix.
         backend_type_str = getattr(job, "_backend_type", "filesystem")
         is_s3 = backend_type_str == StorageBackendType.S3 or backend_type_str == "s3"
-        backend = await self._get_backend_for_job(job)
+        storage = await self._get_backend_for_job(job)
 
-        # Fetch the source via the backend. For filesystem, this is a no-op
-        # (returns the path-mapped path). For S3, this downloads to scratch.
-        # TF_PATH_MAP only applies to filesystem paths — S3 keys are bucket
-        # coordinates, not mount points.
+        # Fetch the source via the storage backend. For filesystem, this is a
+        # no-op (returns the path-mapped path). For S3, this downloads to
+        # scratch. TF_PATH_MAP only applies to filesystem paths — S3 keys are
+        # bucket coordinates, not mount points.
         source_ref = job.source_path if is_s3 else self._translate_path(job.source_path)
         try:
-            source_path_local = await backend.fetch(source_ref)
+            source_path_local = await storage.fetch(source_ref)
         except (OSError, Exception) as e:
             logger.error("Failed to fetch source for job %s: %s", job.id, e)
             await self._client.failed(
@@ -215,7 +217,7 @@ class HttpWorkerAgent:
         # For S3 libraries, compute the derivative key and look it up via the scheduler.
         # If a derivative exists, the scheduler marks the job COMPLETE and we skip encoding.
         if is_s3:
-            dedup_result = await self._try_dedup(job, backend)
+            dedup_result = await self._try_dedup(job, storage)
             if dedup_result:
                 # Job was marked COMPLETE via dedup. Report completion with reused output size.
                 await self._client.complete(
@@ -229,7 +231,7 @@ class HttpWorkerAgent:
                     job.id,
                     dedup_result.get("derivative_key", "unknown"),
                 )
-                await backend.cleanup(job)
+                await storage.cleanup(job)
                 return
 
         async def on_progress(progress: float, speed: float | None) -> None:
@@ -256,12 +258,12 @@ class HttpWorkerAgent:
                 progress_callback=on_progress,
             )
 
-            # Commit the output via the backend.
+            # Commit the output via the storage backend.
             # For filesystem: swap already happened in run_pipeline; commit() validates sizes.
             # For S3: upload the transcoded file to S3 (but don't register yet).
             # For filesystem, space_saved comes from the pipeline result (bak file size).
             space_saved = 0 if is_s3 else int(result.get("space_saved", 0))
-            commit_result = await backend.commit(
+            commit_result = await storage.commit(
                 local_output=source_path_local,
                 source=job.source_path,
                 job=job,
@@ -326,10 +328,23 @@ class HttpWorkerAgent:
                 retry_count=new_retry,
             )
             logger.warning("Job %s failed (attempt %d): %s", job.id, new_retry, e)
+        except Exception as e:
+            # An unexpected bug must fail THIS JOB, not the agent — a crashing
+            # agent restarts, re-registers (which releases the job), and the
+            # next worker hits the same bug: a fleet-wide crash-loop.
+            logger.exception("Unexpected error processing job %s", job.id)
+            try:
+                await self._client.failed(
+                    job_id=job.id,
+                    error_message=f"Unexpected worker error: {e}",
+                    retry_count=job.retry_count + 1,
+                )
+            except (httpx.HTTPError, OSError):
+                logger.error("Could not report job %s failure to scheduler", job.id)
         finally:
             self._current_job_id = None
             self._current_progress = 0.0
-            await backend.cleanup(job)
+            await storage.cleanup(job)
 
     def _translate_path(self, path: str) -> str:
         for linux_prefix, local_prefix in self.settings.path_map.items():
