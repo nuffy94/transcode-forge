@@ -121,7 +121,8 @@ admin UI (libraries, schedules, exclusions, worker tokens).
 
 **Guides:** [Getting Started](docs/GETTING-STARTED.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md) · [Backup](docs/BACKUP.md) ·
-[Upgrade](docs/UPGRADE.md) · [Changelog](CHANGELOG.md). For the exhaustive
+[Upgrade](docs/UPGRADE.md) · [Staging](docs/STAGING.md) ·
+[Changelog](CHANGELOG.md). For the exhaustive
 env-var list and internal architecture, see [CLAUDE.md](./CLAUDE.md).
 
 ## Security
