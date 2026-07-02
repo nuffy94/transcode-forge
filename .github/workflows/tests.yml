@@ -25,6 +25,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --dev
 
+      - name: Install ffmpeg
+        # Needed by the real-encode pipeline integration test
+        # (tests/test_pipeline_integration.py). Ubuntu's build ships
+        # libx265 + libsvtav1; the test self-skips any missing encoder.
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Lint
         run: uv run ruff check src/ tests/
 
