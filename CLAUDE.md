@@ -34,8 +34,9 @@ uv run mypy src/
 ```
 
 CI (`.github/workflows/tests.yml`) runs `ruff check`, `ruff format --check`,
-and `pytest --cov` on every push and PR. A formatting drift will fail the
-build — always run `ruff format` before committing.
+`mypy src/`, and `pytest --cov` on every push and PR. A formatting drift or
+type error will fail the build — always run `ruff format` and `mypy src/`
+before committing.
 
 ## Architecture
 
