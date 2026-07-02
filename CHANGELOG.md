@@ -4,6 +4,17 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-07-01
+
+### Fixed
+- Worker crash-loop on AV1 jobs: the encoder hardware axis and the storage
+  backend shared a variable name in the job processor, so the pipeline
+  received a storage object where the codec backend string belonged. Any
+  AV1 job crashed the claiming worker, which restarted, released the job,
+  and passed the bug to the next worker. Regression-tested.
+- Hardening from the same incident: an unexpected exception while
+  processing a job now fails that job instead of crashing the agent.
+
 ## [0.8.0] - 2026-07-01
 
 ### Added
