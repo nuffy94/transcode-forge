@@ -1,4 +1,9 @@
-<div class="space-y-3.5 font-mono text-[11px]">
+{% from "partials/_icons.html" import icon %}
+{#- The jobs-queued span is a data-contract hook (C.1):
+    tests/test_view_consistency.py extracts its bare-integer text and
+    cross-checks it against the dashboard tile, sidebar badge, and
+    /api/stats. Keep the id and the bare number. -#}
+<div class="space-y-3 font-mono text-[11px]">
     <div class="flex items-center justify-between">
         <span class="forge-stat-label">Redis</span>
         <span class="flex items-center gap-2">
@@ -25,25 +30,25 @@
     </div>
     <div class="flex items-center justify-between">
         <span class="forge-stat-label">Queue</span>
-        <span class="flex items-center gap-2">
+        <span class="flex items-center gap-1.5">
             {% if queue_paused %}
             <span class="text-forge-brass font-semibold uppercase tracking-wider">Paused</span>
-            <span class="material-symbols-outlined text-forge-brass text-sm">pause</span>
+            <span class="text-forge-brass">{{ icon('pause', 'forge-icon--sm') }}</span>
             {% else %}
             <span class="text-forge-ember font-semibold uppercase tracking-wider">Running</span>
-            <span class="material-symbols-outlined text-forge-ember text-sm">play_arrow</span>
+            <span class="text-forge-ember">{{ icon('play', 'forge-icon--sm') }}</span>
             {% endif %}
         </span>
     </div>
 
-    <div class="pt-3.5 mt-1 border-t border-forge-rule/60 space-y-2">
+    <div class="pt-3 border-t border-forge-rule/60 space-y-2">
         <div class="flex justify-between items-center">
             <span class="forge-stat-label">Libraries</span>
-            <span class="font-mono font-semibold text-forge-paper tabular-nums">{{ "%02d"|format(library_count) }}</span>
+            <span class="font-semibold text-forge-paper tabular-nums">{{ library_count }}</span>
         </div>
         <div class="flex justify-between items-center">
-            <span class="forge-stat-label">In Queue</span>
-            <span class="font-mono font-semibold {% if jobs_queued %}text-forge-ember{% else %}text-forge-mute{% endif %} tabular-nums">{{ "%04d"|format(jobs_queued) }}</span>
+            <span class="forge-stat-label">In queue</span>
+            <span id="jobs-queued" class="font-semibold {% if jobs_queued %}text-forge-ember{% else %}text-forge-mute{% endif %} tabular-nums">{{ jobs_queued }}</span>
         </div>
     </div>
 </div>

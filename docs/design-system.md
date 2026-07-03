@@ -202,6 +202,10 @@ bare "0%". `forge-meter-ticks` adds 25/50/75 gauge marks below.
 
 **Tabs** — `forge-tab` + `is-active`, in a bordered row.
 
+**Tile button** — `forge-tile`: a stat readout that doubles as a filter
+shortcut (queue status strip). JS toggles `is-active` + `aria-pressed`;
+the tile is a shortcut into a real form control, never the only control.
+
 **Dialog** — `<dialog class="forge-dialog">` with a `forge-panel` inside.
 
 **Drawer** — right-side detail scaffold (Step 3's file drawer consumes):
