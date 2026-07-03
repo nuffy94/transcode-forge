@@ -230,13 +230,16 @@ class TestPartials:
         assert "TV" in response.text
 
     async def test_pagination_count_is_page_aware(self, client: AsyncClient):
-        """The 'Showing X to Y' count must reflect the current page, not a
-        hardcoded start of 1 (regression: page 7 read 'Showing 1 - 50')."""
+        """The 'X to Y of Z' count must reflect the current page, not a
+        hardcoded start of 1 (regression: page 7 read 'Showing 1 - 50').
+        The listing logic lives in the shared catalog module now."""
         for path in ("/movies", "/tv"):
             response = await client.get(path)
             assert response.status_code == 200
-            # page-aware range computation, not a hardcoded start
-            assert "(meta.page - 1) * meta.per_page" in response.text
+            assert "/static/js/catalog.js" in response.text
+        js = (await client.get("/static/js/catalog.js")).text
+        # page-aware range computation, not a hardcoded start
+        assert "(meta.page - 1) * meta.per_page" in js
 
     async def test_jobs_partial_with_data(self, client: AsyncClient, app):
         db = app.state.db

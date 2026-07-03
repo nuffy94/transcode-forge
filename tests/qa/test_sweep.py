@@ -87,6 +87,26 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
         if toasts:
             error_toasts[path] = toasts
 
+    # File-detail drawer: open a transcoded movie (complete + h264 source =
+    # a seeded encode with VMAF + timeline), re-run axe on the open state,
+    # and keep a screenshot of it.
+    page.goto(f"{qa_base_url}/movies", wait_until="domcontentloaded")
+    page.wait_for_selector("tr[data-file-id]", timeout=10_000)
+    page.select_option("#mv-status", "complete")
+    page.wait_for_selector("tr[data-file-id]:has(.codec-h264)", timeout=10_000)
+    page.locator("tr[data-file-id]:has(.codec-h264)").first.click()
+    page.wait_for_selector("#file-drawer.is-open", timeout=5_000)
+    page.wait_for_timeout(600)
+    page.screenshot(path=str(SHOTS / "movies_drawer.png"))
+    drawer_violations = [v for v in _run_axe(page) if v["id"] in BLOCKING_RULES]
+    if drawer_violations:
+        axe_blocking["/movies#drawer"] = drawer_violations
+    drawer_toasts = page.evaluate(
+        "Array.from(document.querySelectorAll('[data-toast-type=\"error\"]')).map(e => e.innerText)"
+    )
+    if drawer_toasts:
+        error_toasts["/movies#drawer"] = drawer_toasts
+
     report = json.dumps(
         {
             "axe_blocking": axe_blocking,

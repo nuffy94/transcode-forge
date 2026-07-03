@@ -17,8 +17,9 @@ class TestSidebar:
 
     def test_sidebar_renders(self, page: Page, base_url: str):
         page.goto(base_url)
-        sidebar = page.locator("aside")
-        expect(sidebar).to_be_visible()
+        # aside.forge-sidebar specifically — the file-detail drawer is a
+        # second <aside>, so a bare tag locator is ambiguous.
+        expect(page.locator("aside.forge-sidebar")).to_be_visible()
 
     def test_sidebar_has_all_nav_items(self, page: Page, base_url: str):
         page.goto(base_url)
