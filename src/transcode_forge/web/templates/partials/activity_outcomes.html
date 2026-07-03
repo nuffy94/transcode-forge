@@ -1,0 +1,148 @@
+{% from "partials/_macros.html" import sort_th %}
+{% from "partials/_icons.html" import icon %}
+{% if jobs %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            {{ sort_th('Filename · Library', 'source_path', sort, dir, 'sortOutcomes') }}
+            {{ sort_th('Status', 'status', sort, dir, 'sortOutcomes') }}
+            {{ sort_th('Size Δ', 'space_saved', sort, dir, 'sortOutcomes') }}
+            {{ sort_th('Worker', 'worker_id', sort, dir, 'sortOutcomes') }}
+            <th>Took</th>
+            {{ sort_th('Finished', 'completed_at', sort, dir, 'sortOutcomes') }}
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        {% set fid = file_ids.get(job.source_path) %}
+        <tr {% if fid %}data-file-id="{{ fid }}" class="cursor-pointer"{% endif %}>
+            <td>
+                <span class="block text-[13px] font-medium text-forge-paper" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
+                <span class="flex items-center gap-2 font-mono text-2xs uppercase tracking-wider mt-0.5">
+                    <span class="text-forge-mute">{{ job.library }}</span>
+                    <span class="text-forge-rule-bright">·</span>
+                    <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
+                </span>
+            </td>
+            <td>
+                {% if job.status == 'complete' %}
+                <span class="forge-pill forge-pill--complete">Complete</span>
+                {% elif job.status == 'failed' %}
+                <span class="forge-pill forge-pill--failed">Failed</span>
+                {% elif job.status == 'skipped' %}
+                <span class="forge-pill forge-pill--skipped" title="Attempted, then discarded — the original was kept.">Discarded</span>
+                {% else %}
+                <span class="forge-pill forge-pill--pending">{{ job.status }}</span>
+                {% endif %}
+            </td>
+            <td class="col-mono">
+                {% if job.source_size and job.output_size and job.status != 'failed' %}
+                <span class="block text-xs text-forge-ink tabular-nums">{{ (job.source_size / 1073741824)|round(1) }} → {{ (job.output_size / 1073741824)|round(1) }} <span class="text-forge-mute">GiB</span></span>
+                <span class="flex items-center gap-2 text-2xs mt-0.5">
+                    {% if job.savings_percent %}
+                    <span class="font-semibold {% if job.status == 'complete' %}text-forge-oxide{% else %}text-forge-mute{% endif %} tabular-nums">−{{ job.savings_percent|round(1) }}%</span>
+                    {% elif job.output_size > job.source_size %}
+                    <span class="font-semibold text-forge-mute tabular-nums">+{{ ((job.output_size / job.source_size - 1) * 100)|round(1) }}%</span>
+                    {% endif %}
+                    {% if job.achieved_vmaf %}
+                    <span class="text-forge-steel tabular-nums" title="Measured VMAF of the encode vs. the original">VMAF {{ job.achieved_vmaf|round(1) }}</span>
+                    {% endif %}
+                </span>
+                {% else %}
+                <span class="text-forge-mute/60">—</span>
+                {% endif %}
+            </td>
+            <td class="col-mono text-xs {% if job.worker_name %}text-forge-steel{% else %}text-forge-mute{% endif %}">{{ job.worker_name or '—' }}</td>
+            <td class="col-mono text-xs text-forge-ink tabular-nums">{{ job.duration }}</td>
+            <td class="col-mono text-xs text-forge-mute tabular-nums">{{ job.completed_at[:10] if job.completed_at else '—' }}</td>
+            <td class="text-right">
+                {% if job.status == 'failed' %}
+                <span class="flex justify-end gap-1.5">
+                    <button class="forge-iconbtn"
+                            title="Retry this job"
+                            aria-label="Retry job"
+                            hx-post="/api/jobs/{{ job.id }}/retry"
+                            hx-swap="none"
+                            hx-on::after-request="htmx.trigger('#outcomes-container', 'refresh')">
+                        {{ icon('refresh', 'forge-icon--sm') }}
+                    </button>
+                    <button class="forge-iconbtn forge-iconbtn--danger"
+                            title="Don't try this file again"
+                            aria-label="Exclude permanently"
+                            data-path="{{ job.source_path }}"
+                            data-reason="failed: {{ (job.error_message or '')[:80] }}"
+                            onclick="excludeFile(this.dataset.path, this.dataset.reason, 'outcomes-container'); return false;">
+                        {{ icon('ban', 'forge-icon--sm') }}
+                    </button>
+                </span>
+                {% endif %}
+            </td>
+        </tr>
+        {% if job.status == 'failed' and job.error_message %}
+        <tr class="bg-forge-rust/5">
+            <td colspan="7" class="!py-2 !px-4">
+                <span class="flex items-center gap-2 font-mono text-2xs text-forge-rust">
+                    {{ icon('alert', 'forge-icon--sm') }}
+                    {{ job.error_message }}
+                </span>
+            </td>
+        </tr>
+        {% elif job.status == 'skipped' and job.error_message %}
+        <tr>
+            <td colspan="7" class="!py-2 !px-4">
+                <span class="flex items-center gap-2 font-mono text-2xs text-forge-brass">
+                    {{ icon('shield', 'forge-icon--sm') }}
+                    {{ job.error_message }}
+                </span>
+            </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+    </tbody>
+</table>
+
+{% set total_pages = (total + per_page - 1) // per_page if per_page else 1 %}
+{# Build filter querystring once so pagination preserves all active filters. #}
+{% set filter_qs = [] %}
+{% if status_filter %}{% set _ = filter_qs.append('status=' ~ status_filter) %}{% endif %}
+{% if library_filter %}{% set _ = filter_qs.append('library=' ~ library_filter) %}{% endif %}
+{% if since_filter %}{% set _ = filter_qs.append('since=' ~ since_filter) %}{% endif %}
+{% set _ = filter_qs.append('sort=' ~ sort) %}
+{% set _ = filter_qs.append('dir=' ~ dir) %}
+{% set fq = '&' ~ filter_qs|join('&') if filter_qs else '' %}
+{% if total > per_page %}
+<div class="forge-pager">
+    <span class="forge-pager-info">{{ ((page - 1) * per_page) + 1 }}–{{ (page * per_page) if (page * per_page) < total else total }} of {{ total }}</span>
+    <div class="forge-pager-btns">
+        <button class="forge-pager-btn" aria-label="Previous page"
+                {% if page > 1 %}hx-get="/partials/activity-outcomes?page={{ page - 1 }}{{ fq }}" hx-target="#outcomes-container"{% else %}disabled{% endif %}>
+            {{ icon('chevron-left', 'forge-icon--sm') }}
+        </button>
+        {% for p in range(1, total_pages + 1) %}
+            {% if p <= 10 %}
+            <button class="forge-pager-btn font-mono text-2xs font-semibold w-6 {% if p == page %}!border-forge-ember !text-forge-ember{% endif %}"
+                    aria-label="Go to page {{ p }}"
+                    hx-get="/partials/activity-outcomes?page={{ p }}{{ fq }}"
+                    hx-target="#outcomes-container">
+                {{ p }}
+            </button>
+            {% endif %}
+        {% endfor %}
+        <button class="forge-pager-btn" aria-label="Next page"
+                {% if page < total_pages %}hx-get="/partials/activity-outcomes?page={{ page + 1 }}{{ fq }}" hx-target="#outcomes-container"{% else %}disabled{% endif %}>
+            {{ icon('chevron-right', 'forge-icon--sm') }}
+        </button>
+    </div>
+</div>
+{% else %}
+<div class="forge-pager"><span class="forge-pager-info">{{ total }} outcome{% if total != 1 %}s{% endif %}</span></div>
+{% endif %}
+
+{% else %}
+<div class="forge-empty">
+    {{ icon('archive') }}
+    <p class="forge-empty-title">No outcomes yet</p>
+    <p class="forge-empty-hint">Completed, failed, and discarded encodes land here once jobs run.</p>
+</div>
+{% endif %}

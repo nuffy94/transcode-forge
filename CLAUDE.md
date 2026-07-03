@@ -138,9 +138,11 @@ bearer-token auth via `require_worker_token` instead.
 ### Web UI
 
 Jinja2 templates with HTMX for partials. "Forge Console" design — warm
-graphite + hot-iron amber palette, Big Shoulders Display + IBM Plex.
-Pages: dashboard, movies, tv, queue, workers, history, skipped, stats,
-settings. HTMX partials for the data-driven sections.
+graphite + hot-iron amber palette, Big Shoulders Display + IBM Plex
+(design reference: docs/design-system.md). Pages: dashboard, movies, tv,
+queue, activity (history + scan skips, two facets; /history and /skipped
+301 there), workers, stats, settings. HTMX partials for the data-driven
+sections; a file-detail drawer opens from any file/job row.
 
 ### Source layout
 

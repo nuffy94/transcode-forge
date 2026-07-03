@@ -1,0 +1,78 @@
+{% from "partials/_macros.html" import sort_th %}
+{% from "partials/_icons.html" import icon %}
+{% if files %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            {{ sort_th('Filename', 'file_path', sort, dir, 'sortSkips') }}
+            {{ sort_th('Library', 'library', sort, dir, 'sortSkips') }}
+            {{ sort_th('Reason', 'skip_reason', sort, dir, 'sortSkips') }}
+            {{ sort_th('Codec', 'codec', sort, dir, 'sortSkips') }}
+            {{ sort_th('Size', 'file_size', sort, dir, 'sortSkips', 'text-right') }}
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for f in files %}
+        <tr>
+            <td>
+                <span class="block text-[13px] font-medium text-forge-paper truncate max-w-md">{{ f.file_path.split('/')[-1] }}</span>
+                <span class="block font-mono text-2xs text-forge-mute truncate max-w-md mt-0.5">{{ f.file_path.rsplit('/', 1)[0] }}/</span>
+            </td>
+            <td><span class="font-mono text-2xs uppercase tracking-wider text-forge-mute">{{ f.library }}</span></td>
+            <td>
+                {% if f.skip_reason == 'already_hevc' %}
+                <span class="forge-pill forge-pill--complete">Already HEVC</span>
+                {% elif f.skip_reason == 'not_h264' %}
+                <span class="forge-pill forge-pill--queued">Not H.264</span>
+                {% elif f.skip_reason == 'size_regression' %}
+                <span class="forge-pill forge-pill--failed">Size regression</span>
+                {% elif f.skip_reason == 'below_vmaf_floor' %}
+                <span class="forge-pill forge-pill--failed" title="The encode's measured VMAF fell below the quality floor — the original was kept.">Below VMAF floor</span>
+                {% elif f.skip_reason == 'too_small' %}
+                <span class="forge-pill forge-pill--caution">Too small</span>
+                {% elif f.skip_reason == 'manual_skip' %}
+                <span class="forge-pill forge-pill--cancelled">Manual</span>
+                {% else %}
+                <span class="forge-pill forge-pill--pending">{{ f.skip_reason }}</span>
+                {% endif %}
+            </td>
+            <td><span class="font-mono text-xs uppercase tracking-wider text-forge-steel">{{ f.codec }}</span></td>
+            <td class="col-mono text-right">
+                {% if f.file_size %}
+                <span class="text-forge-ink tabular-nums">{{ (f.file_size / 1073741824)|round(2) }} <span class="text-forge-mute">GiB</span></span>
+                {% else %}
+                <span class="text-forge-mute">—</span>
+                {% endif %}
+            </td>
+            <td class="text-right">
+                <span class="flex justify-end gap-1.5">
+                    <button class="forge-iconbtn"
+                            title="Remove from skip list (allow retry on next scan)"
+                            aria-label="Unskip"
+                            data-path="{{ f.file_path }}"
+                            onclick="unskipFile(this.dataset.path, 'skipped-container'); return false;">
+                        {{ icon('refresh', 'forge-icon--sm') }}
+                    </button>
+                    <button class="forge-iconbtn forge-iconbtn--danger"
+                            title="Don't try this file again"
+                            aria-label="Exclude permanently"
+                            data-path="{{ f.file_path }}"
+                            data-reason="skipped: {{ f.skip_reason }}"
+                            onclick="excludeFile(this.dataset.path, this.dataset.reason, 'skipped-container'); return false;">
+                        {{ icon('ban', 'forge-icon--sm') }}
+                    </button>
+                </span>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="forge-pager"><span class="forge-pager-info">{{ files|length }} of {{ total }} skipped</span></div>
+{% else %}
+<div class="forge-empty">
+    {{ icon('ban') }}
+    <p class="forge-empty-title">No skipped files</p>
+    <p class="forge-empty-hint">Files the scanner declines — already HEVC, wrong codec, too small — land here.</p>
+</div>
+{% endif %}

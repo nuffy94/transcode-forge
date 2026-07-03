@@ -44,15 +44,24 @@ class TestPageRoutes:
         assert response.status_code == 200
         assert "Workers" in response.text
 
-    async def test_history_page(self, client: AsyncClient):
-        response = await client.get("/history")
+    async def test_activity_page(self, client: AsyncClient):
+        response = await client.get("/activity")
         assert response.status_code == 200
-        assert "History" in response.text
+        assert "Activity" in response.text
+        assert "Encode outcomes" in response.text
+        assert "Scan skips" in response.text
 
-    async def test_skipped_page(self, client: AsyncClient):
-        response = await client.get("/skipped")
-        assert response.status_code == 200
-        assert "Skipped" in response.text
+    async def test_history_redirects_to_activity(self, client: AsyncClient):
+        """History merged into Activity — the old URL 301s (asserted via the
+        authed client; anonymous requests never reach the route)."""
+        response = await client.get("/history", follow_redirects=False)
+        assert response.status_code == 301
+        assert response.headers["location"] == "/activity?view=outcomes"
+
+    async def test_skipped_redirects_to_activity(self, client: AsyncClient):
+        response = await client.get("/skipped", follow_redirects=False)
+        assert response.status_code == 301
+        assert response.headers["location"] == "/activity?view=skips"
 
     async def test_stats_page(self, client: AsyncClient):
         response = await client.get("/stats")
@@ -76,15 +85,15 @@ class TestPartials:
         assert response.status_code == 200
         assert "No Workers Registered" in response.text
 
-    async def test_history_partial_empty(self, client: AsyncClient):
-        response = await client.get("/partials/history")
+    async def test_outcomes_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/activity-outcomes")
         assert response.status_code == 200
-        assert "No History Yet" in response.text
+        assert "No outcomes yet" in response.text
 
-    async def test_skipped_partial_empty(self, client: AsyncClient):
-        response = await client.get("/partials/skipped")
+    async def test_skips_partial_empty(self, client: AsyncClient):
+        response = await client.get("/partials/activity-skips")
         assert response.status_code == 200
-        assert "No Skipped Files" in response.text
+        assert "No skipped files" in response.text
 
     async def test_skipped_unskip_uses_json_not_hx_delete(self, client: AsyncClient, app):
         """The unskip button must call unskipFile() (a JSON fetch). It used to
@@ -100,7 +109,7 @@ class TestPartials:
             codec="hevc",
             skip_reason=SkipReason.ALREADY_HEVC,
         )
-        resp = await client.get("/partials/skipped")
+        resp = await client.get("/partials/activity-skips")
         assert resp.status_code == 200
         assert "unskipFile(" in resp.text
         assert 'hx-delete="/api/skipped"' not in resp.text
@@ -151,13 +160,13 @@ class TestPartials:
         await job_repo.create_job(db, j2)
 
         # Filter for complete only
-        response = await client.get("/partials/history?status=complete")
+        response = await client.get("/partials/activity-outcomes?status=complete")
         assert response.status_code == 200
         assert "a.mkv" in response.text
         assert "b.mkv" not in response.text
 
         # Filter for failed only
-        response = await client.get("/partials/history?status=failed")
+        response = await client.get("/partials/activity-outcomes?status=failed")
         assert response.status_code == 200
         assert "b.mkv" in response.text
         assert "a.mkv" not in response.text
@@ -180,7 +189,7 @@ class TestPartials:
             completed_at=now.isoformat(),
         )
 
-        response = await client.get("/partials/history")
+        response = await client.get("/partials/activity-outcomes")
         assert response.status_code == 200
         assert "3m 45s" in response.text
 
@@ -196,7 +205,7 @@ class TestPartials:
         )
         await job_repo.create_job(db, j)
 
-        response = await client.get("/partials/history")
+        response = await client.get("/partials/activity-outcomes")
         assert response.status_code == 200
         assert "MPEG4" in response.text
         assert "HEVC" in response.text
@@ -270,7 +279,7 @@ class TestPartials:
         await job_repo.create_job(db, job)
         await job_repo.update_job(db, job.id, status="failed", error_message="ffmpeg exited 1")
 
-        response = await client.get("/partials/history?status=failed")
+        response = await client.get("/partials/activity-outcomes?status=failed")
         assert response.status_code == 200
         assert f"/api/jobs/{job.id}/retry" in response.text
         assert "ffmpeg exited 1" in response.text
@@ -317,7 +326,7 @@ class TestPartials:
             await job_repo.create_job(db, j)
             await job_repo.update_job(db, j.id, status="complete")
 
-        response = await client.get("/partials/history?library=tv")
+        response = await client.get("/partials/activity-outcomes?library=tv")
         assert response.status_code == 200
         assert "c.mkv" in response.text
         assert "a.mkv" not in response.text
@@ -352,8 +361,8 @@ class TestPartials:
         assert "Heartbeat" in response.text
         assert "Stale" in response.text or "Lost" in response.text
 
-    async def test_history_partial_has_sortable_headers(self, client: AsyncClient, app):
-        """Column headers must be click-to-sort (wired to sortHistory) and the
+    async def test_outcomes_partial_has_sortable_headers(self, client: AsyncClient, app):
+        """Column headers must be click-to-sort (wired to sortOutcomes) and the
         route must accept sort/dir without erroring."""
         await job_repo.create_job(
             app.state.db,
@@ -365,9 +374,9 @@ class TestPartials:
                 status=JobStatus.COMPLETE,
             ),
         )
-        resp = await client.get("/partials/history?sort=status&dir=asc")
+        resp = await client.get("/partials/activity-outcomes?sort=status&dir=asc")
         assert resp.status_code == 200
-        assert "sortHistory(" in resp.text
+        assert "sortOutcomes(" in resp.text
 
     async def test_jobs_partial_has_sortable_headers(self, client: AsyncClient, app):
         await job_repo.create_job(
@@ -378,7 +387,7 @@ class TestPartials:
         assert resp.status_code == 200
         assert "sortQueue(" in resp.text
 
-    async def test_skipped_partial_has_sortable_headers(self, client: AsyncClient, app):
+    async def test_skips_partial_has_sortable_headers(self, client: AsyncClient, app):
         from transcode_forge.models.skipped import SkipReason
         from transcode_forge.repos import skipped as skip_repo
 
@@ -389,9 +398,9 @@ class TestPartials:
             codec="hevc",
             skip_reason=SkipReason.ALREADY_HEVC,
         )
-        resp = await client.get("/partials/skipped?sort=file_size&dir=asc")
+        resp = await client.get("/partials/activity-skips?sort=file_size&dir=asc")
         assert resp.status_code == 200
-        assert "sortSkipped(" in resp.text
+        assert "sortSkips(" in resp.text
 
 
 class _FakeWebSocket:
