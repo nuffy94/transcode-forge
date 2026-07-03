@@ -72,7 +72,8 @@ class WorkerHttpClient:
             },
         )
         _raise_for_status(r)
-        return r.json()
+        data: dict[str, Any] = r.json()
+        return data
 
     async def heartbeat(
         self,
@@ -97,7 +98,9 @@ class WorkerHttpClient:
             json={"worker_id": worker_id},
         )
         _raise_for_status(r)
-        return r.json().get("job")
+        data: dict[str, Any] = r.json()
+        job: dict[str, Any] | None = data.get("job")
+        return job
 
     async def progress(self, *, job_id: str, progress: float, speed: float | None) -> None:
         r = await self._client.post(

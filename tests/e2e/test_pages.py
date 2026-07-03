@@ -33,17 +33,17 @@ class TestSidebar:
             "Stats",
             "Settings",
         ]:
-            expect(page.locator(f"aside >> text={label}")).to_be_visible()
+            expect(page.locator(".forge-navlink-label", has_text=label)).to_be_visible()
 
     def test_sidebar_logo(self, page: Page, base_url: str):
         page.goto(base_url)
-        expect(page.locator("text=Forge")).to_be_visible()
-        expect(page.locator("text=Precision Engine")).to_be_visible()
+        expect(page.locator("aside >> text=FORGE")).to_be_visible()
+        expect(page.locator("aside >> text=Transcode")).to_be_visible()
 
     def test_active_nav_highlighting(self, page: Page, base_url: str):
         page.goto(f"{base_url}/movies")
         movies_link = page.locator("aside a[href='/movies']")
-        expect(movies_link).to_have_class(re.compile("border-primary"))
+        expect(movies_link).to_have_class(re.compile("is-active"))
 
 
 class TestDashboard:
@@ -57,9 +57,10 @@ class TestDashboard:
         page.goto(base_url)
         # Wait for HTMX to load dashboard-stats partial
         page.wait_for_selector("#dashboard-stats", state="attached")
-        expect(page.locator("text=Space Saved")).to_be_visible(timeout=15_000)
-        expect(page.locator("text=Completed")).to_be_visible()
-        expect(page.locator("#dashboard-stats >> text=Workers")).to_be_visible()
+        stats = page.locator("#dashboard-stats")
+        expect(stats.get_by_text("Space Reclaimed")).to_be_visible(timeout=15_000)
+        expect(stats.get_by_text("Completed")).to_be_visible()
+        expect(stats.get_by_text("Workers")).to_be_visible()
 
     def test_active_transcodes_section(self, page: Page, base_url: str):
         page.goto(base_url)
@@ -202,21 +203,16 @@ class TestSettings:
 
     def test_settings_sections(self, page: Page, base_url: str):
         page.goto(f"{base_url}/settings")
-        expect(page.get_by_role("heading", name="Libraries")).to_be_visible()
+        expect(page.locator("#tab-libraries")).to_be_visible()
 
 
 class TestTopBar:
-    """Top header bar renders correctly."""
+    """Top header bar renders the live status strip (no search box / bell)."""
 
-    def test_search_input(self, page: Page, base_url: str):
+    def test_status_strip(self, page: Page, base_url: str):
         page.goto(base_url)
-        search = page.locator("header input[type='text']")
-        expect(search).to_be_visible()
-        expect(search).to_have_attribute("placeholder", re.compile("Search"))
-
-    def test_notification_bell(self, page: Page, base_url: str):
-        page.goto(base_url)
-        expect(page.locator("header >> text=notifications")).to_be_visible()
+        expect(page.locator("header >> text=Online")).to_be_visible()
+        expect(page.locator("#forge-clock")).to_be_attached()
 
 
 class TestHTMXPolling:
@@ -242,8 +238,8 @@ class TestDesignSystem:
     def test_dark_background(self, page: Page, base_url: str):
         page.goto(base_url)
         bg_color = page.evaluate("getComputedStyle(document.body).backgroundColor")
-        # Should be dark (#131313 → rgb(19, 19, 19))
-        assert "19" in bg_color or "131313" in bg_color
+        # Forge warm graphite #0d0b08 → rgb(13, 11, 8)
+        assert "13, 11, 8" in bg_color or "0d0b08" in bg_color
 
     def test_material_symbols_loaded(self, page: Page, base_url: str):
         page.goto(base_url)
@@ -251,16 +247,16 @@ class TestDesignSystem:
         icon = page.locator(".material-symbols-outlined").first
         expect(icon).to_be_visible()
 
-    def test_manrope_font_loaded(self, page: Page, base_url: str):
+    def test_display_font_loaded(self, page: Page, base_url: str):
         page.goto(base_url)
-        # Check that Manrope is used for headlines
+        # The FORGE wordmark uses Big Shoulders Display (font-display).
         font = page.evaluate("""
             () => {
-                const el = document.querySelector('.font-headline');
+                const el = document.querySelector('.font-display');
                 return el ? getComputedStyle(el).fontFamily : 'not found';
             }
         """)
-        assert "Manrope" in font or "not found" not in font
+        assert "Big Shoulders" in font
 
 
 class TestNavigation:

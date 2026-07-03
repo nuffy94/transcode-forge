@@ -31,11 +31,20 @@ uv run pytest tests/e2e/                 # E2E (Playwright, real server)
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/        # CI enforces --check; format before pushing
 uv run mypy src/
+
+uv run python scripts/build_css.py            # build served CSS from assets/css/forge.css
+uv run python scripts/build_css.py --watch    # rebuild on change (dev CSS loop)
+uv run python scripts/build_css.py --check    # fail if committed app.css is stale (CI gate)
 ```
 
 CI (`.github/workflows/tests.yml`) runs `ruff check`, `ruff format --check`,
-and `pytest --cov` on every push and PR. A formatting drift will fail the
-build — always run `ruff format` before committing.
+`pytest --cov`, and a `css-fresh` job (`build_css.py --check`) on every push
+and PR. A formatting or CSS drift will fail the build — always run
+`ruff format` and rebuild the CSS before committing.
+
+The served `src/transcode_forge/web/static/css/app.css` is **generated** by the
+pinned Tailwind v4 standalone CLI (no Node). Edit the source
+`assets/css/forge.css` and rebuild — never hand-edit the built file.
 
 ## Architecture
 
