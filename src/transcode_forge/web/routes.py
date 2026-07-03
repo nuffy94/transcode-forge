@@ -119,14 +119,27 @@ async def workers_page(request: Request) -> Response:
     return _render(request, "workers.html", {"active_page": "workers"})
 
 
+@router.get("/activity", response_class=HTMLResponse)
+async def activity_page(request: Request, view: str = "outcomes") -> Response:
+    """One ledger, two honest facets: encode outcomes (jobs table) and
+    scan skips (skipped_files table — never attempted)."""
+    return _render(
+        request,
+        "activity.html",
+        {"active_page": "activity", "view": "skips" if view == "skips" else "outcomes"},
+    )
+
+
 @router.get("/history", response_class=HTMLResponse)
 async def history_page(request: Request) -> Response:
-    return _render(request, "history.html", {"active_page": "history"})
+    """History merged into Activity (encode-outcomes facet)."""
+    return Response(status_code=301, headers={"Location": "/activity?view=outcomes"})
 
 
 @router.get("/skipped", response_class=HTMLResponse)
 async def skipped_page(request: Request) -> Response:
-    return _render(request, "skipped.html", {"active_page": "skipped"})
+    """Skipped merged into Activity (scan-skips facet)."""
+    return Response(status_code=301, headers={"Location": "/activity?view=skips"})
 
 
 @router.get("/stats", response_class=HTMLResponse)
@@ -380,8 +393,8 @@ async def queue_badge_partial(
     return Response(content=content, media_type="text/html")
 
 
-@router.get("/partials/history", response_class=HTMLResponse)
-async def history_partial(
+@router.get("/partials/activity-outcomes", response_class=HTMLResponse)
+async def activity_outcomes_partial(
     request: Request,
     status: str | None = None,
     library: str | None = None,
@@ -392,6 +405,7 @@ async def history_partial(
     per_page: int = 50,
     db: DBConnection = Depends(get_db),
 ) -> Response:
+    """Encode outcomes — finished/failed/discarded rows off the jobs table."""
     offset = (page - 1) * per_page
     filter_status = status or "complete,failed,skipped"
     since_map = {"24h": 24, "7d": 7 * 24, "30d": 30 * 24}
@@ -406,6 +420,8 @@ async def history_partial(
         limit=per_page,
         offset=offset,
     )
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    file_ids = await media_repo.ids_by_paths(db, [j.source_path for j in jobs])
     job_dicts = []
     for j in jobs:
         d = j.model_dump(mode="json")
@@ -414,10 +430,11 @@ async def history_partial(
             if j.started_at and j.completed_at
             else "—"
         )
+        d["worker_name"] = worker_names.get(j.worker_id) if j.worker_id else None
         job_dicts.append(d)
     return _render(
         request,
-        "partials/history.html",
+        "partials/activity_outcomes.html",
         {
             "jobs": job_dicts,
             "total": total,
@@ -428,12 +445,13 @@ async def history_partial(
             "since_filter": since or "",
             "sort": sort,
             "dir": dir,
+            "file_ids": file_ids,
         },
     )
 
 
-@router.get("/partials/skipped", response_class=HTMLResponse)
-async def skipped_partial(
+@router.get("/partials/activity-skips", response_class=HTMLResponse)
+async def activity_skips_partial(
     request: Request,
     reason: str | None = None,
     library: str | None = None,
@@ -455,7 +473,7 @@ async def skipped_partial(
     )
     return _render(
         request,
-        "partials/skipped.html",
+        "partials/activity_skips.html",
         {
             "files": [f.model_dump(mode="json") for f in files],
             "total": total,

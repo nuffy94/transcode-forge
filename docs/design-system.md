@@ -174,7 +174,7 @@ contract section apply.
 `is-sortable` / `is-sorted-asc` / `is-sorted-desc` on `th` (JS toggles).
 
 **Status** — one system, two forms:
-- Pills: `forge-pill forge-pill--{complete|running|queued|pending|failed|skipped|cancelled}`
+- Pills: `forge-pill forge-pill--{complete|running|queued|pending|failed|skipped|cancelled|caution}`
 - Dots: `forge-dot forge-dot--{on|hot|off|err}` (+ `forge-pulse` when live)
 
 Mapping: running→ember, complete→oxide, queued→steel, pending/skipped→mute,

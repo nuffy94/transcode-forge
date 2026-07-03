@@ -16,7 +16,17 @@ import pathlib
 import pytest
 from playwright.sync_api import Page
 
-PAGES = ["/", "/movies", "/tv", "/queue", "/workers", "/history", "/skipped", "/stats", "/settings"]
+PAGES = [
+    "/",
+    "/movies",
+    "/tv",
+    "/queue",
+    "/activity",
+    "/activity?view=skips",
+    "/workers",
+    "/stats",
+    "/settings",
+]
 AXE = pathlib.Path(__file__).parent / "vendor" / "axe.min.js"
 SHOTS = pathlib.Path(__file__).parent / "shots"
 
@@ -72,7 +82,7 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
     for path in PAGES:
         page.goto(f"{qa_base_url}{path}", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
-        name = path.strip("/").replace("/", "_") or "dashboard"
+        name = path.strip("/").replace("/", "_").replace("?", "_").replace("=", "_") or "dashboard"
         page.screenshot(path=str(SHOTS / f"{name}.png"), full_page=True)
 
         violations = _run_axe(page)

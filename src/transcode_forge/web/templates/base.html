@@ -39,9 +39,8 @@
                 ('/movies',   'movies',    'film',      'Movies'),
                 ('/tv',       'tv',        'tv',        'TV Shows'),
                 ('/queue',    'queue',     'queue',     'Queue'),
+                ('/activity', 'activity',  'history',   'Activity'),
                 ('/workers',  'workers',   'workers',   'Workers'),
-                ('/history',  'history',   'history',   'History'),
-                ('/skipped',  'skipped',   'ban',       'Skipped'),
                 ('/stats',    'stats',     'stats',     'Stats'),
             ] %}
             {% for href, page, icon_name, label in nav_items %}
@@ -94,8 +93,8 @@
         </label>
         {% set section_labels = {
             'dashboard': 'Dashboard', 'movies': 'Movies', 'tv': 'TV Shows',
-            'queue': 'Queue', 'workers': 'Workers', 'history': 'History',
-            'skipped': 'Skipped', 'stats': 'Stats', 'settings': 'Settings',
+            'queue': 'Queue', 'activity': 'Activity', 'workers': 'Workers',
+            'stats': 'Stats', 'settings': 'Settings',
         } %}
         <span class="forge-crumb"><span class="text-forge-ember">/</span> {{ section_labels.get(active_page, 'Console') }}</span>
         <div class="flex-1"></div>

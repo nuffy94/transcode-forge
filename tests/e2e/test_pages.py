@@ -28,9 +28,8 @@ class TestSidebar:
             "Movies",
             "TV Shows",
             "Queue",
+            "Activity",
             "Workers",
-            "History",
-            "Skipped",
             "Stats",
             "Settings",
         ]:
@@ -167,32 +166,36 @@ class TestWorkers:
         expect(page.locator("text=No workers registered")).to_be_visible(timeout=15_000)
 
 
-class TestHistory:
-    """History page renders with tabs and table."""
+class TestActivity:
+    """Activity — the merged History+Skipped ledger with two facets."""
 
-    def test_history_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/history")
-        expect(page).to_have_title(re.compile("History"))
-        # History page uses tabs instead of a heading
-        expect(page.locator("#history-tabs")).to_be_visible()
+    def test_activity_loads(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        expect(page).to_have_title(re.compile("Activity"))
+        expect(page.locator("#activity-tabs")).to_be_visible()
 
-    def test_history_container_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/history")
-        page.wait_for_selector("#history-container", state="attached")
-        expect(page.locator("text=No history yet")).to_be_visible(timeout=15_000)
+    def test_outcomes_container_loads(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        page.wait_for_selector("#outcomes-container", state="attached")
+        expect(page.locator("text=No outcomes yet")).to_be_visible(timeout=15_000)
 
-
-class TestSkipped:
-    """Skipped files page renders with filters."""
-
-    def test_skipped_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/skipped")
-        expect(page).to_have_title(re.compile("Skipped"))
-
-    def test_filter_controls(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/skipped")
+    def test_facet_switch_shows_skip_filters(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        page.click("#tab-skips")
         expect(page.locator("#skip-reason-filter")).to_be_visible()
         expect(page.locator("#skip-library-filter")).to_be_visible()
+        expect(page.locator("#outcomes-view")).to_be_hidden()
+
+    def test_skips_deep_link(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity?view=skips")
+        expect(page.locator("#skips-view")).to_be_visible()
+        expect(page.locator("#outcomes-view")).to_be_hidden()
+
+    def test_old_routes_redirect(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/history")
+        expect(page).to_have_url(re.compile("/activity"))
+        page.goto(f"{base_url}/skipped")
+        expect(page).to_have_url(re.compile(r"/activity\?view=skips"))
 
 
 class TestStats:
@@ -295,9 +298,8 @@ class TestNavigation:
             ("/movies", "Movies"),
             ("/tv", "TV"),
             ("/queue", "Queue"),
+            ("/activity", "Activity"),
             ("/workers", "Workers"),
-            ("/history", "History"),
-            ("/skipped", "Skipped"),
             ("/stats", "Statistic"),
             ("/settings", "Settings"),
         ],
