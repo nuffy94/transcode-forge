@@ -1,3 +1,4 @@
+{% from "partials/_icons.html" import icon %}
 {% if tokens %}
 <table class="forge-table">
     <thead>
@@ -23,17 +24,16 @@
                 <span class="forge-pill forge-pill--queued">Pending</span>
                 {% endif %}
             </td>
-            <td class="col-mono text-forge-ink">{{ (t.last_used_at or '—')[:19].replace('T', ' ') }}</td>
+            <td class="col-mono text-forge-ink tabular-nums">{{ (t.last_used_at or '—')[:19].replace('T', ' ') }}</td>
             <td class="text-right">
                 {% if not t.revoked_at %}
                 <button class="forge-iconbtn forge-iconbtn--danger"
                         title="Revoke this token"
+                        aria-label="Revoke token {{ t.label }}"
                         data-fp="{{ t.fingerprint }}"
                         onclick="revokeToken(this.dataset.fp); return false;">
-                    <span class="material-symbols-outlined text-base">block</span>
+                    {{ icon('ban', 'forge-icon--sm') }}
                 </button>
-                {% else %}
-                <span class="text-forge-mute/30">—</span>
                 {% endif %}
             </td>
         </tr>
@@ -41,8 +41,9 @@
     </tbody>
 </table>
 {% else %}
-<div class="text-center py-10 px-6">
-    <span class="material-symbols-outlined text-3xl text-forge-faint mb-2 block">vpn_key_off</span>
-    <p class="font-mono text-[11px] text-forge-mute uppercase tracking-stamp">No worker tokens yet</p>
+<div class="forge-empty py-6">
+    {{ icon('key') }}
+    <p class="forge-empty-title">No worker tokens yet</p>
+    <p class="forge-empty-hint">Issue one from "Add a worker" — each node joins with its own revocable token.</p>
 </div>
 {% endif %}

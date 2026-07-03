@@ -1,0 +1,141 @@
+{#- File-detail drawer body. Loaded by static/js/drawer.js into
+    #file-drawer-body. Context: file (dict|None), jobs (list of job dicts w/
+    duration + worker_name), best (latest complete job dict|None),
+    excluded (bool), queueable (bool). -#}
+{% from "partials/_icons.html" import icon %}
+{% if file is none %}
+<div class="forge-empty">
+    {{ icon('help') }}
+    <p class="forge-empty-title">File not found</p>
+    <p class="forge-empty-hint">It may have been removed in a rescan. Close the drawer and refresh the list.</p>
+</div>
+{% else %}
+<div class="flex flex-col gap-5" data-file-id="{{ file.id }}" data-file-path="{{ file.file_path }}">
+
+    <!-- Identity -->
+    <div>
+        <p class="text-[13px] font-semibold text-forge-paper break-words leading-snug">{{ file.filename }}</p>
+        <p class="font-mono text-2xs text-forge-mute break-all mt-1">{{ file.file_path }}</p>
+        <div class="flex items-center gap-2 mt-2.5 flex-wrap">
+            {% set st = file.transcode_status %}
+            {% if st == 'complete' %}<span class="forge-pill forge-pill--complete">Complete</span>
+            {% elif st == 'transcoding' %}<span class="forge-pill forge-pill--running">Transcoding</span>
+            {% elif st == 'queued' %}<span class="forge-pill forge-pill--queued">Queued</span>
+            {% elif st == 'failed' %}<span class="forge-pill forge-pill--failed">Failed</span>
+            {% elif st == 'skipped' %}<span class="forge-pill forge-pill--skipped">Skipped</span>
+            {% else %}<span class="forge-pill forge-pill--pending">{{ (st or 'unknown')|replace('_', ' ') }}</span>
+            {% endif %}
+            <span class="codec-badge {% if file.video_codec == 'h264' %}codec-h264{% elif file.video_codec == 'hevc' %}codec-hevc{% else %}codec-other{% endif %}">{{ file.video_codec or '?' }}</span>
+            {% if file.skip_reason %}
+            <span class="font-mono text-2xs uppercase tracking-stamp text-forge-mute">{{ file.skip_reason|replace('_', ' ') }}</span>
+            {% endif %}
+            {% if excluded %}
+            <span class="forge-pill forge-pill--failed">{{ icon('ban', 'forge-icon--sm') }} Excluded</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Probe data -->
+    <div class="forge-panel">
+        <div class="forge-panel-hd"><span class="forge-panel-title">Source</span></div>
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-2.5 p-3.5">
+            <div><dt class="forge-stat-label">Library</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.library_name or file.library_id }}</dd></div>
+            <div><dt class="forge-stat-label">Resolution</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.resolution or '—' }}</dd></div>
+            <div><dt class="forge-stat-label">Size</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{% if file.file_size %}{{ "%.1f"|format(file.file_size / 1073741824) }} GiB{% else %}—{% endif %}</dd></div>
+            <div><dt class="forge-stat-label">Bitrate</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{% if file.bitrate %}{{ "%.1f"|format(file.bitrate / 1000000) }} Mb/s{% else %}—{% endif %}</dd></div>
+            <div><dt class="forge-stat-label">Duration</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{% if file.duration %}{{ (file.duration // 3600)|int }}h {{ ((file.duration % 3600) // 60)|int }}m{% else %}—{% endif %}</dd></div>
+            <div><dt class="forge-stat-label">Audio</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.audio_codec or '—' }}</dd></div>
+            {% if file.show_name %}
+            <div><dt class="forge-stat-label">Show</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.show_name }}</dd></div>
+            <div><dt class="forge-stat-label">Episode</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{% if file.season and file.episode %}S{{ "%02d"|format(file.season) }}E{{ "%02d"|format(file.episode) }}{% else %}—{% endif %}</dd></div>
+            {% endif %}
+            <div><dt class="forge-stat-label">Scanned</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.scanned_at[:10] if file.scanned_at else '—' }}</dd></div>
+            <div><dt class="forge-stat-label">Modified</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ file.file_modified_at[:10] if file.file_modified_at else '—' }}</dd></div>
+        </dl>
+    </div>
+
+    <!-- Encode economics — latest completed encode -->
+    {% if best %}
+    <div class="forge-panel forge-panel--ember">
+        <div class="forge-panel-hd"><span class="forge-panel-title">Encode result</span></div>
+        <div class="p-3.5 flex flex-col gap-3">
+            <div class="flex items-baseline gap-2">
+                <span class="forge-stat-value text-2xl text-forge-ember-hot">{{ "%.0f"|format(best.savings_percent) }}%</span>
+                <span class="forge-stat-unit">saved</span>
+                <span class="forge-stat-meta ml-auto">{{ "%.1f"|format(best.source_size / 1073741824) }} → {{ "%.1f"|format(best.output_size / 1073741824) }} GiB</span>
+            </div>
+            <dl class="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                <div><dt class="forge-stat-label">VMAF</dt>
+                    <dd class="font-mono text-xs mt-0.5 {% if best.achieved_vmaf %}text-forge-oxide{% else %}text-forge-mute{% endif %}">
+                        {% if best.achieved_vmaf %}{{ "%.1f"|format(best.achieved_vmaf) }}{% if best.target_vmaf %} <span class="text-forge-mute">/ {{ "%.0f"|format(best.target_vmaf) }} target</span>{% endif %}
+                        {% else %}not measured{% endif %}
+                    </dd></div>
+                <div><dt class="forge-stat-label">CRF</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ best.resolved_crf if best.resolved_crf is not none else best.quality_value }}</dd></div>
+                <div><dt class="forge-stat-label">Backend</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ best.backend_used or '—' }}</dd></div>
+                <div><dt class="forge-stat-label">Took</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ best.duration or '—' }}</dd></div>
+            </dl>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Job timeline -->
+    <div class="forge-panel">
+        <div class="forge-panel-hd">
+            <span class="forge-panel-title">Job history</span>
+            <span class="font-mono text-2xs text-forge-mute ml-auto tabular-nums">{{ jobs|length }}</span>
+        </div>
+        {% if jobs %}
+        <ul>
+            {% for j in jobs %}
+            <li class="px-3.5 py-2.5 {% if not loop.last %}border-b border-forge-rule/60{% endif %}">
+                <div class="flex items-center gap-2 flex-wrap">
+                    {% if j.status == 'complete' %}<span class="forge-pill forge-pill--complete">Complete</span>
+                    {% elif j.status in ('transcoding', 'assigned', 'verifying') %}<span class="forge-pill forge-pill--running">{{ j.status }}</span>
+                    {% elif j.status == 'failed' %}<span class="forge-pill forge-pill--failed">Failed</span>
+                    {% elif j.status == 'skipped' %}<span class="forge-pill forge-pill--skipped">Skipped</span>
+                    {% elif j.status == 'cancelled' %}<span class="forge-pill forge-pill--cancelled">Cancelled</span>
+                    {% elif j.status == 'queued' %}<span class="forge-pill forge-pill--queued">Queued</span>
+                    {% else %}<span class="forge-pill forge-pill--pending">{{ j.status }}</span>
+                    {% endif %}
+                    <span class="font-mono text-2xs text-forge-mute uppercase">→ {{ j.target_codec }}</span>
+                    <span class="font-mono text-2xs text-forge-mute ml-auto tabular-nums">{{ j.created_at[:16]|replace('T', ' ') }}</span>
+                </div>
+                <div class="flex items-center gap-3 mt-1 font-mono text-2xs text-forge-mute flex-wrap">
+                    {% if j.worker_name %}<span>{{ j.worker_name }}</span>{% endif %}
+                    {% if j.duration %}<span class="tabular-nums">{{ j.duration }}</span>{% endif %}
+                    {% if j.achieved_vmaf %}<span class="text-forge-oxide tabular-nums">VMAF {{ "%.1f"|format(j.achieved_vmaf) }}</span>{% endif %}
+                    {% if j.savings_percent and j.status == 'complete' %}<span class="text-forge-ink tabular-nums">−{{ "%.0f"|format(j.savings_percent) }}%</span>{% endif %}
+                </div>
+                {% if j.error_message %}
+                <p class="font-mono text-2xs text-forge-rust mt-1 break-words">{{ j.error_message }}</p>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="forge-empty py-6">
+            {{ icon('inbox') }}
+            <p class="forge-empty-hint">Never attempted. Queue it to start the first encode.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Actions -->
+    <div class="flex items-center gap-2">
+        {% if queueable %}
+        <button class="forge-btn forge-btn--ember" onclick="drawerQueue('{{ file.id }}')">
+            {{ icon('play', 'forge-icon--sm') }} Queue transcode
+        </button>
+        {% endif %}
+        {% if excluded %}
+        <button class="forge-btn" onclick="drawerUnexclude('{{ file.id }}')">
+            {{ icon('check', 'forge-icon--sm') }} Lift exclusion
+        </button>
+        {% else %}
+        <button class="forge-btn forge-btn--danger" onclick="drawerExclude('{{ file.id }}')">
+            {{ icon('ban', 'forge-icon--sm') }} Exclude
+        </button>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

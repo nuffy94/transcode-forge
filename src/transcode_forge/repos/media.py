@@ -107,6 +107,21 @@ async def get_media_file(db: DBConnection, file_id: str) -> dict[str, Any] | Non
         return dict(row) if row else None
 
 
+async def ids_by_paths(db: DBConnection, paths: list[str]) -> dict[str, str]:
+    """Map file_path -> media file id for the given paths (one query).
+
+    Lets job rows link to the file-detail drawer without a per-row lookup.
+    """
+    if not paths:
+        return {}
+    placeholders = ",".join("?" * len(paths))
+    async with db.execute(
+        f"SELECT id, file_path FROM media_files WHERE file_path IN ({placeholders})",
+        list(paths),
+    ) as cur:
+        return {row["file_path"]: row["id"] for row in await cur.fetchall()}
+
+
 async def get_by_ids(db: DBConnection, file_ids: list[str]) -> list[dict[str, Any]]:
     """Fetch many media files in one query (order not preserved)."""
     if not file_ids:

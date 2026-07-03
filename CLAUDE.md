@@ -13,7 +13,8 @@ a bad encode can never silently replace one either.
 
 **Stack**: Python 3.12 · FastAPI · Redis (pub/sub + WebSocket relay) ·
 PostgreSQL (prod) / SQLite (dev/test) · asyncpg + aiosqlite · ffmpeg/ffprobe ·
-Jinja2 + HTMX + Tailwind (CDN).
+Jinja2 + HTMX + Tailwind v4 (standalone CLI build, committed CSS, all
+assets vendored — zero runtime CDNs).
 
 ## Commands
 
@@ -31,11 +32,20 @@ uv run pytest tests/e2e/                 # E2E (Playwright, real server)
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/        # CI enforces --check; format before pushing
 uv run mypy src/
+
+uv run python scripts/build_css.py            # build served CSS from assets/css/forge.css
+uv run python scripts/build_css.py --watch    # rebuild on change (dev CSS loop)
+uv run python scripts/build_css.py --check    # fail if committed app.css is stale (CI gate)
 ```
 
 CI (`.github/workflows/tests.yml`) runs `ruff check`, `ruff format --check`,
-and `pytest --cov` on every push and PR. A formatting drift will fail the
-build — always run `ruff format` before committing.
+`pytest --cov`, and a `css-fresh` job (`build_css.py --check`) on every push
+and PR. A formatting or CSS drift will fail the build — always run
+`ruff format` and rebuild the CSS before committing.
+
+The served `src/transcode_forge/web/static/css/app.css` is **generated** by the
+pinned Tailwind v4 standalone CLI (no Node). Edit the source
+`assets/css/forge.css` and rebuild — never hand-edit the built file.
 
 ## Architecture
 
@@ -129,9 +139,11 @@ bearer-token auth via `require_worker_token` instead.
 ### Web UI
 
 Jinja2 templates with HTMX for partials. "Forge Console" design — warm
-graphite + hot-iron amber palette, Big Shoulders Display + IBM Plex.
-Pages: dashboard, movies, tv, queue, workers, history, skipped, stats,
-settings. HTMX partials for the data-driven sections.
+graphite + hot-iron amber palette, Big Shoulders Display + IBM Plex
+(design reference: docs/design-system.md). Pages: dashboard, movies, tv,
+queue, activity (history + scan skips, two facets; /history and /skipped
+301 there), workers, stats, settings. HTMX partials for the data-driven
+sections; a file-detail drawer opens from any file/job row.
 
 ### Source layout
 

@@ -16,7 +16,17 @@ import pathlib
 import pytest
 from playwright.sync_api import Page
 
-PAGES = ["/", "/movies", "/tv", "/queue", "/workers", "/history", "/skipped", "/stats", "/settings"]
+PAGES = [
+    "/",
+    "/movies",
+    "/tv",
+    "/queue",
+    "/activity",
+    "/activity?view=skips",
+    "/workers",
+    "/stats",
+    "/settings",
+]
 AXE = pathlib.Path(__file__).parent / "vendor" / "axe.min.js"
 SHOTS = pathlib.Path(__file__).parent / "shots"
 
@@ -72,7 +82,7 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
     for path in PAGES:
         page.goto(f"{qa_base_url}{path}", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
-        name = path.strip("/").replace("/", "_") or "dashboard"
+        name = path.strip("/").replace("/", "_").replace("?", "_").replace("=", "_") or "dashboard"
         page.screenshot(path=str(SHOTS / f"{name}.png"), full_page=True)
 
         violations = _run_axe(page)
@@ -86,6 +96,40 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
         )
         if toasts:
             error_toasts[path] = toasts
+
+    # File-detail drawer: open a transcoded movie (complete + h264 source =
+    # a seeded encode with VMAF + timeline), re-run axe on the open state,
+    # and keep a screenshot of it.
+    page.goto(f"{qa_base_url}/movies", wait_until="domcontentloaded")
+    page.wait_for_selector("tr[data-file-id]", timeout=10_000)
+    page.select_option("#mv-status", "complete")
+    page.wait_for_selector("tr[data-file-id]:has(.codec-h264)", timeout=10_000)
+    page.locator("tr[data-file-id]:has(.codec-h264)").first.click()
+    page.wait_for_selector("#file-drawer.is-open", timeout=5_000)
+    page.wait_for_timeout(600)
+    page.screenshot(path=str(SHOTS / "movies_drawer.png"))
+    drawer_violations = [v for v in _run_axe(page) if v["id"] in BLOCKING_RULES]
+    if drawer_violations:
+        axe_blocking["/movies#drawer"] = drawer_violations
+    drawer_toasts = page.evaluate(
+        "Array.from(document.querySelectorAll('[data-toast-type=\"error\"]')).map(e => e.innerText)"
+    )
+    if drawer_toasts:
+        error_toasts["/movies#drawer"] = drawer_toasts
+
+    # /login renders for anonymous visitors — sweep it in a FRESH context
+    # (the main page object carries the admin session). /setup cannot be
+    # swept: this fixture creates the admin before any test runs, so the
+    # route 302s — it's verified by eyeball on a live instance instead.
+    anon_ctx = page.context.browser.new_context(viewport=page.viewport_size)
+    anon = anon_ctx.new_page()
+    anon.goto(f"{qa_base_url}/login", wait_until="domcontentloaded")
+    anon.wait_for_timeout(600)
+    anon.screenshot(path=str(SHOTS / "login.png"), full_page=True)
+    login_violations = [v for v in _run_axe(anon) if v["id"] in BLOCKING_RULES]
+    if login_violations:
+        axe_blocking["/login"] = login_violations
+    anon_ctx.close()
 
     report = json.dumps(
         {

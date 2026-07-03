@@ -1,0 +1,102 @@
+{% from "partials/_icons.html" import icon %}
+<!-- Libraries -->
+<section id="tab-libraries" class="col-span-12 lg:col-span-8 forge-panel">
+    <div class="forge-panel-hd">
+        <h2 class="forge-panel-title">Libraries</h2>
+        <button id="add-lib-btn" class="forge-btn forge-btn--ember ml-auto">
+            {{ icon('plus', 'forge-icon--sm') }}
+            <span>Add library</span>
+        </button>
+    </div>
+    <div id="libraries-list" class="forge-scroll">
+        <div class="forge-empty py-6">{{ icon('loader', 'forge-icon--spin') }}</div>
+    </div>
+</section>
+
+<!-- Quality presets -->
+<section id="tab-quality" class="col-span-12 lg:col-span-4 forge-panel">
+    <div class="forge-panel-hd">
+        <h2 class="forge-panel-title">Quality presets</h2>
+        <span class="ml-auto font-mono text-2xs text-forge-mute">lower CRF = better</span>
+    </div>
+    <div id="quality-display">
+        <div class="forge-empty py-6">{{ icon('loader', 'forge-icon--spin') }}</div>
+    </div>
+</section>
+
+<!-- Add Library Modal -->
+<dialog id="add-lib-modal" class="forge-dialog">
+    <div class="forge-panel forge-panel--ember w-full max-w-md">
+        <div class="forge-panel-hd"><h3 class="forge-panel-title">Add library</h3></div>
+        <div class="p-4 flex flex-col gap-3">
+            <div>
+                <label for="lib-name" class="forge-stat-label block mb-1.5">Name</label>
+                <input id="lib-name" type="text" placeholder="e.g. Movies" class="forge-input w-full">
+            </div>
+            <div>
+                <label for="lib-type" class="forge-stat-label block mb-1.5">Type</label>
+                <select id="lib-type" aria-label="Library media type" class="forge-select w-full">
+                    <option value="movies">Movies</option>
+                    <option value="tv">TV Shows</option>
+                    <option value="anime">Anime</option>
+                </select>
+            </div>
+            <div>
+                <label for="lib-path" class="forge-stat-label block mb-1.5">Path</label>
+                <input id="lib-path" type="text" placeholder="/media/movies" class="forge-input w-full">
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label for="lib-quality" class="forge-stat-label block mb-1.5">CRF (1–51)</label>
+                    <input id="lib-quality" type="number" value="21" min="1" max="51" class="forge-input w-full">
+                </div>
+                <div class="flex-1">
+                    <label for="lib-scan-interval" class="forge-stat-label block mb-1.5">Scan interval (h)</label>
+                    <input id="lib-scan-interval" type="number" value="24" min="1" max="168" class="forge-input w-full">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-2">
+                <button class="forge-btn" data-close-dialog="add-lib-modal">Cancel</button>
+                <button id="add-lib-save" class="forge-btn forge-btn--ember">Add library</button>
+            </div>
+        </div>
+    </div>
+</dialog>
+
+<!-- Edit Library Modal -->
+<dialog id="edit-lib-modal" class="forge-dialog">
+    <div class="forge-panel forge-panel--ember w-full max-w-md">
+        <div class="forge-panel-hd"><h3 class="forge-panel-title">Edit library</h3></div>
+        <input type="hidden" id="edit-lib-id">
+        <div class="p-4 flex flex-col gap-3">
+            <div>
+                <label for="edit-lib-name" class="forge-stat-label block mb-1.5">Name</label>
+                <input id="edit-lib-name" type="text" class="forge-input w-full">
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label for="edit-lib-quality" class="forge-stat-label block mb-1.5">CRF (1–51)</label>
+                    <input id="edit-lib-quality" type="number" min="1" max="51" class="forge-input w-full">
+                </div>
+                <div class="flex-1">
+                    <label for="edit-lib-scan-interval" class="forge-stat-label block mb-1.5">Scan interval (h)</label>
+                    <input id="edit-lib-scan-interval" type="number" min="1" max="168" class="forge-input w-full">
+                </div>
+            </div>
+            <div class="flex items-center gap-4 mt-1">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input id="edit-lib-enabled" type="checkbox" class="forge-check">
+                    <span class="font-mono text-2xs text-forge-ink uppercase tracking-stamp">Enabled</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input id="edit-lib-auto-scan" type="checkbox" class="forge-check">
+                    <span class="font-mono text-2xs text-forge-ink uppercase tracking-stamp">Auto scan</span>
+                </label>
+            </div>
+            <div class="flex justify-end gap-2 mt-2">
+                <button class="forge-btn" data-close-dialog="edit-lib-modal">Cancel</button>
+                <button id="edit-lib-save" class="forge-btn forge-btn--ember">Save changes</button>
+            </div>
+        </div>
+    </div>
+</dialog>

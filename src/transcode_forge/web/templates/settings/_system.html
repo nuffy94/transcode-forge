@@ -1,0 +1,74 @@
+{% from "partials/_icons.html" import icon %}
+<!-- System info -->
+<section class="col-span-12 lg:col-span-4 forge-panel">
+    <div class="forge-panel-hd"><h2 class="forge-panel-title">System</h2></div>
+    <div class="p-3.5 space-y-2.5 font-mono text-xs">
+        <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label">Version</span>
+            <span id="sys-version" class="text-forge-ember">—</span>
+        </div>
+        <div class="flex justify-between gap-3 border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label flex-shrink-0">Database</span>
+            <span id="sys-database" class="text-forge-paper truncate">—</span>
+        </div>
+        <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label">Uptime</span>
+            <span id="sys-uptime" class="text-forge-paper font-semibold tabular-nums">—</span>
+        </div>
+        <div class="space-y-1.5 pt-1">
+            <div class="flex justify-between font-mono text-2xs uppercase tracking-stamp">
+                <span class="text-forge-mute">Disk usage</span>
+                <span id="sys-disk-text" class="text-forge-paper tabular-nums">—</span>
+            </div>
+            <div class="forge-meter">
+                <div id="sys-disk-bar" class="forge-meter-fill" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- External services -->
+<section id="tab-general" class="col-span-12 lg:col-span-4 forge-panel">
+    <div class="forge-panel-hd"><h2 class="forge-panel-title">External services</h2></div>
+    <div class="p-3.5">
+        <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2.5">
+                <span id="redis-dot" class="forge-dot forge-dot--off"></span>
+                <span class="text-[13px] font-semibold text-forge-paper">Redis cache</span>
+            </span>
+            <span id="redis-status" class="font-mono text-2xs uppercase tracking-stamp text-forge-mute">—</span>
+        </div>
+        <p class="font-mono text-2xs text-forge-mute mt-2 leading-relaxed">
+            URL via <code class="text-forge-ember">TF_REDIS_URL</code>. Carries real-time progress and worker heartbeats; without it the UI falls back to polling.
+        </p>
+    </div>
+</section>
+
+<!-- Workers pointer — tokens live on the Workers page -->
+<section id="tab-workers" class="col-span-12 lg:col-span-4 forge-panel">
+    <div class="forge-panel-hd"><h2 class="forge-panel-title">Worker tokens</h2></div>
+    <div class="p-3.5">
+        <p class="font-mono text-2xs text-forge-mute leading-relaxed">
+            Issuing, watching, and revoking join tokens moved to the fleet page —
+            one home, next to the nodes that use them.
+        </p>
+        <a href="/workers" class="forge-btn forge-btn--ember mt-3">
+            {{ icon('key', 'forge-icon--sm') }}
+            <span>Manage on Workers</span>
+        </a>
+    </div>
+</section>
+
+<!-- Maintenance -->
+<section id="tab-danger" class="col-span-12 forge-panel" style="border-color: rgba(220, 103, 67, 0.4);">
+    <div class="forge-panel-hd">
+        <span class="text-forge-rust">{{ icon('alert', 'forge-icon--sm') }}</span>
+        <h2 class="forge-panel-title" style="color: var(--forge-rust);">Maintenance</h2>
+        <span class="ml-auto font-mono text-2xs text-forge-mute">destructive — cannot be undone</span>
+    </div>
+    <div class="p-3.5 flex flex-wrap gap-2.5">
+        <button id="mx-cancel-all" class="forge-btn forge-btn--danger">Cancel all jobs</button>
+        <button id="mx-clear-history" class="forge-btn forge-btn--danger">Clear history</button>
+        <button id="mx-reset-jobs" class="forge-btn forge-btn--danger">Reset all jobs</button>
+    </div>
+</section>

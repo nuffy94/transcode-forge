@@ -79,6 +79,7 @@ async def list_jobs(
     status: str | None = None,
     library: str | None = None,
     worker_id: str | None = None,
+    source_path: str | None = None,
     since_hours: int | None = None,
     sort_by: str = "created_at",
     sort_dir: str = "desc",
@@ -92,6 +93,7 @@ async def list_jobs(
         status: Comma-separated job statuses to filter by (e.g., 'pending,complete').
         library: Library name to filter by.
         worker_id: Worker ID to filter by.
+        source_path: Exact file path — a single file's job history.
         since_hours: Only include jobs created within the last N hours.
         sort_by: Column to sort by (validated against _VALID_JOB_SORTS).
         sort_dir: Sort direction, 'asc' or 'desc'.
@@ -125,6 +127,10 @@ async def list_jobs(
     if worker_id:
         conditions.append("worker_id = ?")
         params.append(worker_id)
+
+    if source_path:
+        conditions.append("source_path = ?")
+        params.append(source_path)
 
     if since_hours is not None and since_hours > 0:
         cutoff = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat()

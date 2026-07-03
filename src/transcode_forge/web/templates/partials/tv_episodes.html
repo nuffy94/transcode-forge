@@ -2,7 +2,7 @@
 <table class="forge-table">
     <thead>
         <tr>
-            <th class="w-10"><input type="checkbox" class="forge-check" aria-label="Select all episodes" onclick="this.closest('table').querySelectorAll('.ep-select').forEach(c=>c.checked=this.checked)"></th>
+            <th class="w-10"><input type="checkbox" class="forge-check" aria-label="Select all episodes" data-role="tv-select-all"></th>
             <th>Episode</th>
             <th>Codec</th>
             <th class="text-right">Size</th>
@@ -12,8 +12,8 @@
     </thead>
     <tbody>
     {% for f in files %}
-    <tr class="group">
-        <td><input type="checkbox" class="forge-check ep-select file-select" aria-label="Select {{ f.filename }}" value="{{ f.id }}"></td>
+    <tr class="cursor-pointer" data-file-id="{{ f.id }}">
+        <td><input type="checkbox" class="forge-check tv-select" aria-label="Select {{ f.filename }}" value="{{ f.id }}"></td>
         <td><span class="font-mono text-xs text-forge-paper">{% if f.season and f.episode %}S{{ "%02d"|format(f.season) }}E{{ "%02d"|format(f.episode) }}{% else %}{{ f.filename }}{% endif %}</span></td>
         <td><span class="codec-badge {% if f.video_codec == 'h264' %}codec-h264{% elif f.video_codec == 'hevc' %}codec-hevc{% else %}codec-other{% endif %}">{{ f.video_codec }}</span></td>
         <td class="col-mono text-right">
@@ -35,11 +35,9 @@
             {% endif %}
         </td>
         <td class="text-right">
-            <div class="opacity-0 group-hover:opacity-100 transition-opacity">
-                {% if f.video_codec == 'h264' and f.transcode_status not in ('queued','transcoding','complete') %}
-                <button class="forge-btn forge-btn--ember" onclick="queueFile('{{ f.id }}')">Queue</button>
-                {% endif %}
-            </div>
+            {% if f.video_codec == 'h264' and f.transcode_status not in ('queued','transcoding','complete') %}
+            <button class="forge-btn" data-action="queue-file" data-id="{{ f.id }}">Queue</button>
+            {% endif %}
         </td>
     </tr>
     {% endfor %}
