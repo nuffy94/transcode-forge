@@ -1,27 +1,8 @@
 <!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include "partials/_head.html" %}
     <title>Sign in — Transcode Forge</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/app.css">
-    <script>
-    tailwind.config = { darkMode: "class", theme: { extend: { colors: {
-        "forge-bg":"#0d0b08","forge-surface":"#15120e","forge-panel":"#1c1813",
-        "forge-paper":"#e8e4dd","forge-ink":"#a8a195","forge-mute":"#9a8f7d",
-        "forge-rule":"#3a342a","forge-rule-bright":"#5a4f3e",
-        "forge-ember":"#ff7a1a","forge-ember-hot":"#ffa856","forge-rust":"#d75d3a",
-    }, fontFamily: {
-        display: ["Big Shoulders Display","sans-serif"],
-        body:    ["IBM Plex Sans","sans-serif"],
-        mono:    ["IBM Plex Mono","monospace"],
-    }}}};
-    </script>
 </head>
 <body class="bg-forge-bg text-forge-paper font-body antialiased min-h-screen flex items-center justify-center px-6">
     <div class="w-full max-w-sm">

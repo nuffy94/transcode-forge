@@ -67,3 +67,20 @@ jobs:
           name: qa-screenshots
           path: tests/qa/shots/
           if-no-files-found: ignore
+
+  css-fresh:
+    # The served app.css is generated from assets/css/forge.css by the pinned
+    # Tailwind v4 standalone CLI (scripts/build_css.py). Fail the build if the
+    # committed CSS is stale relative to its source. No deps — stdlib only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify committed CSS is fresh
+        run: python scripts/build_css.py --check
