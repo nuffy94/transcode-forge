@@ -1,407 +1,115 @@
 {% extends "base.html" %}
+{% from "partials/_icons.html" import icon %}
 {% block title %}Movies — Transcode Forge{% endblock %}
 
 {% block content %}
-<div class="flex flex-col gap-8">
+<div class="flex flex-col gap-4">
 
-    <header class="forge-rise forge-rise-1">
-        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
-            <span class="text-forge-ember">/</span> Section 02 &nbsp;·&nbsp; Catalog
-        </p>
-        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">MOVIES</h1>
-        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
-            Movie library inventory &mdash; codec, resolution, size, and transcode status. Queue individually or in bulk.
-        </p>
+    <header class="flex items-end justify-between gap-4 flex-wrap">
+        <div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">Movies</h1>
+            <p class="font-mono text-2xs text-forge-mute mt-0.5">
+                Library inventory — queue h264 files for transcode, one at a time or in bulk. Click a row for full detail.
+            </p>
+        </div>
     </header>
 
-    <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 forge-rise forge-rise-2">
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Total Movies</p>
-            <h3 id="stat-total" class="forge-stat-value text-4xl text-forge-paper tabular-nums">—</h3>
+    <!-- Stat strip -->
+    <section class="forge-panel grid grid-cols-2 lg:grid-cols-4">
+        <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Total movies</p>
+            <p id="stat-total" class="forge-stat-value text-xl mt-1.5">—</p>
         </div>
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Already HEVC</p>
-            <h3 id="stat-hevc" class="forge-stat-value text-4xl text-forge-oxide tabular-nums">—</h3>
+        <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Already HEVC</p>
+            <p id="stat-hevc" class="forge-stat-value text-xl mt-1.5 text-forge-oxide">—</p>
         </div>
-        <div class="forge-panel forge-panel--ember p-5">
-            <p class="forge-stat-label mb-2">Needs Transcode</p>
-            <h3 id="stat-pending" class="forge-stat-value text-4xl text-forge-ember-hot tabular-nums">—</h3>
+        <div class="p-3.5 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Needs transcode</p>
+            <p id="stat-pending" class="forge-stat-value text-xl mt-1.5 text-forge-ember-hot">—</p>
         </div>
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">In Queue</p>
-            <h3 id="stat-queued" class="forge-stat-value text-4xl text-forge-steel-hi tabular-nums">—</h3>
+        <div class="p-3.5">
+            <p class="forge-stat-label">In queue</p>
+            <p id="stat-queued" class="forge-stat-value text-xl mt-1.5 text-forge-steel-hi">—</p>
         </div>
     </section>
 
-    <section class="forge-panel relative forge-rise forge-rise-3">
-        <span class="forge-tick forge-tick-tl"></span>
-        <span class="forge-tick forge-tick-tr"></span>
-        <span class="forge-tick forge-tick-bl"></span>
-        <span class="forge-tick forge-tick-br"></span>
-
-        <!-- Filter strip -->
-        <div class="px-6 py-4 flex flex-wrap items-center justify-between gap-4 border-b border-forge-rule">
-            <div class="flex items-center gap-3 flex-wrap">
-                <div class="flex border border-forge-rule">
-                    <button id="view-table" class="p-2 forge-iconbtn !border-0" onclick="setView('table')" aria-label="Table view">
-                        <span class="material-symbols-outlined text-base">view_list</span>
-                    </button>
-                    <button id="view-grid" class="p-2 forge-iconbtn !border-0" onclick="setView('grid')" aria-label="Grid view">
-                        <span class="material-symbols-outlined text-base">grid_view</span>
-                    </button>
-                </div>
-                <select id="mv-status" aria-label="Filter movies by status" class="forge-select" onchange="loadMovies()">
-                    <option value="needs_transcode" selected>Needs Transcode</option>
-                    <option value="">Status: All</option>
-                    <option value="complete">Complete (HEVC)</option>
-                    <option value="queued,transcoding">In Queue</option>
-                    <option value="skipped">Skipped</option>
-                </select>
-                <select id="mv-codec" aria-label="Filter movies by codec" class="forge-select" onchange="loadMovies()">
-                    <option value="">Codec: All</option>
-                    <option value="h264">H.264</option>
-                    <option value="hevc">HEVC</option>
-                </select>
-                <select id="mv-sort" aria-label="Sort movies" class="forge-select" onchange="loadMovies()">
-                    <option value="file_size" selected>Sort: Size</option>
-                    <option value="filename">Sort: Name</option>
-                    <option value="file_modified_at">Sort: Date</option>
-                    <option value="video_codec">Sort: Codec</option>
-                    <option value="resolution">Sort: Resolution</option>
-                    <option value="transcode_status">Sort: Status</option>
-                </select>
-                <select id="mv-dir" aria-label="Sort direction" class="forge-select" onchange="loadMovies()">
-                    <option value="desc" selected>Largest first</option>
-                    <option value="asc">Smallest first</option>
-                </select>
+    <!-- Catalog — one filter surface, content, pager -->
+    <section class="forge-panel">
+        <div class="px-3 py-2.5 border-b border-forge-rule flex flex-wrap items-center gap-2">
+            <div class="flex border border-forge-rule" role="group" aria-label="View">
+                <button id="view-table" class="forge-iconbtn !border-0" aria-label="Table view">{{ icon('list', 'forge-icon--sm') }}</button>
+                <button id="view-grid" class="forge-iconbtn !border-0" aria-label="Grid view">{{ icon('grid', 'forge-icon--sm') }}</button>
             </div>
-            <div class="relative">
-                <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute text-sm pointer-events-none">search</span>
-                <input id="mv-search" class="forge-input pl-8 w-72" placeholder="Filter movies…" type="text"
-                       oninput="clearTimeout(window._st); window._st = setTimeout(loadMovies, 300)">
+            <select id="mv-status" aria-label="Filter movies by status" class="forge-select">
+                <option value="needs_transcode" selected>Needs transcode</option>
+                <option value="">Status: all</option>
+                <option value="complete">Complete (HEVC)</option>
+                <option value="queued,transcoding">In queue</option>
+                <option value="skipped">Skipped</option>
+            </select>
+            <select id="mv-codec" aria-label="Filter movies by codec" class="forge-select">
+                <option value="">Codec: all</option>
+                <option value="h264">H.264</option>
+                <option value="hevc">HEVC</option>
+            </select>
+            <select id="mv-sort" aria-label="Sort movies" class="forge-select hidden">
+                <option value="file_size:desc" selected>Largest first</option>
+                <option value="file_size:asc">Smallest first</option>
+                <option value="filename:asc">Name A→Z</option>
+                <option value="file_modified_at:desc">Newest first</option>
+            </select>
+            <div class="relative ml-auto">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute pointer-events-none">{{ icon('search', 'forge-icon--sm') }}</span>
+                <input id="mv-search" class="forge-input pl-8 w-64" placeholder="Filter movies…" type="search" aria-label="Filter movies by name">
             </div>
         </div>
 
-        <div id="movies-content" class="overflow-x-auto">
-            <div class="flex justify-center p-12">
-                <span class="material-symbols-outlined animate-spin text-forge-ember text-3xl">settings</span>
-            </div>
+        <div id="movies-content" class="forge-scroll">
+            <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
         </div>
 
-        <div id="movies-pagination" class="px-6 py-4 flex items-center justify-between border-t border-forge-rule">
-            <span class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp" id="mv-count"></span>
-            <div id="movies-pagination-buttons" class="flex items-center gap-1"></div>
+        <div class="forge-pager">
+            <span class="forge-pager-info" id="mv-count"></span>
+            <div class="forge-pager-btns" id="movies-pagination-buttons"></div>
         </div>
     </section>
 </div>
 
 <!-- Floating bulk action bar -->
-<div id="bulk-bar" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[60] forge-panel forge-panel--ember flex-col gap-2 px-5 py-3" style="display:none">
-    <div class="flex items-center gap-4">
-        <span class="forge-stat-label" style="color: var(--forge-ember-hot);">
-            <span id="bulk-count" class="font-mono text-base font-bold text-forge-ember-hot tabular-nums">0</span>
-            Selected
+<div id="bulk-bar" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] forge-panel forge-panel--ember flex-col gap-1.5 px-4 py-2.5" style="display:none">
+    <div class="flex items-center gap-3">
+        <span class="font-mono text-2xs uppercase tracking-stamp text-forge-ember-hot">
+            <span id="bulk-count" class="text-[13px] font-bold tabular-nums">0</span> selected
         </span>
-        <select id="queue-codec" class="forge-select" aria-label="Target codec" onchange="codecWarning()">
-            <option value="">Codec: Default</option>
+        <select id="queue-codec" class="forge-select" aria-label="Target codec">
+            <option value="">Codec: default</option>
             <option value="hevc">→ HEVC</option>
             <option value="av1">→ AV1</option>
         </select>
-        <button class="forge-btn forge-btn--ember" onclick="queueSelected()">
-            <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
-            <span>Queue Selected</span>
+        <button id="bulk-queue" class="forge-btn forge-btn--ember">
+            {{ icon('play', 'forge-icon--sm') }}
+            <span>Queue selected</span>
         </button>
-        <button class="forge-iconbtn forge-iconbtn--danger" onclick="clearSelection()" aria-label="Clear selection">
-            <span class="material-symbols-outlined text-base">close</span>
+        <button id="bulk-clear" class="forge-iconbtn forge-iconbtn--danger" aria-label="Clear selection">
+            {{ icon('x', 'forge-icon--sm') }}
         </button>
     </div>
-    <p id="codec-warning" class="font-mono text-[10px] text-forge-brass items-center gap-1.5" style="display:none; color: var(--forge-brass);">
-        <span class="material-symbols-outlined text-xs align-middle">warning</span>
+    <p id="codec-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
+        {{ icon('alert', 'forge-icon--sm') }}
         AV1: best compression, but older devices/clients may not decode it.
     </p>
 </div>
 
-<script>
-let currentPage = 1;
-let currentView = localStorage.getItem('tf-view') || 'table';
-const selectedIds = new Set();
+<template id="tpl-empty">
+    <div class="forge-empty">
+        {{ icon('movie-off') }}
+        <p class="forge-empty-title">No movies found</p>
+        <p class="forge-empty-hint">Adjust the filters, or scan a library from the Queue page.</p>
+    </div>
+</template>
+{% endblock %}
 
-function setView(view) {
-    currentView = view;
-    localStorage.setItem('tf-view', view);
-    const tableBtn = document.getElementById('view-table');
-    const gridBtn = document.getElementById('view-grid');
-    tableBtn.style.color = view === 'table' ? 'var(--forge-ember)' : 'var(--forge-mute)';
-    gridBtn.style.color = view === 'grid' ? 'var(--forge-ember)' : 'var(--forge-mute)';
-    loadMovies();
-}
-
-function loadMovies(page) {
-    // No arg = a filter/sort/search change or a view switch → back to page 1.
-    // Explicit page (pager click, or a post-action refresh passing currentPage)
-    // keeps you where you are.
-    currentPage = page || 1;
-    const params = new URLSearchParams({
-        status: document.getElementById('mv-status').value,
-        codec: document.getElementById('mv-codec').value,
-        sort: document.getElementById('mv-sort').value,
-        dir: document.getElementById('mv-dir').value,
-        search: document.getElementById('mv-search').value,
-        page: currentPage,
-        per_page: currentView === 'grid' ? 48 : 50,
-    });
-    for (const [k, v] of [...params]) { if (!v) params.delete(k); }
-
-    fetch(`/api/media/movies?${params}`)
-        .then(r => r.json())
-        .then(data => {
-            // Past the last page (e.g. the set shrank under us)? Snap to the last
-            // real page so you're never stranded on an empty page with no pager.
-            const totalPages = Math.ceil((data.meta.total || 0) / data.meta.per_page);
-            if (!data.data.length && data.meta.total > 0 && currentPage > totalPages) {
-                return loadMovies(totalPages);
-            }
-            updateStats(data.stats || {});
-            return currentView === 'grid' ? renderGrid(data) : renderTable(data);
-        });
-}
-
-function updateStats(stats) {
-    const fmt = n => String(n || 0).padStart(4, '0');
-    document.getElementById('stat-total').textContent = fmt(stats.total);
-    document.getElementById('stat-hevc').textContent = fmt(stats.complete);
-    document.getElementById('stat-pending').textContent = fmt(stats.needs_transcode);
-    document.getElementById('stat-queued').textContent = fmt(stats.queued);
-}
-
-function statusPill(s) {
-    const cls = {
-        complete: 'forge-pill--complete',
-        transcoding: 'forge-pill--running',
-        queued: 'forge-pill--queued',
-        pending: 'forge-pill--pending',
-        failed: 'forge-pill--failed',
-        skipped: 'forge-pill--skipped',
-        cancelled: 'forge-pill--cancelled',
-        needs_transcode: 'forge-pill--queued',
-    }[s] || 'forge-pill--pending';
-    return `<span class="forge-pill ${cls}">${s.replace('_',' ')}</span>`;
-}
-
-// Columns that read "high first" sort descending on first click; the rest A→Z.
-const MOVIE_DESC_FIRST = ['file_size', 'file_modified_at', 'duration', 'scanned_at'];
-function thSort(label, col, cls = '') {
-    const cur = document.getElementById('mv-sort').value;
-    const dir = document.getElementById('mv-dir').value;
-    const caret = cur === col ? (dir === 'desc' ? ' ↓' : ' ↑') : '';
-    return `<th class="cursor-pointer select-none hover:text-forge-paper ${cls}" onclick="sortMovies('${col}')">${label}${caret}</th>`;
-}
-function sortMovies(col) {
-    const s = document.getElementById('mv-sort');
-    const d = document.getElementById('mv-dir');
-    if (s.value === col) {
-        d.value = d.value === 'asc' ? 'desc' : 'asc';  // same column → reverse
-    } else {
-        s.value = col;
-        d.value = MOVIE_DESC_FIRST.includes(col) ? 'desc' : 'asc';
-    }
-    loadMovies();  // no arg → resets to page 1
-}
-
-function renderTable(data) {
-    const files = data.data;
-    const meta = data.meta;
-    const start = files.length ? (meta.page - 1) * meta.per_page + 1 : 0;
-    const end = (meta.page - 1) * meta.per_page + files.length;
-    document.getElementById('mv-count').textContent = `Showing ${start} – ${end} of ${meta.total}`;
-
-    if (!files.length) {
-        document.getElementById('movies-content').innerHTML = `
-            <div class="text-center py-16 px-6">
-                <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">movie_filter</span>
-                <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No Movies Found</p>
-                <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Run a library scan from the dashboard</p>
-            </div>`;
-        document.getElementById('movies-pagination-buttons').innerHTML = '';
-        return;
-    }
-
-    let html = `<table class="forge-table">
-        <thead>
-            <tr>
-                <th class="w-10"><input type="checkbox" class="forge-check" aria-label="Select all files" onclick="event.stopPropagation(); toggleSelectAll(this)"></th>
-                ${thSort('Movie', 'filename')}
-                ${thSort('Codec', 'video_codec')}
-                ${thSort('Resolution', 'resolution')}
-                ${thSort('Size', 'file_size', 'text-right')}
-                ${thSort('Date', 'file_modified_at')}
-                ${thSort('Status', 'transcode_status')}
-                <th class="text-right">Actions</th>
-            </tr>
-        </thead>
-        <tbody>`;
-
-    for (const f of files) {
-        const codecCls = f.video_codec === 'h264' ? 'codec-h264' : f.video_codec === 'hevc' ? 'codec-hevc' : 'codec-other';
-        const sizeGb = f.file_size ? (f.file_size / 1073741824).toFixed(1) : '';
-        const date = f.file_modified_at ? f.file_modified_at.substring(0, 10) : '';
-        const checked = selectedIds.has(f.id) ? 'checked' : '';
-        const canQueue = f.video_codec === 'h264' && !['queued','transcoding','complete'].includes(f.transcode_status);
-
-        html += `<tr class="group">
-            <td><input type="checkbox" class="forge-check file-select" aria-label="Select ${f.filename}" value="${f.id}" ${checked} onchange="event.stopPropagation(); toggleFile('${f.id}', this.checked)"></td>
-            <td><span class="text-forge-paper">${f.filename}</span></td>
-            <td><span class="codec-badge ${codecCls}">${f.video_codec || '?'}</span></td>
-            <td><span class="font-mono text-[10px] uppercase tracking-wider text-forge-steel">${f.resolution || ''}</span></td>
-            <td class="col-mono text-right text-forge-ink">${sizeGb}<span class="text-forge-mute"> GiB</span></td>
-            <td class="col-mono text-xs text-forge-mute">${date}</td>
-            <td>${statusPill(f.transcode_status)}</td>
-            <td class="text-right">
-                <div class="opacity-0 group-hover:opacity-100 transition-opacity">
-                    ${canQueue ? `<button class="forge-btn forge-btn--ember" onclick="queueFile('${f.id}')">Queue</button>` : ''}
-                </div>
-            </td>
-        </tr>`;
-    }
-    html += '</tbody></table>';
-    document.getElementById('movies-content').innerHTML = html;
-    renderPagination(meta);
-}
-
-function renderGrid(data) {
-    const files = data.data;
-    const meta = data.meta;
-    document.getElementById('mv-count').textContent = `${meta.total} files`;
-
-    if (!files.length) {
-        document.getElementById('movies-content').innerHTML = `
-            <div class="text-center py-16 px-6">
-                <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">movie_filter</span>
-                <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No Movies Found</p>
-                <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Run a library scan from the dashboard</p>
-            </div>`;
-        document.getElementById('movies-pagination-buttons').innerHTML = '';
-        return;
-    }
-
-    let html = '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 p-4">';
-    for (const f of files) {
-        const codecCls = f.video_codec === 'h264' ? 'codec-h264' : f.video_codec === 'hevc' ? 'codec-hevc' : 'codec-other';
-        const sizeGb = f.file_size ? (f.file_size / 1073741824).toFixed(1) : '?';
-        const checked = selectedIds.has(f.id) ? 'checked' : '';
-        const title = f.filename.replace(/\.[^.]+$/, '').replace(/\./g, ' ');
-
-        html += `<div class="forge-panel relative p-3 flex flex-col gap-2 cursor-pointer group">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <input type="checkbox" class="absolute top-2 right-2 forge-check file-select opacity-0 group-hover:opacity-100 transition-opacity" aria-label="Select ${f.filename}" value="${f.id}" ${checked} onchange="event.stopPropagation(); toggleFile('${f.id}', this.checked)">
-            <div class="flex items-center justify-center h-16 bg-forge-bg/60 border border-forge-rule">
-                <span class="material-symbols-outlined text-3xl text-forge-mute">local_movies</span>
-            </div>
-            <p class="text-xs text-forge-paper truncate font-medium" title="${f.filename}">${title}</p>
-            <div class="flex items-center justify-between">
-                <span class="codec-badge ${codecCls}">${f.video_codec || '?'}</span>
-                <span class="font-mono text-[10px] text-forge-mute tabular-nums">${sizeGb} GiB</span>
-            </div>
-            <div class="flex items-center justify-between">
-                <span class="font-mono text-[10px] text-forge-mute uppercase">${f.resolution || ''}</span>
-                ${statusPill(f.transcode_status)}
-            </div>
-        </div>`;
-    }
-    html += '</div>';
-    document.getElementById('movies-content').innerHTML = html;
-    renderPagination(meta);
-}
-
-function renderPagination(meta) {
-    const totalPages = Math.ceil(meta.total / meta.per_page);
-    if (totalPages <= 1) { document.getElementById('movies-pagination-buttons').innerHTML = ''; return; }
-    let html = '';
-    // Clamp the window center to a valid page so the pager never renders empty
-    // (which would strand you with no way back if you're past the last page).
-    const cp = Math.min(Math.max(currentPage, 1), totalPages);
-    for (let p = Math.max(1, cp - 3); p <= Math.min(totalPages, cp + 3); p++) {
-        const active = p === cp ? '!border-forge-ember !text-forge-ember' : '';
-        html += `<button class="forge-iconbtn font-mono text-[11px] font-semibold ${active}" onclick="loadMovies(${p})" aria-label="Page ${p}">${p}</button>`;
-    }
-    document.getElementById('movies-pagination-buttons').innerHTML = html;
-}
-
-function toggleFile(id, checked) {
-    if (checked === undefined) checked = !selectedIds.has(id);
-    if (checked) selectedIds.add(id); else selectedIds.delete(id);
-    const cb = document.querySelector(`.file-select[value="${id}"]`);
-    if (cb) cb.checked = checked;
-    updateBulkBar();
-}
-
-function toggleSelectAll(el) {
-    document.querySelectorAll('.file-select').forEach(cb => {
-        cb.checked = el.checked;
-        if (el.checked) selectedIds.add(cb.value); else selectedIds.delete(cb.value);
-    });
-    updateBulkBar();
-}
-
-function clearSelection() {
-    selectedIds.clear();
-    document.querySelectorAll('.file-select').forEach(cb => cb.checked = false);
-    updateBulkBar();
-}
-
-function updateBulkBar() {
-    const bar = document.getElementById('bulk-bar');
-    const count = selectedIds.size;
-    document.getElementById('bulk-count').textContent = count;
-    bar.style.display = count > 0 ? 'inline-flex' : 'none';
-}
-
-function codecWarning() {
-    const codec = document.getElementById('queue-codec').value;
-    document.getElementById('codec-warning').style.display = codec === 'av1' ? 'flex' : 'none';
-}
-
-function queueBody(ids) {
-    const codec = document.getElementById('queue-codec').value;
-    return JSON.stringify(codec ? {file_ids: ids, codec} : {file_ids: ids});
-}
-
-async function queueSelected() {
-    const ids = [...selectedIds];
-    if (!ids.length) return;
-    try {
-        const resp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody(ids)
-        });
-        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
-        const data = await resp.json();
-        showToast(`Queued ${data.queued} file${data.queued !== 1 ? 's' : ''}`, 'success');
-        clearSelection();
-        loadMovies(currentPage);
-    } catch (err) {
-        showToast('Failed to queue files', 'error');
-    }
-}
-
-async function queueFile(id) {
-    try {
-        const resp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody([id])
-        });
-        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
-        const data = await resp.json();
-        showToast(`Queued ${data.queued} file${data.queued !== 1 ? 's' : ''}`, 'success');
-        loadMovies(currentPage);
-    } catch (err) {
-        showToast('Failed to queue file', 'error');
-    }
-}
-
-setView(currentView);
-</script>
+{% block scripts %}
+<script type="module" src="/static/js/catalog.js"></script>
 {% endblock %}

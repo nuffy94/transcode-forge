@@ -1,63 +1,59 @@
 {% extends "base.html" %}
+{% from "partials/_icons.html" import icon %}
 {% block title %}TV Shows — Transcode Forge{% endblock %}
 
 {% block content %}
-<div class="flex flex-col gap-8">
+<div class="flex flex-col gap-4">
 
-    <header class="forge-rise forge-rise-1">
-        <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute mb-2">
-            <span class="text-forge-ember">/</span> Section 03 &nbsp;·&nbsp; Catalog
-        </p>
-        <h1 class="font-display font-black text-forge-paper leading-[0.85] tracking-tight" style="font-size: clamp(3rem, 6vw, 4.5rem);">TV SHOWS</h1>
-        <p class="font-mono text-xs text-forge-ink mt-3 max-w-2xl">
-            Shows with episodes still on h264. Pick one, click Queue. Already-done shows are hidden by default — flip the toggle to see them all.
-        </p>
+    <header class="flex items-end justify-between gap-4 flex-wrap">
+        <div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">TV Shows</h1>
+            <p class="font-mono text-2xs text-forge-mute mt-0.5">
+                Shows with episodes still on h264 — queue a whole show in one click, or work episode by episode.
+            </p>
+        </div>
     </header>
 
-    <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 forge-rise forge-rise-2">
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Total Shows</p>
-            <h3 id="stat-shows" class="forge-stat-value text-4xl text-forge-paper tabular-nums">—</h3>
+    <!-- Stat strip -->
+    <section class="forge-panel grid grid-cols-2 lg:grid-cols-4">
+        <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Shows</p>
+            <p id="stat-shows" class="forge-stat-value text-xl mt-1.5">—</p>
         </div>
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Total Episodes</p>
-            <h3 id="stat-episodes" class="forge-stat-value text-4xl text-forge-paper tabular-nums">—</h3>
+        <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Episodes</p>
+            <p id="stat-episodes" class="forge-stat-value text-xl mt-1.5">—</p>
         </div>
-        <div class="forge-panel forge-panel--ember p-5">
-            <p class="forge-stat-label mb-2">Efficiency</p>
-            <h3 id="stat-efficiency" class="forge-stat-value text-4xl text-forge-ember-hot tabular-nums">—</h3>
+        <div class="p-3.5 lg:border-r border-forge-rule/60">
+            <p class="forge-stat-label">Efficiency</p>
+            <p id="stat-efficiency" class="forge-stat-value text-xl mt-1.5 text-forge-ember-hot">—</p>
         </div>
-        <div class="forge-panel p-5 relative">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Pending</p>
-            <h3 id="stat-pending" class="forge-stat-value text-4xl text-forge-brass tabular-nums">—</h3>
+        <div class="p-3.5">
+            <p class="forge-stat-label">Pending</p>
+            <p id="stat-pending" class="forge-stat-value text-xl mt-1.5 text-forge-brass">—</p>
         </div>
     </section>
 
     <!-- View tabs -->
-    <div class="border-b border-forge-rule forge-rise forge-rise-3">
-        <nav class="flex items-center gap-2" role="tablist">
-            <button id="tab-shows" class="forge-tab is-active" onclick="switchView('shows')" role="tab">
-                <span class="material-symbols-outlined align-middle text-base mr-1">apartment</span> By Show
+    <div class="border-b border-forge-rule">
+        <nav class="flex items-center gap-1" role="tablist">
+            <button id="tab-shows" class="forge-tab is-active" role="tab">
+                {{ icon('building', 'forge-icon--sm') }} By show
             </button>
-            <button id="tab-files" class="forge-tab" onclick="switchView('files')" role="tab">
-                <span class="material-symbols-outlined align-middle text-base mr-1">list</span> All Episodes
+            <button id="tab-files" class="forge-tab" role="tab">
+                {{ icon('list', 'forge-icon--sm') }} All episodes
             </button>
         </nav>
     </div>
 
     <!-- Shows view -->
-    <div id="shows-view" class="forge-rise forge-rise-4 flex flex-col gap-3">
-        <div class="forge-panel relative px-5 py-3 flex flex-wrap items-center justify-between gap-3">
-            <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-br"></span>
+    <div id="shows-view" class="flex flex-col gap-2.5">
+        <div class="forge-panel px-3 py-2.5 flex flex-wrap items-center gap-3">
             <div class="relative flex-1 min-w-[14rem] max-w-md">
-                <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute text-sm pointer-events-none">search</span>
-                <input id="shows-search" type="text" placeholder="Filter shows by name…" class="forge-input pl-8 w-full"
-                       oninput="applyShowFilters()">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute pointer-events-none">{{ icon('search', 'forge-icon--sm') }}</span>
+                <input id="shows-search" type="search" placeholder="Filter shows by name…" class="forge-input pl-8 w-full" aria-label="Filter shows by name">
             </div>
-            <select id="shows-sort" aria-label="Sort shows" class="forge-select" onchange="applyShowFilters()">
+            <select id="shows-sort" aria-label="Sort shows" class="forge-select">
                 <option value="todo_desc">Most to do first</option>
                 <option value="size_desc">Largest size first</option>
                 <option value="size_asc">Smallest size first</option>
@@ -65,495 +61,72 @@
                 <option value="name_asc">Name (A → Z)</option>
                 <option value="name_desc">Name (Z → A)</option>
             </select>
-            <label class="flex items-center gap-2 font-mono text-[11px] uppercase tracking-stamp text-forge-ink cursor-pointer select-none">
-                <input id="shows-hide-done" type="checkbox" class="forge-check" checked onchange="applyShowFilters()">
+            <label class="flex items-center gap-2 font-mono text-2xs uppercase tracking-stamp text-forge-ink cursor-pointer select-none">
+                <input id="shows-hide-done" type="checkbox" class="forge-check" checked>
                 Hide completed shows
             </label>
-            <span class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute" id="shows-visible-count">—</span>
+            <span class="font-mono text-2xs uppercase tracking-stamp text-forge-mute" id="shows-visible-count">—</span>
         </div>
-        <div id="shows-list" class="flex flex-col gap-3">
-            <div class="flex justify-center p-8">
-                <span class="material-symbols-outlined animate-spin text-forge-ember text-3xl">settings</span>
-            </div>
+        <div id="shows-list" class="flex flex-col gap-2.5">
+            <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
         </div>
     </div>
 
     <!-- Files view -->
-    <div id="files-view" class="hidden forge-rise forge-rise-4">
-        <div class="forge-panel relative">
-            <span class="forge-tick forge-tick-tl"></span>
-            <span class="forge-tick forge-tick-tr"></span>
-            <span class="forge-tick forge-tick-bl"></span>
-            <span class="forge-tick forge-tick-br"></span>
-            <div class="px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-forge-rule">
-                <div class="flex items-center gap-3 flex-wrap">
-                    <select id="tv-status" aria-label="Filter episodes by status" class="forge-select" onchange="loadTvFiles()">
-                        <option value="needs_transcode" selected>Needs Transcode</option>
-                        <option value="">Status: All</option>
-                        <option value="complete">Complete</option>
-                        <option value="queued,transcoding">In Queue</option>
-                        <option value="skipped">Skipped</option>
-                    </select>
-                    <select id="tv-sort" aria-label="Sort episodes" class="forge-select" onchange="loadTvFiles()">
-                        <option value="show_name">Sort: Show</option>
-                        <option value="filename">Sort: Episode</option>
-                        <option value="video_codec">Sort: Codec</option>
-                        <option value="file_size">Sort: Size</option>
-                        <option value="file_modified_at">Sort: Date</option>
-                        <option value="transcode_status">Sort: Status</option>
-                    </select>
-                    <select id="tv-dir" aria-label="Sort direction" class="forge-select" onchange="loadTvFiles()">
-                        <option value="asc">A → Z</option>
-                        <option value="desc">Z → A</option>
-                    </select>
-                </div>
-                <div class="relative">
-                    <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute text-sm pointer-events-none">search</span>
-                    <input id="tv-search" type="text" placeholder="Filter episodes…" class="forge-input pl-8 w-72"
-                           oninput="clearTimeout(window._tvSearch); window._tvSearch = setTimeout(loadTvFiles, 300)">
+    <div id="files-view" class="hidden">
+        <div class="forge-panel">
+            <div class="px-3 py-2.5 flex flex-wrap items-center gap-2 border-b border-forge-rule">
+                <select id="tv-status" aria-label="Filter episodes by status" class="forge-select">
+                    <option value="needs_transcode" selected>Needs transcode</option>
+                    <option value="">Status: all</option>
+                    <option value="complete">Complete</option>
+                    <option value="queued,transcoding">In queue</option>
+                    <option value="skipped">Skipped</option>
+                </select>
+                <div class="relative ml-auto">
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-forge-mute pointer-events-none">{{ icon('search', 'forge-icon--sm') }}</span>
+                    <input id="tv-search" type="search" placeholder="Filter episodes…" class="forge-input pl-8 w-64" aria-label="Filter episodes by name">
                 </div>
             </div>
-            <div class="px-6 py-3 flex items-center justify-between border-b border-forge-rule bg-forge-bg/40">
-                <span class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">
-                    <span id="tv-selected-count">0</span> selected
+            <div class="px-3 py-2 flex items-center justify-between gap-3 border-b border-forge-rule bg-forge-well/60">
+                <span class="font-mono text-2xs uppercase tracking-stamp text-forge-mute">
+                    <span id="tv-selected-count" class="tabular-nums">0</span> selected
                 </span>
-                <div class="flex items-center gap-3">
-                    <span id="codec-warning" class="font-mono text-[10px]" style="display:none; color: var(--forge-brass);">
-                        <span class="material-symbols-outlined text-xs align-middle">warning</span>
+                <div class="flex items-center gap-2.5 flex-wrap">
+                    <span id="codec-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
+                        {{ icon('alert', 'forge-icon--sm') }}
                         AV1: best compression, but older devices/clients may not decode it.
                     </span>
-                    <select id="queue-codec" class="forge-select" aria-label="Target codec" onchange="codecWarning()">
-                        <option value="">Codec: Default</option>
+                    <select id="queue-codec" class="forge-select" aria-label="Target codec">
+                        <option value="">Codec: default</option>
                         <option value="hevc">&rarr; HEVC</option>
                         <option value="av1">&rarr; AV1</option>
                     </select>
-                    <button id="tv-queue-selected" class="forge-btn forge-btn--ember disabled:opacity-40 disabled:cursor-not-allowed"
-                            onclick="queueSelected()" disabled>
-                        Queue Selected
+                    <button id="tv-queue-selected" class="forge-btn forge-btn--ember" disabled>
+                        Queue selected
                     </button>
                 </div>
             </div>
-            <div id="tv-table" class="overflow-x-auto">
-                <div class="flex justify-center p-12">
-                    <span class="material-symbols-outlined animate-spin text-forge-ember text-3xl">settings</span>
-                </div>
+            <div id="tv-table" class="forge-scroll">
+                <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
             </div>
-            <div id="tv-pagination" class="px-6 py-4 flex items-center justify-between border-t border-forge-rule">
-                <span class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp" id="tv-count"></span>
-                <div id="tv-pagination-buttons" class="flex items-center gap-1"></div>
+            <div class="forge-pager">
+                <span class="forge-pager-info" id="tv-count"></span>
+                <div class="forge-pager-btns" id="tv-pagination-buttons"></div>
             </div>
         </div>
     </div>
 </div>
 
-<script>
-let tvPage = 1;
+<template id="tpl-empty">
+    <div class="forge-empty">
+        {{ icon('tv-off') }}
+        <p class="forge-empty-title">No episodes</p>
+        <p class="forge-empty-hint">Adjust the filters, or scan the TV library from the Queue page.</p>
+    </div>
+</template>
+{% endblock %}
 
-function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-function statusPill(s) {
-    const cls = {
-        complete: 'forge-pill--complete',
-        transcoding: 'forge-pill--running',
-        queued: 'forge-pill--queued',
-        pending: 'forge-pill--pending',
-        failed: 'forge-pill--failed',
-        skipped: 'forge-pill--skipped',
-        cancelled: 'forge-pill--cancelled',
-        needs_transcode: 'forge-pill--queued',
-    }[s] || 'forge-pill--pending';
-    return `<span class="forge-pill ${cls}">${(s || 'unknown').replace('_',' ')}</span>`;
-}
-
-function toggleShow(el) {
-    const showId = el.dataset.showId;
-    const showName = el.dataset.showName;
-    const content = document.getElementById('content-' + showId);
-    content.classList.toggle('hidden');
-    if (!content.classList.contains('hidden') && !content.dataset.loaded) {
-        htmx.ajax('GET', '/partials/tv-episodes?show=' + encodeURIComponent(showName),
-                  {target: content, swap: 'innerHTML'});
-        content.dataset.loaded = 'true';
-    }
-}
-
-function switchView(view) {
-    const showsView = document.getElementById('shows-view');
-    const filesView = document.getElementById('files-view');
-    const tabShows = document.getElementById('tab-shows');
-    const tabFiles = document.getElementById('tab-files');
-    if (view === 'shows') {
-        showsView.classList.remove('hidden');
-        filesView.classList.add('hidden');
-        tabShows.classList.add('is-active');
-        tabFiles.classList.remove('is-active');
-    } else {
-        showsView.classList.add('hidden');
-        filesView.classList.remove('hidden');
-        tabShows.classList.remove('is-active');
-        tabFiles.classList.add('is-active');
-        loadTvFiles();
-    }
-}
-
-async function loadShows() {
-    const resp = await fetch('/api/media/tv/shows');
-    const {data, stats} = await resp.json();
-
-    const fmt = n => String(n || 0).padStart(4, '0');
-    if (stats) {
-        document.getElementById('stat-shows').textContent = String(stats.total_shows || 0).padStart(3, '0');
-        document.getElementById('stat-episodes').textContent = fmt(stats.total_episodes);
-        document.getElementById('stat-efficiency').innerHTML = Math.round(stats.efficiency || 0) + '<span class="text-base text-forge-mute ml-1">%</span>';
-        document.getElementById('stat-pending').textContent = fmt(stats.pending);
-    }
-
-    window._tvShowsCache = data || [];
-    applyShowFilters();
-}
-
-function applyShowFilters() {
-    const all = window._tvShowsCache || [];
-    const q = (document.getElementById('shows-search')?.value || '').trim().toLowerCase();
-    const hideDone = document.getElementById('shows-hide-done')?.checked ?? true;
-    const sortKey = document.getElementById('shows-sort')?.value || 'todo_desc';
-
-    const filtered = all.filter(show => {
-        if (hideDone && (show.needs_transcode_count || 0) === 0) return false;
-        if (q && !show.show_name.toLowerCase().includes(q)) return false;
-        return true;
-    });
-
-    const sorters = {
-        todo_desc:     (a, b) => (b.needs_transcode_count || 0) - (a.needs_transcode_count || 0)
-                                || a.show_name.localeCompare(b.show_name),
-        size_desc:     (a, b) => (b.total_size || 0) - (a.total_size || 0),
-        size_asc:      (a, b) => (a.total_size || 0) - (b.total_size || 0),
-        episodes_desc: (a, b) => (b.episode_count || 0) - (a.episode_count || 0),
-        name_asc:      (a, b) => a.show_name.localeCompare(b.show_name),
-        name_desc:     (a, b) => b.show_name.localeCompare(a.show_name),
-    };
-    filtered.sort(sorters[sortKey] || sorters.todo_desc);
-
-    const visEl = document.getElementById('shows-visible-count');
-    if (visEl) visEl.textContent = `${filtered.length} of ${all.length} shows`;
-
-    const target = document.getElementById('shows-list');
-    if (!filtered.length) {
-        const emptyMsg = !all.length
-            ? {icon: 'tv_off', head: 'No TV Shows', body: 'Add a TV library, then scan it'}
-            : hideDone
-                ? {icon: 'check_circle', head: 'All Caught Up', body: 'Every show is fully transcoded. Untick "Hide completed" to browse them.'}
-                : {icon: 'search_off', head: 'No Matches', body: 'No show names match your filter'};
-        target.innerHTML = `
-            <div class="forge-panel relative text-center py-16 px-6">
-                <span class="forge-tick forge-tick-tl"></span><span class="forge-tick forge-tick-tr"></span>
-                <span class="forge-tick forge-tick-bl"></span><span class="forge-tick forge-tick-br"></span>
-                <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">${emptyMsg.icon}</span>
-                <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">${emptyMsg.head}</p>
-                <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">${emptyMsg.body}</p>
-            </div>`;
-        return;
-    }
-
-    target.innerHTML = filtered.map(renderShowRow).join('');
-    htmx.process(target);
-}
-
-function renderShowRow(show) {
-    const total = show.episode_count || 0;
-    const done = show.transcoded_count || 0;
-    const todo = show.needs_transcode_count || 0;
-    const donePct = total > 0 ? (done / total) * 100 : 0;
-    const todoPct = total > 0 ? (todo / total) * 100 : 0;
-    const sizeGiB = show.total_size ? (show.total_size / 1073741824).toFixed(1) : '0';
-    const showId = show.show_name.replace(/[^a-zA-Z0-9]/g, '_');
-    const safeName = show.show_name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
-    const isDone = todo === 0;
-
-    const headlineHtml = isDone
-        ? `<span class="font-display font-black text-3xl text-forge-oxide tabular-nums leading-none">✓</span>
-           <span class="font-mono text-[9px] uppercase tracking-stamp text-forge-mute mt-1">all done</span>`
-        : `<span class="font-display font-black text-3xl text-forge-ember tabular-nums leading-none">${todo}</span>
-           <span class="font-mono text-[9px] uppercase tracking-stamp text-forge-mute mt-1">to queue</span>`;
-
-    const actionHtml = isDone
-        ? ''
-        : `<button class="forge-btn forge-btn--ember whitespace-nowrap" onclick="event.stopPropagation(); queueShowFromCard('${safeName}', this)">
-               Queue ${todo}
-           </button>`;
-
-    return `
-    <div class="forge-panel relative overflow-hidden ${isDone ? 'opacity-70' : ''}">
-        <span class="forge-tick forge-tick-tl"></span>
-        <span class="forge-tick forge-tick-tr"></span>
-        <span class="forge-tick forge-tick-bl"></span>
-        <span class="forge-tick forge-tick-br"></span>
-        <div class="flex items-center px-5 py-4 cursor-pointer hover:bg-forge-panel-hi/40 transition-colors" data-show-id="${showId}" data-show-name="${safeName}" onclick="toggleShow(this)">
-            <div class="w-10 h-14 mr-5 bg-forge-bg/60 border border-forge-rule flex items-center justify-center flex-shrink-0">
-                <span class="material-symbols-outlined text-2xl text-forge-mute">theaters</span>
-            </div>
-            <div class="flex-1 grid grid-cols-12 items-center gap-4">
-                <div class="col-span-4 flex flex-col">
-                    <span class="font-display font-bold text-lg text-forge-paper uppercase tracking-tight">${escapeHtml(show.show_name)}</span>
-                    <span class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp mt-0.5">${total} eps · ${sizeGiB} GiB</span>
-                </div>
-                <div class="col-span-5 flex flex-col gap-1.5">
-                    <div class="flex justify-between items-center font-mono text-[10px] uppercase tracking-stamp">
-                        <span class="text-forge-oxide">${done} done</span>
-                        <span class="text-forge-ember-hot">${todo} to do</span>
-                    </div>
-                    <div class="relative h-2 bg-forge-bg/80 border border-forge-rule overflow-hidden">
-                        <div class="absolute inset-y-0 left-0" style="width:${donePct}%; background: var(--forge-oxide);"></div>
-                        <div class="absolute inset-y-0" style="left:${donePct}%; width:${todoPct}%; background: var(--forge-ember);"></div>
-                    </div>
-                </div>
-                <div class="col-span-2 flex flex-col items-end justify-center">
-                    ${headlineHtml}
-                </div>
-                <div class="col-span-1 flex flex-col items-end justify-center gap-1">
-                    ${actionHtml}
-                    <span class="material-symbols-outlined text-forge-mute text-base" id="expand-${showId}">expand_more</span>
-                </div>
-            </div>
-        </div>
-        <div id="content-${showId}" class="hidden bg-forge-bg/40 border-t border-forge-rule">
-            <div class="flex justify-center p-6">
-                <span class="material-symbols-outlined animate-spin text-forge-ember text-2xl">settings</span>
-            </div>
-        </div>
-    </div>`;
-}
-
-async function fetchAllShowEpisodeIds(showName) {
-    // The API caps per_page at 200 — page through; long-running shows
-    // (anime especially) can easily exceed one page.
-    const ids = [];
-    let page = 1, total = Infinity;
-    while (ids.length < total) {
-        const resp = await fetch(`/api/media/tv?show=${encodeURIComponent(showName)}&status=needs_transcode&per_page=200&page=${page}`);
-        if (!resp.ok) throw new Error(resp.statusText);
-        const {data, meta} = await resp.json();
-        if (!data.length) break;
-        ids.push(...data.map(f => f.id));
-        total = meta.total;
-        page += 1;
-    }
-    return ids;
-}
-
-async function queueShowFromCard(showName, btn) {
-    const original = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="material-symbols-outlined animate-spin align-middle text-base">settings</span>';
-    try {
-        const ids = await fetchAllShowEpisodeIds(showName);
-        if (!ids.length) { showToast('Nothing to queue for this show', 'info'); return; }
-        const queueResp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody(ids)
-        });
-        if (!queueResp.ok) throw new Error(queueResp.statusText);
-        const result = await queueResp.json();
-        showToast(`Queued ${result.queued} episode${result.queued !== 1 ? 's' : ''} of ${showName}`, 'success');
-        await loadShows();
-    } catch (err) {
-        btn.disabled = false;
-        btn.innerHTML = original;
-        showToast(`Failed to queue: ${err.message}`, 'error');
-    }
-}
-
-async function loadTvFiles(page) {
-    // No arg = filter/sort/search change → back to page 1; explicit page keeps it.
-    tvPage = page || 1;
-    const params = new URLSearchParams({
-        status: document.getElementById('tv-status').value,
-        sort: document.getElementById('tv-sort').value,
-        dir: document.getElementById('tv-dir').value,
-        search: document.getElementById('tv-search').value,
-        page: tvPage, per_page: 50,
-    });
-    for (const [k, v] of [...params]) { if (!v) params.delete(k); }
-    const resp = await fetch(`/api/media/tv?${params}`);
-    const data = await resp.json();
-    // Past the last page (set shrank under us)? Snap back so you're never
-    // stranded on an empty page with no pager.
-    const totalPages = Math.ceil((data.meta.total || 0) / data.meta.per_page);
-    if (!data.data.length && data.meta.total > 0 && tvPage > totalPages) {
-        return loadTvFiles(totalPages);
-    }
-    renderTvTable(data);
-}
-
-// Columns that read "high first" sort descending on first click; the rest A→Z.
-const TV_DESC_FIRST = ['file_size', 'file_modified_at', 'duration', 'scanned_at'];
-function thSortTv(label, col, cls = '') {
-    const cur = document.getElementById('tv-sort').value;
-    const dir = document.getElementById('tv-dir').value;
-    const caret = cur === col ? (dir === 'desc' ? ' ↓' : ' ↑') : '';
-    return `<th class="cursor-pointer select-none hover:text-forge-paper ${cls}" onclick="sortTv('${col}')">${label}${caret}</th>`;
-}
-function sortTv(col) {
-    const s = document.getElementById('tv-sort');
-    const d = document.getElementById('tv-dir');
-    if (s.value === col) {
-        d.value = d.value === 'asc' ? 'desc' : 'asc';  // same column → reverse
-    } else {
-        s.value = col;
-        d.value = TV_DESC_FIRST.includes(col) ? 'desc' : 'asc';
-    }
-    loadTvFiles();  // no arg → resets to page 1
-}
-
-function renderTvTable(data) {
-    const files = data.data;
-    const meta = data.meta;
-    const start = files.length ? (meta.page - 1) * meta.per_page + 1 : 0;
-    const end = (meta.page - 1) * meta.per_page + files.length;
-    document.getElementById('tv-count').textContent = `Showing ${start} – ${end} of ${meta.total}`;
-
-    if (!files.length) {
-        document.getElementById('tv-table').innerHTML = `
-            <div class="text-center py-16 px-6">
-                <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">tv_off</span>
-                <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No Episodes</p>
-            </div>`;
-        document.getElementById('tv-pagination-buttons').innerHTML = '';
-        return;
-    }
-
-    let html = `<table class="forge-table">
-        <thead>
-            <tr>
-                <th class="w-10"><input type="checkbox" class="forge-check" aria-label="Select all episodes" onclick="event.stopPropagation(); toggleSelectAllTv(this); updateTvSelectionCount()"></th>
-                ${thSortTv('Show', 'show_name')}
-                ${thSortTv('Episode', 'filename')}
-                ${thSortTv('Codec', 'video_codec')}
-                ${thSortTv('Size', 'file_size', 'text-right')}
-                ${thSortTv('Status', 'transcode_status')}
-                <th class="text-right">Actions</th>
-            </tr>
-        </thead>
-        <tbody>`;
-
-    for (const f of files) {
-        const ep = f.season && f.episode ? `S${String(f.season).padStart(2,'0')}E${String(f.episode).padStart(2,'0')}` : '';
-        const size = f.file_size ? (f.file_size / 1073741824).toFixed(1) : '';
-        const codecCls = f.video_codec === 'h264' ? 'codec-h264' : f.video_codec === 'hevc' ? 'codec-hevc' : 'codec-other';
-        const canQueue = f.video_codec === 'h264' && !['queued','transcoding','complete'].includes(f.transcode_status);
-
-        html += `<tr class="group">
-            <td><input type="checkbox" class="forge-check file-select tv-select" aria-label="Select ${f.filename}" value="${f.id}" onclick="event.stopPropagation()" onchange="updateTvSelectionCount()"></td>
-            <td><span class="text-forge-paper text-sm">${f.show_name || ''}</span></td>
-            <td><span class="font-mono text-xs text-forge-ink">${ep || f.filename}</span></td>
-            <td><span class="codec-badge ${codecCls}">${f.video_codec || '?'}</span></td>
-            <td class="col-mono text-right text-forge-ink">${size}<span class="text-forge-mute"> GiB</span></td>
-            <td>${statusPill(f.transcode_status)}</td>
-            <td class="text-right">
-                <div class="opacity-0 group-hover:opacity-100 transition-opacity">
-                    ${canQueue ? `<button class="forge-btn forge-btn--ember" onclick="queueFile('${f.id}')">Queue</button>` : ''}
-                </div>
-            </td>
-        </tr>`;
-    }
-    html += '</tbody></table>';
-    document.getElementById('tv-table').innerHTML = html;
-    updateTvSelectionCount();
-
-    const totalPages = Math.ceil(meta.total / meta.per_page);
-    if (totalPages <= 1) {
-        document.getElementById('tv-pagination-buttons').innerHTML = '';
-    } else {
-        let pag = '';
-        // Clamp the window center so the pager never renders empty past the last page.
-        const cp = Math.min(Math.max(tvPage, 1), totalPages);
-        for (let p = Math.max(1, cp - 3); p <= Math.min(totalPages, cp + 3); p++) {
-            const active = p === cp ? '!border-forge-ember !text-forge-ember' : '';
-            pag += `<button class="forge-iconbtn font-mono text-[11px] font-semibold ${active}" onclick="loadTvFiles(${p})" aria-label="Page ${p}">${p}</button>`;
-        }
-        document.getElementById('tv-pagination-buttons').innerHTML = pag;
-    }
-}
-
-function toggleSelectAllTv(el) {
-    document.querySelectorAll('.tv-select').forEach(cb => cb.checked = el.checked);
-}
-
-function updateTvSelectionCount() {
-    const n = document.querySelectorAll('.tv-select:checked').length;
-    const countEl = document.getElementById('tv-selected-count');
-    const btn = document.getElementById('tv-queue-selected');
-    if (countEl) countEl.textContent = n;
-    if (btn) {
-        btn.disabled = n === 0;
-        btn.textContent = n > 0 ? `Queue Selected (${n})` : 'Queue Selected';
-    }
-}
-
-function getSelectedIds() {
-    return [...document.querySelectorAll('.file-select:checked')].map(cb => cb.value);
-}
-
-function codecWarning() {
-    const codec = document.getElementById('queue-codec').value;
-    document.getElementById('codec-warning').style.display = codec === 'av1' ? 'inline' : 'none';
-}
-
-function queueBody(ids) {
-    const codec = document.getElementById('queue-codec').value;
-    return JSON.stringify(codec ? {file_ids: ids, codec} : {file_ids: ids});
-}
-
-async function queueSelected() {
-    const ids = getSelectedIds();
-    if (!ids.length) return;
-    try {
-        const resp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody(ids)
-        });
-        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
-        const data = await resp.json();
-        showToast(`Queued ${data.queued} episode${data.queued !== 1 ? 's' : ''}`, 'success');
-        await loadTvFiles(tvPage);
-        updateTvSelectionCount();
-    } catch (err) {
-        showToast('Failed to queue episodes', 'error');
-    }
-}
-
-async function queueShow(showName) {
-    try {
-        const ids = await fetchAllShowEpisodeIds(showName);
-        if (!ids.length) return;
-        const queueResp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody(ids)
-        });
-        if (!queueResp.ok) { showToast(`Error: ${queueResp.statusText}`, 'error'); return; }
-        showToast(`Queued ${ids.length} episode${ids.length !== 1 ? 's' : ''}`, 'success');
-        loadShows();
-    } catch (err) {
-        showToast('Failed to queue show', 'error');
-    }
-}
-
-async function queueFile(id) {
-    try {
-        const resp = await fetch('/api/media/queue', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: queueBody([id])
-        });
-        if (!resp.ok) { showToast(`Error: ${resp.statusText}`, 'error'); return; }
-        const data = await resp.json();
-        showToast(`Queued ${data.queued} episode${data.queued !== 1 ? 's' : ''}`, 'success');
-        loadTvFiles(tvPage);
-    } catch (err) {
-        showToast('Failed to queue episode', 'error');
-    }
-}
-
-loadShows();
-</script>
+{% block scripts %}
+<script type="module" src="/static/js/catalog.js"></script>
 {% endblock %}
