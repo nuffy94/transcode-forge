@@ -36,14 +36,27 @@ class TestSidebar:
             expect(page.locator(".forge-navlink-label", has_text=label)).to_be_visible()
 
     def test_sidebar_logo(self, page: Page, base_url: str):
+        """The v2 brand lockup: mono eyebrow over the Big Shoulders wordmark."""
         page.goto(base_url)
-        expect(page.locator("aside >> text=FORGE")).to_be_visible()
-        expect(page.locator("aside >> text=Transcode")).to_be_visible()
+        expect(page.locator(".forge-brand-word")).to_have_text("FORGE")
+        expect(page.locator(".forge-brand-eyebrow")).to_have_text("Transcode")
 
     def test_active_nav_highlighting(self, page: Page, base_url: str):
         page.goto(f"{base_url}/movies")
         movies_link = page.locator("aside a[href='/movies']")
         expect(movies_link).to_have_class(re.compile("is-active"))
+
+    def test_nav_uses_sprite_icons(self, page: Page, base_url: str):
+        """Shell nav renders inline SVG sprite icons (not the Material font)."""
+        page.goto(base_url)
+        icons = page.locator("aside .forge-navlink svg.forge-icon")
+        assert icons.count() >= 9, "every nav row should carry a sprite icon"
+        expect(page.locator("aside .material-symbols-outlined")).to_have_count(0)
+
+    def test_nav_has_no_numbered_markers(self, page: Page, base_url: str):
+        """v2 killed the 01/02 ledger numbers — nav order carries no meaning."""
+        page.goto(base_url)
+        expect(page.locator(".forge-navlink-num")).to_have_count(0)
 
 
 class TestDashboard:
@@ -214,6 +227,11 @@ class TestTopBar:
         expect(page.locator("header >> text=Online")).to_be_visible()
         expect(page.locator("#forge-clock")).to_be_attached()
 
+    def test_section_crumb(self, page: Page, base_url: str):
+        """The header carries the active section as a stamped crumb."""
+        page.goto(f"{base_url}/queue")
+        expect(page.locator(".forge-crumb")).to_contain_text("Queue")
+
 
 class TestHTMXPolling:
     """Verify HTMX partial loading works (containers populate after load)."""
@@ -241,9 +259,15 @@ class TestDesignSystem:
         # Forge warm graphite #0d0b08 → rgb(13, 11, 8)
         assert "13, 11, 8" in bg_color or "0d0b08" in bg_color
 
-    def test_material_symbols_loaded(self, page: Page, base_url: str):
+    def test_heat_seam_present(self, page: Page, base_url: str):
+        """The v2 signature — the molten seam along the top edge."""
         page.goto(base_url)
-        # Material Symbols should render (not show as text boxes)
+        expect(page.locator(".forge-seam")).to_be_attached()
+
+    def test_material_symbols_loaded(self, page: Page, base_url: str):
+        # Page BODIES still use the Material font until their rebuild steps
+        # (the shell is sprite-only) — this assertion is retired in Step 4.
+        page.goto(base_url)
         icon = page.locator(".material-symbols-outlined").first
         expect(icon).to_be_visible()
 
