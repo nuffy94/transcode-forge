@@ -265,12 +265,13 @@ class TestDesignSystem:
         page.goto(base_url)
         expect(page.locator(".forge-seam")).to_be_attached()
 
-    def test_material_symbols_loaded(self, page: Page, base_url: str):
-        # Page BODIES still use the Material font until their rebuild steps
-        # (the shell is sprite-only) — this assertion is retired in Step 4.
+    def test_sprite_icons_render(self, page: Page, base_url: str):
+        """Rebuilt pages use the inline SVG sprite. (Replaced the old
+        Material-Symbols assertion in Step 4 — the dashboard is de-iconed;
+        the font survives only on not-yet-rebuilt pages until Step 7.)"""
         page.goto(base_url)
-        icon = page.locator(".material-symbols-outlined").first
-        expect(icon).to_be_visible()
+        assert page.locator("svg.forge-icon").count() >= 10
+        expect(page.locator("#dashboard-stats .material-symbols-outlined")).to_have_count(0)
 
     def test_display_font_loaded(self, page: Page, base_url: str):
         page.goto(base_url)
