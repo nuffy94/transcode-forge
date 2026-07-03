@@ -1,3 +1,4 @@
+{% from "partials/_icons.html" import icon %}
 {% if schedules %}
 <table class="forge-table">
     <thead>
@@ -15,7 +16,7 @@
             <td><span class="text-forge-paper">{{ s.name }}</span></td>
             <td class="col-mono tabular-nums">
                 {{ "%02d"|format(s.start_hour) }}:00 &rarr; {{ "%02d"|format(s.end_hour) }}:00
-                {% if s.start_hour > s.end_hour %}<span class="text-forge-mute text-[10px] ml-1">(wraps)</span>{% endif %}
+                {% if s.start_hour > s.end_hour %}<span class="text-forge-mute text-2xs ml-1">(wraps)</span>{% endif %}
             </td>
             <td class="col-mono">
                 {% set days = s.days_mask|day_names %}
@@ -29,26 +30,29 @@
                 {% endif %}
             </td>
             <td class="text-right">
-                <div class="flex justify-end gap-1">
+                <span class="flex justify-end gap-1.5">
                     <button class="forge-iconbtn"
                             title="{% if s.enabled %}Disable{% else %}Enable{% endif %}"
+                            aria-label="{% if s.enabled %}Disable{% else %}Enable{% endif %} {{ s.name }}"
                             onclick="toggleSchedule('{{ s.id }}', {{ 'false' if s.enabled else 'true' }})">
-                        <span class="material-symbols-outlined text-base">{% if s.enabled %}toggle_on{% else %}toggle_off{% endif %}</span>
+                        {% if s.enabled %}{{ icon('toggle-on', 'forge-icon--sm') }}{% else %}{{ icon('toggle-off', 'forge-icon--sm') }}{% endif %}
                     </button>
                     <button class="forge-iconbtn forge-iconbtn--danger"
                             title="Delete schedule"
+                            aria-label="Delete {{ s.name }}"
                             onclick="deleteSchedule('{{ s.id }}')">
-                        <span class="material-symbols-outlined text-base">delete</span>
+                        {{ icon('trash', 'forge-icon--sm') }}
                     </button>
-                </div>
+                </span>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
 {% else %}
-<div class="text-center py-10 px-6">
-    <span class="material-symbols-outlined text-3xl text-forge-faint mb-2 block">schedule</span>
-    <p class="font-mono text-[11px] text-forge-mute uppercase tracking-stamp">No windows configured &mdash; queue runs at all times</p>
+<div class="forge-empty py-6">
+    {{ icon('clock') }}
+    <p class="forge-empty-title">No windows configured</p>
+    <p class="forge-empty-hint">The queue runs at all times. Add a window above to restrict it.</p>
 </div>
 {% endif %}

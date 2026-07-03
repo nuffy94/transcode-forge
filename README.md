@@ -21,7 +21,28 @@ never lose an original — even if a worker dies mid-encode.
 - **No file ever lost** — orphan-job detection, integrity audit, and
   cross-view consistency tests so the dashboard never lies about state.
 
-> **Status**: v0.7.0. Self-hostable; install in three commands.
+> **Status**: v0.9.0. Self-hostable; install in three commands.
+
+## The console
+
+A dense ops console — live transcodes with per-worker attribution, honest
+zero states, and a VMAF readout on every finished encode. Fully self-hosted
+chrome: fonts, icons, and scripts are all vendored, so the UI loads nothing
+from third-party hosts.
+
+![Dashboard — live transcodes, cumulative savings, scan history](docs/img/dashboard.png)
+
+Click any file for the full story — probe data, encode economics (savings,
+achieved VMAF vs. target, CRF, encoder backend), and the complete attempt
+timeline:
+
+![File detail drawer — 47% saved, VMAF 96.4 against a 95 target](docs/img/file-drawer.png)
+
+The Activity ledger keeps two honest books: encode outcomes (jobs that ran,
+including ones discarded for size regression or a missed VMAF floor) and
+scan skips (files never attempted — already HEVC, wrong codec):
+
+![Activity — encode outcomes with error traces and retry actions](docs/img/activity.png)
 
 ## Install — 60 seconds
 

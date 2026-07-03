@@ -28,15 +28,11 @@
 @source "../../src/transcode_forge/web/static/js/**/*.js";
 
 /* ====================================================================
-   Theme tokens — Forge Console v2 (Step 2 rework).
+   Theme tokens — Forge Console v2.
 
-   Warm graphite field, hot-iron heat, temperature-coded verdicts. The
-   v1 utility/component mute drift (#9a8f7d vs #857d6c) is resolved to a
-   single #9a8f7d; faint is lifted to #6b6350 and reserved for decoration
-   and disabled states — never body text.
-
-   The legacy Material-Design alias block is carried unchanged for the
-   not-yet-rebuilt pages and retired in Step 7.
+   Warm graphite field, hot-iron heat, temperature-coded verdicts.
+   faint is reserved for decoration and disabled states — never body
+   text (it fails AA).
    ==================================================================== */
 @theme {
     /* Forge palette */
@@ -60,60 +56,9 @@
     --color-forge-mute:        #9a8f7d;
     --color-forge-faint:       #6b6350;
 
-    /* Legacy Material-Design aliases — mapped to the Forge palette so the
-       not-yet-rebuilt pages inherit the look without per-page edits. */
-    --color-background:                #0d0b08;
-    --color-surface:                   #15120e;
-    --color-surface-dim:               #0d0b08;
-    --color-surface-container:         #1c1813;
-    --color-surface-container-low:     #15120e;
-    --color-surface-container-lowest:  #0d0b08;
-    --color-surface-container-high:    #252018;
-    --color-surface-container-highest: #2e2820;
-    --color-surface-bright:            #3a342a;
-    --color-surface-variant:           #252018;
-    --color-surface-tint:              #ff7a1a;
-    --color-on-surface:                #ede7d8;
-    --color-on-surface-variant:        #c8c0ad;
-    --color-on-background:             #ede7d8;
-    --color-primary:                   #ff7a1a;
-    --color-primary-container:         #cc4f00;
-    --color-primary-fixed:             #ffb86b;
-    --color-primary-fixed-dim:         #ff9a4d;
-    --color-on-primary:                #1a0a00;
-    --color-on-primary-fixed:          #1a0a00;
-    --color-on-primary-container:      #ffe1c9;
-    --color-on-primary-fixed-variant:  #7a2d00;
-    --color-secondary:                 #a4b4ca;
-    --color-secondary-container:       #3d4858;
-    --color-secondary-fixed:           #cfd8e8;
-    --color-secondary-fixed-dim:       #a4b4ca;
-    --color-on-secondary:              #101820;
-    --color-on-secondary-container:    #cfd8e8;
-    --color-on-secondary-fixed:        #101820;
-    --color-on-secondary-fixed-variant:#3d4858;
-    --color-tertiary:                  #d9b35c;
-    --color-tertiary-container:        #7a5b1a;
-    --color-tertiary-fixed:            #f0d896;
-    --color-tertiary-fixed-dim:        #d9b35c;
-    --color-on-tertiary:               #1f1500;
-    --color-on-tertiary-fixed:         #1f1500;
-    --color-on-tertiary-container:     #f0d896;
-    --color-on-tertiary-fixed-variant: #5a4214;
-    --color-error:                     #ff8866;
-    --color-error-container:           #7a2a14;
-    --color-on-error:                  #1f0500;
-    --color-on-error-container:        #ffd7c8;
-    --color-outline:                   #857d6c;
-    --color-outline-variant:           #3a342a;
-    --color-inverse-surface:           #ede7d8;
-    --color-inverse-on-surface:        #15120e;
-    --color-inverse-primary:           #cc4f00;
-
     /* Type families — Big Shoulders is reserved for the wordmark and rare
        display moments; ALL numerals render in IBM Plex Mono (tabular). */
     --font-display:  "Big Shoulders Display", Impact, sans-serif;
-    --font-headline: "Big Shoulders Display", Impact, sans-serif;
     --font-body:     "IBM Plex Sans", system-ui, sans-serif;
     --font-mono:     "IBM Plex Mono", ui-monospace, monospace;
     --font-label:    "IBM Plex Mono", ui-monospace, monospace;
@@ -219,13 +164,6 @@ body {
 }
 /* Ensure numeric tables read like a readout, not a wall of text */
 td, th, .tabular { font-variant-numeric: tabular-nums; }
-
-/* ---- Material Symbols base config — pages not yet rebuilt still use the
-   icon font; it is retired page-by-page (Steps 3–6) and fully in Step 7. */
-.material-symbols-outlined {
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    vertical-align: middle;
-}
 
 /* ---- Icons — inline SVG sprite (templates/partials/_icons.html) */
 .forge-icon {
@@ -543,27 +481,6 @@ main, header, aside, footer { position: relative; z-index: 1; }
     from { transform: translateX(-100%); }
     to   { transform: translateX(100%); }
 }
-/* Gauge ticks below a meter at 25/50/75% */
-.forge-meter-ticks {
-    position: relative;
-    height: 3px;
-    margin-top: 2px;
-}
-.forge-meter-ticks::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image:
-        linear-gradient(to right,
-            var(--forge-rule) 0 1px, transparent 1px 25%,
-            var(--forge-rule) 25% calc(25% + 1px), transparent calc(25% + 1px) 50%,
-            var(--forge-rule) 50% calc(50% + 1px), transparent calc(50% + 1px) 75%,
-            var(--forge-rule) 75% calc(75% + 1px), transparent calc(75% + 1px) calc(100% - 1px),
-            var(--forge-rule) calc(100% - 1px) 100%);
-    background-size: 100% 100%;
-    background-repeat: no-repeat;
-}
-
 /* ====================================================================
    Status language — ONE temperature-coded system for pills and dots.
    ember = working · oxide = good · steel = waiting · rust = failed ·
@@ -613,6 +530,22 @@ main, header, aside, footer { position: relative; z-index: 1; }
     50%      { opacity: 0.45; }
 }
 .forge-pulse { animation: forge-pulse 2.2s ease-in-out infinite; }
+
+/* Source-codec badge — built dynamically in catalog.js (component class
+   on purpose: the scanner can't see runtime-assembled strings). */
+.codec-badge {
+    display: inline-flex;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.codec-h264  { background: rgba(255, 122, 26, 0.10); color: var(--forge-ember);  border-color: rgba(255, 122, 26, 0.35); }
+.codec-hevc  { background: rgba(126, 186, 120, 0.10);color: var(--forge-oxide);  border-color: rgba(126, 186, 120, 0.35); }
+.codec-other { background: rgba(133, 125, 108, 0.10);color: var(--forge-mute);   border-color: var(--forge-rule); }
 
 /* ====================================================================
    Buttons — machine controls
@@ -1086,106 +1019,10 @@ input.forge-input.pl-8 { padding-left: 2rem; }
 .forge-pager-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ====================================================================
-   Page-load stagger — LEGACY (pre-v2 page bodies only). v2 pages use no
-   entrance animation; retired with the last old body in Step 7.
-   ==================================================================== */
-@keyframes forge-rise {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-.forge-rise { animation: forge-rise 420ms var(--forge-ease) both; }
-.forge-rise-1 { animation-delay: 0ms; }
-.forge-rise-2 { animation-delay: 80ms; }
-.forge-rise-3 { animation-delay: 160ms; }
-.forge-rise-4 { animation-delay: 240ms; }
-.forge-rise-5 { animation-delay: 320ms; }
-
-/* ====================================================================
    HTMX transitions
    ==================================================================== */
 .htmx-settling { opacity: 0; }
 .htmx-added    { transition: opacity 0.2s ease-in; opacity: 1; }
-
-/* ====================================================================
-   Legacy compat — keep prior class names alive for non-redesigned pages
-   (retired in Step 7).
-   ==================================================================== */
-.tonal-shift-right  { box-shadow: 1px 0 0 0 rgba(90, 79, 62, 0.18); }
-.tonal-shift-bottom { box-shadow: 0 1px 0 0 rgba(90, 79, 62, 0.18); }
-.tonal-shift-top    { box-shadow: 0 -1px 0 0 rgba(90, 79, 62, 0.18); }
-
-/* Old toast animation aliases (still used in places) */
-@keyframes slide-in {
-    from { transform: translateX(100%); opacity: 0; }
-    to   { transform: translateX(0); opacity: 1; }
-}
-@keyframes fade-out {
-    from { opacity: 1; }
-    to   { opacity: 0; transform: translateY(10px); }
-}
-.animate-slide-in { animation: slide-in 0.3s ease-out; }
-.animate-fade-out { animation: fade-out 0.3s ease-out forwards; }
-
-/* Old status badges remapped to Forge palette so legacy templates look right */
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.1rem 0.5rem;
-    border: 1px solid;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 0.625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-}
-.status-complete   { background: rgba(126, 186, 120, 0.10); color: var(--forge-oxide);    border-color: rgba(126, 186, 120, 0.35); }
-.status-failed     { background: rgba(215, 93, 58, 0.10);  color: var(--forge-rust);     border-color: rgba(215, 93, 58, 0.40); }
-.status-transcoding{ background: rgba(255, 122, 26, 0.10); color: var(--forge-ember);    border-color: rgba(255, 122, 26, 0.45); }
-.status-pending    { background: rgba(133, 125, 108, 0.08);color: var(--forge-mute);     border-color: var(--forge-rule-bright); }
-.status-queued     { background: rgba(164, 180, 202, 0.10);color: var(--forge-steel-hi); border-color: rgba(164, 180, 202, 0.35); }
-.status-skipped    { background: rgba(133, 125, 108, 0.06);color: var(--forge-mute);     border-color: var(--forge-rule); }
-.status-assigned   { background: rgba(164, 180, 202, 0.12);color: var(--forge-steel-hi); border-color: rgba(164, 180, 202, 0.35); }
-.status-verifying  { background: rgba(217, 179, 92, 0.10); color: var(--forge-brass);    border-color: rgba(217, 179, 92, 0.35); }
-.status-cancelled  { background: rgba(133, 125, 108, 0.06);color: var(--forge-mute);     border-color: var(--forge-rule); }
-
-.codec-badge {
-    display: inline-flex;
-    padding: 0.05rem 0.35rem;
-    border: 1px solid;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 0.625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-}
-.codec-h264  { background: rgba(255, 122, 26, 0.10); color: var(--forge-ember);  border-color: rgba(255, 122, 26, 0.35); }
-.codec-hevc  { background: rgba(126, 186, 120, 0.10);color: var(--forge-oxide);  border-color: rgba(126, 186, 120, 0.35); }
-.codec-other { background: rgba(133, 125, 108, 0.10);color: var(--forge-mute);   border-color: var(--forge-rule); }
-
-@keyframes pulse-green {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.4; }
-}
-.pulse-green { animation: pulse-green 2s ease-in-out infinite; }
-
-.status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-}
-.status-dot.online  { background: var(--forge-oxide); box-shadow: 0 0 8px rgba(126, 186, 120, 0.55); }
-.status-dot.busy    { background: var(--forge-ember); box-shadow: 0 0 8px rgba(255, 122, 26, 0.55); }
-.status-dot.offline { background: var(--forge-faint); }
-.status-dot.dead    { background: var(--forge-rust); }
-
-.tf-checkbox { width: 14px; height: 14px; accent-color: var(--forge-ember); }
-
-@keyframes stagger-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-.stagger-in { animation: stagger-in 0.3s ease-out forwards; }
 
 /* ---- Focus indicators (WCAG 2.4.7) ---- */
 a:focus-visible,
@@ -1203,13 +1040,8 @@ textarea:focus-visible,
     .forge-pulse,
     .forge-icon--spin,
     .forge-meter-fill::after,
-    .forge-rise,
     .forge-slide-in,
     .forge-fade-out,
-    .animate-slide-in,
-    .animate-fade-out,
-    .pulse-green,
-    .stagger-in,
     .forge-dialog[open] {
         animation: none !important;
     }
@@ -1218,12 +1050,6 @@ textarea:focus-visible,
     .forge-meter-fill {
         transition: none !important;
     }
-}
-
-/* ---- Mobile table overflow (WCAG 1.4.10) ---- */
-.table-responsive {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
 }
 
 .sr-only {
@@ -1236,17 +1062,5 @@ textarea:focus-visible,
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border-width: 0;
-}
-
-@media (max-width: 1024px) {
-    .font-headline { font-size: 1.1rem; }
-}
-@media (max-width: 640px) {
-    .truncate-path {
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
 }
 }

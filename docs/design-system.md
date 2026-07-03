@@ -103,10 +103,10 @@ Inline SVG sprite, Lucide-derived (ISC), in
 
 Unknown names fail the render loudly. Icons are `aria-hidden` — pair with
 visible text or an `aria-label` on the control. The Material Symbols font
-is legacy (pages drop it as they rebuild; the CDN link + font config die
-in Step 7).
+is gone; every icon renders from the sprite. New icons: append Lucide
+path data to `_icons.html` and extend this table.
 
-Material → sprite mapping for the rebuild steps:
+Historical Material → sprite mapping (from the v1 → v2 migration):
 
 | Material name(s) | Sprite |
 |---|---|
@@ -244,17 +244,19 @@ warnings).
 
 ## JS modules
 
-ES modules under `static/js/`, loaded once via `app.js`
-(`<script type="module">` in base.html): `toast.js`, `actions.js`
-(exclude/unexclude/unskip/logout), `clock.js`. During the transition they
-also hang on `window` for old inline handlers — rebuilt pages import
-instead, and add their own module (`catalog.js`, `queue.js`, …) rather
-than inline `<script>` blobs (thin glue only).
+ES modules under `static/js/`, loaded via `<script type="module">`:
+`app.js` (shell entry: toast bridge, clock, queue badge, preflight,
+drawer) plus one module per page that needs logic — `catalog.js`,
+`queue.js`, `dashboard.js`, `workers.js`, `settings.js`, `activity.js`,
+with `ops.js` (pause control, job-row WS progress) and `drawer.js`
+shared. A handful of functions hang on `window` on purpose: they're
+called from server-rendered partials that re-render via HTMX
+(`showToast`, `excludeFile`, `unskipFile`, `forgeLogout`,
+`openFileDrawer` + the drawer actions, `revokeToken`,
+`toggleSchedule`/`deleteSchedule`, and the `sort*` handlers referenced
+by the `sort_th` macro). New pages add a module, never an inline
+`<script>` blob — the standalone auth pages carry their own ~25-line
+handlers as sanctioned thin glue.
 
-## Legacy (alive until Step 7 — don't adopt, don't remove yet)
-
-The Material Symbols CDN link + `.material-symbols-outlined` config, the
-`@theme` Material alias tokens (`--color-primary`, …), the legacy-compat
-CSS block (`status-badge`, `codec-badge`, `tf-checkbox`, `status-dot`,
-`tonal-shift-*`, `stagger-in`, old toast keyframes), and `forge-rise`.
-Each rebuilt page sheds its usages; Step 7 deletes the lot.
+The UI is fully self-hosted: fonts, HTMX, and the icon sprite are
+vendored; nothing loads from third-party hosts.

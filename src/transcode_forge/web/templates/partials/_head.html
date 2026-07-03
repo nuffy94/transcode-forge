@@ -7,10 +7,7 @@
    Source: assets/css/forge.css, built by scripts/build_css.py. #}
 <link rel="stylesheet" href="/static/css/app.css">
 
-{# Material Symbols is the only remaining CDN asset; it becomes an inline SVG
-   sprite in Step 7. (Fonts above are self-hosted — no Google Fonts preconnects.) #}
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght@20..48,100..700&display=swap" rel="stylesheet">
-
-{# HTMX + WebSocket extension — vendored, no CDN. #}
+{# HTMX + WebSocket extension — vendored. Icons are an inline SVG sprite
+   (partials/_icons.html). The app loads nothing from third-party hosts. #}
 <script src="/static/vendor/htmx.min.js"></script>
 <script src="/static/vendor/ws.js"></script>
