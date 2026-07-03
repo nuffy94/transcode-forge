@@ -1,0 +1,46 @@
+<!-- Transcoding defaults -->
+<section class="col-span-12 lg:col-span-4 forge-panel">
+    <div class="forge-panel-hd"><h2 class="forge-panel-title">Transcoding defaults</h2></div>
+    <div class="p-3.5 space-y-2.5 font-mono text-xs">
+        <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+            <label for="tune-default-codec" class="forge-stat-label">Default codec</label>
+            <select id="tune-default-codec" class="forge-select">
+                <option value="hevc">HEVC (H.265)</option>
+                <option value="av1">AV1</option>
+            </select>
+        </div>
+        <p id="tune-av1-warning" class="font-mono text-2xs text-forge-brass leading-relaxed" style="display:none">
+            AV1 as the global default applies to every queue action — older devices/clients may not decode AV1.
+        </p>
+        <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+            <label for="tune-target-vmaf" class="forge-stat-label" title="New jobs target this mean VMAF; the gate skips encodes landing below it.">Target VMAF</label>
+            <input id="tune-target-vmaf" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
+        </div>
+        <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+            <label for="tune-vmaf-floor" class="forge-stat-label" title="Worst-scenes (5th percentile) floor — encodes below it are discarded, originals kept.">VMAF floor (perc5)</label>
+            <input id="tune-vmaf-floor" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
+        </div>
+        <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label">Encoder priority</span>
+            <span class="text-forge-paper">QSV → NVENC → CPU</span>
+        </div>
+        <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label">Max retries</span>
+            <span id="sys-retries" class="text-forge-paper font-semibold tabular-nums">3</span>
+        </div>
+        <div class="flex justify-between border-b border-forge-rule/60 pb-2">
+            <span class="forge-stat-label">Heartbeat</span>
+            <span id="sys-heartbeat" class="text-forge-paper font-semibold tabular-nums">10s</span>
+        </div>
+        <div class="flex justify-between pb-1">
+            <span class="forge-stat-label">Worker timeout</span>
+            <span id="sys-timeout" class="text-forge-paper font-semibold tabular-nums">30s</span>
+        </div>
+        <div class="flex items-center justify-between gap-3 pt-1.5">
+            <p class="font-mono text-2xs text-forge-mute leading-relaxed">
+                Codec + VMAF save here; the rest via <code class="text-forge-ember">TF_*</code> env vars.
+            </p>
+            <button id="save-tuning-btn" class="forge-btn forge-btn--ember">Save</button>
+        </div>
+    </div>
+</section>

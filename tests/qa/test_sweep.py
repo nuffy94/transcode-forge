@@ -117,6 +117,20 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
     if drawer_toasts:
         error_toasts["/movies#drawer"] = drawer_toasts
 
+    # /login renders for anonymous visitors — sweep it in a FRESH context
+    # (the main page object carries the admin session). /setup cannot be
+    # swept: this fixture creates the admin before any test runs, so the
+    # route 302s — it's verified by eyeball on a live instance instead.
+    anon_ctx = page.context.browser.new_context(viewport=page.viewport_size)
+    anon = anon_ctx.new_page()
+    anon.goto(f"{qa_base_url}/login", wait_until="domcontentloaded")
+    anon.wait_for_timeout(600)
+    anon.screenshot(path=str(SHOTS / "login.png"), full_page=True)
+    login_violations = [v for v in _run_axe(anon) if v["id"] in BLOCKING_RULES]
+    if login_violations:
+        axe_blocking["/login"] = login_violations
+    anon_ctx.close()
+
     report = json.dumps(
         {
             "axe_blocking": axe_blocking,

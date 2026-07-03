@@ -1,41 +1,45 @@
+{% from "partials/_icons.html" import icon %}
 <!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
     {% include "partials/_head.html" %}
     <title>First-run setup — Transcode Forge</title>
 </head>
-<body class="bg-forge-bg text-forge-paper font-body antialiased min-h-screen flex items-center justify-center px-6">
-    <div class="w-full max-w-md">
-        <div class="text-center mb-8">
-            <p class="font-mono text-[10px] uppercase tracking-[0.3em] text-forge-mute mb-2">Transcode</p>
-            <h1 class="font-display font-black text-6xl text-forge-paper leading-none tracking-tight">FORGE</h1>
-            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-ember mt-3">First Run</p>
+<body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
+    <div class="forge-seam" aria-hidden="true"></div>
+
+    <div class="w-full max-w-md relative z-10">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <span class="forge-brand-mark">{{ icon('flame', 'forge-icon--lg') }}</span>
+            <span>
+                <span class="forge-brand-eyebrow">Transcode</span>
+                <span class="forge-brand-word font-display !text-3xl">FORGE</span>
+            </span>
         </div>
 
-        <div class="forge-panel forge-panel--ember p-7 relative">
-            <span class="forge-tick forge-tick-tl"></span>
-            <span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Pick an admin password</p>
-            <p class="font-mono text-[11px] text-forge-ink mb-5 leading-relaxed">
-                Used to sign in to the dashboard. Workers don't use this — they get
-                their own tokens issued from the Workers tab.
-            </p>
-
-            <form class="space-y-4" onsubmit="return doSetup(event)">
+        <div class="forge-panel forge-panel--ember">
+            <div class="forge-panel-hd">
+                <h1 class="forge-panel-title">First run — pick an admin password</h1>
+            </div>
+            <form class="p-4 space-y-4" onsubmit="return doSetup(event)">
+                <p class="font-mono text-2xs text-forge-ink leading-relaxed">
+                    This signs you in to the console. Workers never use it — they
+                    join with their own revocable tokens from the Workers page.
+                </p>
                 <div>
-                    <label for="password" class="forge-stat-label block mb-1.5">Password (8+ chars)</label>
+                    <label for="password" class="forge-stat-label block mb-1.5">Password (8+ characters)</label>
                     <input id="password" type="password" required minlength="8" autofocus
-                           class="forge-input w-full">
+                           class="forge-input w-full" autocomplete="new-password">
                 </div>
                 <div>
-                    <label for="password2" class="forge-stat-label block mb-1.5">Confirm</label>
+                    <label for="password2" class="forge-stat-label block mb-1.5">Confirm password</label>
                     <input id="password2" type="password" required minlength="8"
-                           class="forge-input w-full">
+                           class="forge-input w-full" autocomplete="new-password">
                 </div>
                 <button type="submit" class="forge-btn forge-btn--ember w-full justify-center">
                     Create admin and sign in
                 </button>
-                <p id="err" class="font-mono text-xs text-forge-rust hidden"></p>
+                <p id="err" class="font-mono text-xs text-forge-rust hidden" role="alert"></p>
             </form>
         </div>
     </div>
@@ -66,7 +70,7 @@
                 err.classList.remove('hidden');
             }
         } catch (_) {
-            err.textContent = 'Network error';
+            err.textContent = 'Network error — is the scheduler up?';
             err.classList.remove('hidden');
         }
         return false;

@@ -83,7 +83,7 @@ class TestPartials:
     async def test_workers_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/workers")
         assert response.status_code == 200
-        assert "No Workers Registered" in response.text
+        assert "No workers registered" in response.text
 
     async def test_outcomes_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/activity-outcomes")
@@ -117,7 +117,7 @@ class TestPartials:
     async def test_stats_partial(self, client: AsyncClient):
         response = await client.get("/partials/stats")
         assert response.status_code == 200
-        assert "Space Saved" in response.text
+        assert "Space saved" in response.text
 
     async def test_skip_stats_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/skip-stats")
@@ -215,8 +215,10 @@ class TestPartials:
         assert response.status_code == 200
         assert "Settings" in response.text
         assert "Libraries" in response.text
-        assert "Services" in response.text
-        assert "System Info" in response.text
+        assert "External services" in response.text
+        assert "Queue schedules" in response.text
+        # tokens moved to the Workers page — settings keeps only a pointer
+        assert "Manage on Workers" in response.text
 
     async def test_settings_schedule_inputs_are_labelled(self, client: AsyncClient):
         """The schedule Start/End hour inputs are number fields with no
@@ -359,7 +361,7 @@ class TestPartials:
         assert "worker-1" in response.text
         # Stale alert copy shows up in the partial when alarm tier is reached.
         assert "Heartbeat" in response.text
-        assert "Stale" in response.text or "Lost" in response.text
+        assert "stale" in response.text or "lost" in response.text
 
     async def test_outcomes_partial_has_sortable_headers(self, client: AsyncClient, app):
         """Column headers must be click-to-sort (wired to sortOutcomes) and the

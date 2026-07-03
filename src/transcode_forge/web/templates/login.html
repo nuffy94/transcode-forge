@@ -1,38 +1,38 @@
+{% from "partials/_icons.html" import icon %}
 <!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
     {% include "partials/_head.html" %}
     <title>Sign in — Transcode Forge</title>
 </head>
-<body class="bg-forge-bg text-forge-paper font-body antialiased min-h-screen flex items-center justify-center px-6">
-    <div class="w-full max-w-sm">
-        <div class="text-center mb-8">
-            <p class="font-mono text-[10px] uppercase tracking-[0.3em] text-forge-mute mb-2">Transcode</p>
-            <h1 class="font-display font-black text-6xl text-forge-paper leading-none tracking-tight">FORGE</h1>
+<body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
+    <div class="forge-seam" aria-hidden="true"></div>
+
+    <div class="w-full max-w-sm relative z-10">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <span class="forge-brand-mark">{{ icon('flame', 'forge-icon--lg') }}</span>
+            <span>
+                <span class="forge-brand-eyebrow">Transcode</span>
+                <span class="forge-brand-word font-display !text-3xl">FORGE</span>
+            </span>
         </div>
 
-        <div class="forge-panel p-7 relative">
-            <span class="forge-tick forge-tick-tl"></span>
-            <span class="forge-tick forge-tick-tr"></span>
-            <span class="forge-tick forge-tick-bl"></span>
-            <span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-4">Sign in</p>
-
-            <form id="login-form" class="space-y-4" onsubmit="return doLogin(event)">
+        <div class="forge-panel">
+            <div class="forge-panel-hd"><h1 class="forge-panel-title">Sign in</h1></div>
+            <form id="login-form" class="p-4 space-y-4" onsubmit="return doLogin(event)">
                 <div>
                     <label for="password" class="forge-stat-label block mb-1.5">Password</label>
                     <input id="password" type="password" required autofocus
-                           class="forge-input w-full"
-                           placeholder="">
+                           class="forge-input w-full" autocomplete="current-password">
                 </div>
                 <button type="submit" class="forge-btn forge-btn--ember w-full justify-center">
                     Sign in
                 </button>
-                <p id="err" class="font-mono text-xs text-forge-rust hidden"></p>
+                <p id="err" class="font-mono text-xs text-forge-rust hidden" role="alert"></p>
             </form>
         </div>
 
-        <p class="font-mono text-[10px] text-forge-mute text-center mt-6 tracking-wider">
+        <p class="font-mono text-2xs text-forge-mute text-center mt-5 tracking-wider">
             v{{ app_version }}
         </p>
     </div>
@@ -56,7 +56,7 @@
                 err.classList.remove('hidden');
             }
         } catch (_) {
-            err.textContent = 'Network error';
+            err.textContent = 'Network error — is the scheduler up?';
             err.classList.remove('hidden');
         }
         return false;
