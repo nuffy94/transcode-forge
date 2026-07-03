@@ -14,6 +14,7 @@ from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
 from transcode_forge.db import DBConnection, check_db_health
 from transcode_forge.redis import check_redis_health
+from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import scans as scan_repo
@@ -541,6 +542,73 @@ async def worker_tokens_partial(
 
     tokens = await token_repo.list_all(db)
     return _render(request, "partials/worker_tokens.html", {"tokens": tokens})
+
+
+@router.get("/partials/file-detail", response_class=HTMLResponse)
+async def file_detail_partial(
+    request: Request,
+    file_id: str,
+    db: DBConnection = Depends(get_db),
+) -> Response:
+    """Everything known about one file — the body of the file-detail drawer.
+
+    404-safe: an unknown id renders a small "file not found" body with a
+    404 status instead of an exception page (the drawer shows whatever
+    comes back).
+    """
+    from transcode_forge.repos import libraries as lib_repo
+
+    f = await media_repo.get_media_file(db, file_id)
+    if f is None:
+        resp = _render(request, "partials/file_detail.html", {"file": None})
+        resp.status_code = 404
+        return resp
+
+    lib = await lib_repo.get_library(db, f["library_id"]) if f.get("library_id") else None
+    f = {**f, "library_name": lib["name"] if lib else None}
+
+    jobs, _ = await job_repo.list_jobs(
+        db,
+        source_path=f["file_path"],
+        sort_by="created_at",
+        sort_dir="desc",
+        limit=20,
+    )
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    job_dicts = []
+    for j in jobs:
+        d = j.model_dump(mode="json")
+        d["duration"] = (
+            _format_duration(j.started_at, j.completed_at)
+            if j.started_at and j.completed_at
+            else None
+        )
+        d["worker_name"] = worker_names.get(j.worker_id) if j.worker_id else None
+        job_dicts.append(d)
+
+    # Latest finished encode with a real output — the economics section.
+    best = next(
+        (d for d in job_dicts if d["status"] == "complete" and d.get("output_size")),
+        None,
+    )
+    excluded = await excl_repo.is_excluded(db, f["file_path"])
+    queueable = (
+        f.get("video_codec") == "h264"
+        and f.get("transcode_status") not in ("queued", "transcoding", "complete")
+        and not excluded
+    )
+
+    return _render(
+        request,
+        "partials/file_detail.html",
+        {
+            "file": f,
+            "jobs": job_dicts,
+            "best": best,
+            "excluded": excluded,
+            "queueable": queueable,
+        },
+    )
 
 
 @router.get("/partials/tv-episodes", response_class=HTMLResponse)

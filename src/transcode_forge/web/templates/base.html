@@ -115,6 +115,16 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- File-detail drawer (driven by static/js/drawer.js) -->
+    <div id="file-drawer-overlay" class="forge-drawer-overlay"></div>
+    <aside id="file-drawer" class="forge-drawer" role="dialog" aria-modal="true" aria-label="File detail" aria-hidden="true" inert>
+        <div class="forge-drawer-hd">
+            <span class="forge-panel-title">File detail</span>
+            <button id="file-drawer-close" class="forge-iconbtn ml-auto" aria-label="Close file detail">{{ icon('x') }}</button>
+        </div>
+        <div id="file-drawer-body" class="forge-drawer-bd"></div>
+    </aside>
+
     <!-- Toast container -->
     <div id="toast-container" class="fixed bottom-4 right-4 z-[90] flex flex-col gap-2 max-w-sm"></div>
 

@@ -4,6 +4,7 @@
 
 import { esc, initToastBridge } from './toast.js';
 import './actions.js';
+import './drawer.js';
 import { startClock } from './clock.js';
 
 /* Sidebar queue badge: blank-when-zero. The partial returns the count or
