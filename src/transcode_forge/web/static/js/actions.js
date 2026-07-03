@@ -29,26 +29,6 @@ export async function excludeFile(path, reason, refreshTargetId) {
     }
 }
 
-export async function unexcludeFile(path, refreshTargetId) {
-    try {
-        const resp = await fetch('/api/exclusions', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: path }),
-        });
-        if (!resp.ok) {
-            showToast('Failed to remove exclusion', 'error');
-            return;
-        }
-        showToast('Exclusion lifted', 'success');
-        if (refreshTargetId && window.htmx) {
-            htmx.trigger('#' + refreshTargetId, 'refresh');
-        }
-    } catch (e) {
-        showToast('Unexclude failed: ' + e.message, 'error');
-    }
-}
-
 /* Remove a file from the skip list (retry on next scan). Sends a JSON
  * body — the endpoint expects JSON, so the old hx-delete (form-encoded)
  * 422'd. Note the refresh trigger is 'load' here, not 'refresh'. */
@@ -82,6 +62,5 @@ export async function forgeLogout() {
 }
 
 window.excludeFile = excludeFile;
-window.unexcludeFile = unexcludeFile;
 window.unskipFile = unskipFile;
 window.forgeLogout = forgeLogout;

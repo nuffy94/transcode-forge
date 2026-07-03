@@ -13,7 +13,8 @@ a bad encode can never silently replace one either.
 
 **Stack**: Python 3.12 · FastAPI · Redis (pub/sub + WebSocket relay) ·
 PostgreSQL (prod) / SQLite (dev/test) · asyncpg + aiosqlite · ffmpeg/ffprobe ·
-Jinja2 + HTMX + Tailwind (CDN).
+Jinja2 + HTMX + Tailwind v4 (standalone CLI build, committed CSS, all
+assets vendored — zero runtime CDNs).
 
 ## Commands
 
