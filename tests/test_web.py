@@ -215,8 +215,10 @@ class TestPartials:
         assert response.status_code == 200
         assert "Settings" in response.text
         assert "Libraries" in response.text
-        assert "Services" in response.text
-        assert "System Info" in response.text
+        assert "External services" in response.text
+        assert "Queue schedules" in response.text
+        # tokens moved to the Workers page — settings keeps only a pointer
+        assert "Manage on Workers" in response.text
 
     async def test_settings_schedule_inputs_are_labelled(self, client: AsyncClient):
         """The schedule Start/End hour inputs are number fields with no

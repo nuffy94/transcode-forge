@@ -1,0 +1,52 @@
+{% from "partials/_icons.html" import icon %}
+<!-- Schedules — when the queue is allowed to run -->
+<section id="tab-schedules" class="col-span-12 forge-panel">
+    <div class="forge-panel-hd">
+        <h2 class="forge-panel-title">Queue schedules</h2>
+        <span id="schedule-status-badge" class="forge-pill forge-pill--queued ml-auto">…</span>
+    </div>
+    <div class="p-3.5">
+        <p class="font-mono text-2xs text-forge-mute mb-3 leading-relaxed">
+            Hours when workers may pull jobs. No schedules — the queue runs always;
+            one or more enabled — the queue runs only inside an active window.
+        </p>
+
+        <div class="forge-panel p-3 mb-3">
+            <p class="forge-stat-label mb-2.5">New window</p>
+            <div class="flex flex-wrap items-end gap-2.5">
+                <div>
+                    <label for="sched-name" class="forge-stat-label block mb-1">Name</label>
+                    <input id="sched-name" type="text" placeholder="overnight" class="forge-input w-36">
+                </div>
+                <div>
+                    <label for="sched-start" class="forge-stat-label block mb-1">Start</label>
+                    <input id="sched-start" type="number" min="0" max="23" value="22" class="forge-input w-16 tabular-nums">
+                </div>
+                <div>
+                    <label for="sched-end" class="forge-stat-label block mb-1">End</label>
+                    <input id="sched-end" type="number" min="0" max="23" value="6" class="forge-input w-16 tabular-nums">
+                </div>
+                <div class="flex flex-col">
+                    <span class="forge-stat-label block mb-1">Days</span>
+                    <div id="sched-days" class="flex gap-1">
+                        {% for label, bit in [('M',1),('T',2),('W',4),('Th',8),('F',16),('Sa',32),('Su',64)] %}
+                        <button type="button"
+                                class="forge-btn !px-2 sched-day-btn"
+                                data-bit="{{ bit }}"
+                                aria-pressed="true">{{ label }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <button id="add-schedule-btn" class="forge-btn forge-btn--ember">
+                    {{ icon('plus', 'forge-icon--sm') }}
+                    <span>Add window</span>
+                </button>
+            </div>
+            <p class="font-mono text-2xs text-forge-mute mt-2.5">
+                Hours are 24h UTC. End is exclusive — 22 → 6 means active 22:00 through 05:59.
+            </p>
+        </div>
+
+        <div id="schedules-list" hx-get="/partials/schedules" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+</section>

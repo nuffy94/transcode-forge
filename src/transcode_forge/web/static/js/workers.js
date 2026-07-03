@@ -90,7 +90,11 @@ function switchCommandType(type) {
 async function revokeToken(fingerprint) {
     if (!confirm('Revoke this token? The worker using it is cut off at its next request.')) return;
     try {
-        const resp = await fetch(`/api/worker-tokens/${fingerprint}`, { method: 'DELETE' });
+        const resp = await fetch('/api/worker-tokens', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: fingerprint }),
+        });
         if (!resp.ok) {
             showToast('Failed to revoke token', 'error');
             return;
