@@ -37,7 +37,7 @@ class TestPageRoutes:
     async def test_queue_page(self, client: AsyncClient):
         response = await client.get("/queue")
         assert response.status_code == 200
-        assert "JOB QUEUE" in response.text
+        assert "Job queue" in response.text
 
     async def test_workers_page(self, client: AsyncClient):
         response = await client.get("/workers")
@@ -69,7 +69,7 @@ class TestPartials:
     async def test_jobs_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/jobs")
         assert response.status_code == 200
-        assert "No Jobs in Queue" in response.text
+        assert "No jobs in queue" in response.text
 
     async def test_workers_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/workers")

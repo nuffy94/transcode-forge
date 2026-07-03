@@ -1,16 +1,19 @@
 {% from "partials/_macros.html" import sort_th %}
+{% from "partials/_icons.html" import icon %}
+{#- Data contract (tests/test_view_consistency.py + WS live updates):
+    exactly ONE data-job-id per row; transcoding rows carry exactly one
+    data-progress-bar + data-progress-pct. Keep it that way. -#}
 {% if jobs %}
 <table class="forge-table">
     <thead>
         <tr>
             <th class="w-10">
-                <input id="select-all-jobs" class="forge-check" type="checkbox" aria-label="Select all jobs"
-                       onchange="document.querySelectorAll('.job-checkbox').forEach(c=>c.checked=this.checked);toggleBulkBar()"/>
+                <input id="select-all-jobs" class="forge-check" type="checkbox" aria-label="Select all jobs" data-role="jobs-select-all"/>
             </th>
             {{ sort_th('Filename · Library', 'source_path', sort, dir, 'sortQueue') }}
             {{ sort_th('Status', 'status', sort, dir, 'sortQueue') }}
             <th class="w-1/4">Progress</th>
-            {{ sort_th('Size', 'source_size', sort, dir, 'sortQueue') }}
+            {{ sort_th('Size', 'source_size', sort, dir, 'sortQueue', 'text-right') }}
             {{ sort_th('Worker', 'worker_id', sort, dir, 'sortQueue') }}
             <th class="text-right">Actions</th>
         </tr>
@@ -18,20 +21,21 @@
     <tbody>
         {% for job in jobs %}
         {% set pct = (job.progress * 100)|int %}
-        <tr data-job-id="{{ job.id }}" class="group {% if job.status == 'transcoding' %}is-active{% endif %}">
+        {% set fid = file_ids.get(job.source_path) %}
+        <tr data-job-id="{{ job.id }}"
+            {% if fid %}data-file-id="{{ fid }}" class="cursor-pointer {% if job.status == 'transcoding' %}is-active{% endif %}"
+            {% elif job.status == 'transcoding' %}class="is-active"{% endif %}>
             <td>
                 <input class="forge-check job-checkbox" type="checkbox" aria-label="Select {{ job.source_path.split('/')[-1] }}"
-                       value="{{ job.id }}" data-status="{{ job.status }}" onchange="toggleBulkBar()"/>
+                       value="{{ job.id }}" data-status="{{ job.status }}"/>
             </td>
             <td>
-                <div class="flex flex-col gap-1">
-                    <span class="text-sm font-medium {% if job.status == 'transcoding' %}text-forge-ember-hot{% else %}text-forge-paper{% endif %}" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
-                    <div class="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
-                        <span class="text-forge-mute">{{ job.library }}</span>
-                        <span class="text-forge-rule-bright">·</span>
-                        <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
-                    </div>
-                </div>
+                <span class="block text-[13px] font-medium {% if job.status == 'transcoding' %}text-forge-ember-hot{% else %}text-forge-paper{% endif %}" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
+                <span class="flex items-center gap-2 font-mono text-2xs uppercase tracking-wider mt-0.5">
+                    <span class="text-forge-mute">{{ job.library }}</span>
+                    <span class="text-forge-rule-bright">·</span>
+                    <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
+                </span>
             </td>
             <td>
                 {% if job.status == 'transcoding' %}
@@ -56,44 +60,35 @@
                     <div class="forge-meter flex-1">
                         <div data-progress-bar class="forge-meter-fill" style="width: {{ pct }}%;"></div>
                     </div>
-                    <span data-progress-pct class="font-mono font-semibold text-xs text-forge-ember-hot tabular-nums w-10 text-right">{{ pct }}%</span>
+                    <span data-progress-pct class="font-mono font-semibold text-xs {% if pct %}text-forge-ember-hot{% else %}text-forge-mute{% endif %} tabular-nums w-14 text-right">{% if pct %}{{ pct }}%{% else %}starting{% endif %}</span>
                 </div>
                 {% elif job.status == 'complete' %}
-                <div class="flex items-center gap-3">
-                    <div class="forge-meter flex-1">
-                        <div class="forge-meter-fill" style="width: 100%; background: linear-gradient(90deg, var(--forge-oxide), var(--forge-oxide)); box-shadow: 0 0 8px rgba(126, 186, 120, 0.45);"></div>
-                    </div>
-                    <span class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp w-10 text-right">Done</span>
-                </div>
-                {% elif job.status == 'pending' %}
+                <span class="font-mono text-2xs text-forge-oxide uppercase tracking-stamp">Done{% if job.savings_percent %} · −{{ job.savings_percent|round(0)|int }}%{% endif %}</span>
+                {% elif job.status in ('pending', 'queued') %}
                     {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
-                    <span class="font-mono text-[10px] italic uppercase tracking-stamp" style="color: var(--forge-brass);" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job stays pending until one joins.">Waiting for an {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
+                    <span class="font-mono text-2xs italic uppercase tracking-stamp text-forge-brass" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job waits until one joins.">Needs {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
                     {% else %}
-                    <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">Awaiting capacity</span>
-                    {% endif %}
-                {% elif job.status == 'queued' %}
-                    {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
-                    <span class="font-mono text-[10px] italic uppercase tracking-stamp" style="color: var(--forge-brass);" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job stays queued until one joins.">Waiting for an {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
-                    {% else %}
-                    <span class="font-mono text-[10px] text-forge-mute italic uppercase tracking-stamp">In library queue</span>
+                    <span class="font-mono text-2xs text-forge-mute italic uppercase tracking-stamp">{% if job.status == 'pending' %}Awaiting capacity{% else %}In library queue{% endif %}</span>
                     {% endif %}
                 {% elif job.status == 'failed' %}
-                <span class="font-mono text-[10px] text-forge-rust">{{ job.error_message or 'Transcode failed' }}</span>
+                <span class="font-mono text-2xs text-forge-rust" title="{{ job.error_message or '' }}">{{ (job.error_message or 'Transcode failed')[:48] }}</span>
                 {% endif %}
             </td>
-            <td class="col-mono text-sm">
+            <td class="col-mono text-right">
                 {% if job.source_size %}
                     <span class="text-forge-ink">{{ (job.source_size / 1073741824)|round(1) }} GiB</span>
                     {% if job.space_saved %}
-                        <span class="text-forge-oxide ml-2">−{{ (job.space_saved / 1048576)|round(0)|int }} MiB</span>
+                        <span class="block text-2xs text-forge-oxide">−{{ (job.space_saved / 1073741824)|round(1) }} GiB</span>
                     {% endif %}
                 {% else %}
                     <span class="text-forge-mute">—</span>
                 {% endif %}
             </td>
-            <td class="col-mono text-xs text-forge-steel">{{ job.worker_id[:10] if job.worker_id else '—' }}</td>
+            <td class="col-mono text-xs {% if worker_names.get(job.worker_id) %}text-forge-steel{% else %}text-forge-mute{% endif %}">
+                {{ worker_names.get(job.worker_id) or (job.worker_id[:10] if job.worker_id else '—') }}
+            </td>
             <td class="text-right">
-                <div class="flex justify-end gap-1.5">
+                <span class="flex justify-end gap-1.5">
                     {% if job.status == 'failed' %}
                     <button class="forge-iconbtn"
                             title="Retry job"
@@ -101,7 +96,7 @@
                             hx-post="/api/jobs/{{ job.id }}/retry"
                             hx-swap="none"
                             hx-on::after-request="htmx.trigger('#job-table-container', 'refresh')">
-                        <span class="material-symbols-outlined text-base">refresh</span>
+                        {{ icon('refresh', 'forge-icon--sm') }}
                     </button>
                     {% endif %}
                     {% if job.status in ['pending', 'queued', 'transcoding'] %}
@@ -111,10 +106,10 @@
                             hx-post="/api/jobs/{{ job.id }}/cancel"
                             hx-swap="none"
                             hx-on::after-request="htmx.trigger('#job-table-container', 'refresh')">
-                        <span class="material-symbols-outlined text-base">close</span>
+                        {{ icon('x', 'forge-icon--sm') }}
                     </button>
                     {% endif %}
-                </div>
+                </span>
             </td>
         </tr>
         {% endfor %}
@@ -123,19 +118,16 @@
 
 {% set total_pages = (total + per_page - 1) // per_page %}
 {% if total > per_page %}
-<div class="px-6 py-4 flex items-center justify-between border-t border-forge-rule">
-    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">
-        Showing <span class="text-forge-ink">{{ ((page - 1) * per_page) + 1 }}–{{ (page * per_page) if (page * per_page) < total else total }}</span> of <span class="text-forge-ink">{{ total }}</span>
-    </p>
-    <div class="flex items-center gap-1">
-        <button class="forge-iconbtn {% if page <= 1 %}opacity-30 pointer-events-none{% endif %}"
-                aria-label="Previous page"
-                {% if page > 1 %}hx-get="/partials/jobs?page={{ page - 1 }}" hx-target="#job-table-container" hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir"{% endif %}>
-            <span class="material-symbols-outlined text-sm">chevron_left</span>
+<div class="forge-pager">
+    <span class="forge-pager-info">{{ ((page - 1) * per_page) + 1 }}–{{ (page * per_page) if (page * per_page) < total else total }} of {{ total }}</span>
+    <div class="forge-pager-btns">
+        <button class="forge-pager-btn" aria-label="Previous page"
+                {% if page > 1 %}hx-get="/partials/jobs?page={{ page - 1 }}" hx-target="#job-table-container" hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir"{% else %}disabled{% endif %}>
+            {{ icon('chevron-left', 'forge-icon--sm') }}
         </button>
         {% for p in range(1, total_pages + 1) %}
             {% if p <= 10 %}
-            <button class="forge-iconbtn font-mono text-[11px] font-semibold {% if p == page %}!border-forge-ember !text-forge-ember{% endif %}"
+            <button class="forge-pager-btn font-mono text-2xs font-semibold w-6 {% if p == page %}!border-forge-ember !text-forge-ember{% endif %}"
                     aria-label="Go to page {{ p }}"
                     hx-get="/partials/jobs?page={{ p }}"
                     hx-target="#job-table-container"
@@ -144,21 +136,20 @@
             </button>
             {% endif %}
         {% endfor %}
-        <button class="forge-iconbtn {% if page >= total_pages %}opacity-30 pointer-events-none{% endif %}"
-                aria-label="Next page"
-                {% if page < total_pages %}hx-get="/partials/jobs?page={{ page + 1 }}" hx-target="#job-table-container" hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir"{% endif %}>
-            <span class="material-symbols-outlined text-sm">chevron_right</span>
+        <button class="forge-pager-btn" aria-label="Next page"
+                {% if page < total_pages %}hx-get="/partials/jobs?page={{ page + 1 }}" hx-target="#job-table-container" hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir"{% else %}disabled{% endif %}>
+            {{ icon('chevron-right', 'forge-icon--sm') }}
         </button>
     </div>
 </div>
 {% else %}
-<div class="px-6 py-3 border-t border-forge-rule font-mono text-[10px] text-forge-mute uppercase tracking-stamp">{{ total }} jobs</div>
+<div class="forge-pager"><span class="forge-pager-info">{{ total }} job{% if total != 1 %}s{% endif %}</span></div>
 {% endif %}
 
 {% else %}
-<div class="text-center py-16 px-6">
-    <span class="material-symbols-outlined text-4xl text-forge-faint mb-3 block">inbox</span>
-    <p class="font-display font-bold text-2xl text-forge-mute uppercase tracking-tight mb-1">No Jobs in Queue</p>
-    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Scan a library to discover files</p>
+<div class="forge-empty">
+    {{ icon('inbox') }}
+    <p class="forge-empty-title">No jobs in queue</p>
+    <p class="forge-empty-hint">Queue files from Movies or TV Shows — a scan only catalogs, it never queues.</p>
 </div>
 {% endif %}

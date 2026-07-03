@@ -214,6 +214,18 @@ async def dashboard_stats_partial(
     )
 
 
+async def _job_row_context(db: DBConnection, jobs: list[Any]) -> dict[str, Any]:
+    """Shared enrichment for job-row partials: worker names for honest
+    attribution, and media-file ids so rows can open the file drawer."""
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    file_ids = await media_repo.ids_by_paths(db, [j.source_path for j in jobs])
+    return {
+        "jobs": [j.model_dump(mode="json") for j in jobs],
+        "worker_names": worker_names,
+        "file_ids": file_ids,
+    }
+
+
 @router.get("/partials/active-transcodes", response_class=HTMLResponse)
 async def active_transcodes_partial(
     request: Request,
@@ -223,9 +235,7 @@ async def active_transcodes_partial(
     return _render(
         request,
         "partials/active_transcodes.html",
-        {
-            "jobs": [j.model_dump(mode="json") for j in jobs],
-        },
+        await _job_row_context(db, jobs),
     )
 
 
@@ -238,9 +248,7 @@ async def recent_activity_partial(
     return _render(
         request,
         "partials/recent_activity.html",
-        {
-            "jobs": [j.model_dump(mode="json") for j in jobs],
-        },
+        await _job_row_context(db, jobs),
     )
 
 
@@ -283,7 +291,8 @@ async def jobs_partial(
     # Codecs at least one live worker can encode — pending jobs whose
     # target codec isn't covered get a "waiting for a capable worker" hint.
     online_codecs: set[str] = set()
-    for w in await worker_repo.list_workers(db):
+    workers_list = await worker_repo.list_workers(db)
+    for w in workers_list:
         if w.status in ("online", "busy"):
             online_codecs.update(w.supported_codecs)
     return _render(
@@ -297,6 +306,8 @@ async def jobs_partial(
             "sort": sort,
             "dir": dir,
             "online_codecs": online_codecs,
+            "worker_names": {w.id: w.name for w in workers_list},
+            "file_ids": await media_repo.ids_by_paths(db, [j.source_path for j in jobs]),
         },
     )
 

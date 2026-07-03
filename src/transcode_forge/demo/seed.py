@@ -649,21 +649,37 @@ async def seed_demo_data(db: DBConnection) -> None:
     )
 
     # --- Scans ---
+    # create_scan hardcodes zero counts and stamps started_at=now (production
+    # fills them via update_scan as the scan progresses) — the seed does the
+    # same dance so the history shows real found/new numbers and times.
     scan_times = [_past(168), _past(72), _past(24), _past(6), _past(1)]
     for i, started in enumerate(scan_times):
         lib_name = "movies" if i % 2 == 0 else "tv"
         found = _rng.randint(80, 200)
         scan = Scan(
             library=lib_name,
+            started_at=started,
+            status=ScanStatus.RUNNING,
+        )
+        await scan_repo.create_scan(db, scan)
+        await scan_repo.update_scan(
+            db,
+            scan.id,
             files_found=found,
             files_new=_rng.randint(0, 20),
             files_updated=_rng.randint(0, 10),
             files_skipped=found - _rng.randint(10, 30),
-            started_at=started,
-            completed_at=started + timedelta(minutes=_rng.randint(1, 15)),
             status=ScanStatus.COMPLETE,
         )
-        await scan_repo.create_scan(db, scan)
+        await db.execute(
+            "UPDATE scans SET started_at = ?, completed_at = ? WHERE id = ?",
+            (
+                started.isoformat(),
+                (started + timedelta(minutes=_rng.randint(1, 15))).isoformat(),
+                scan.id,
+            ),
+        )
+    await db.commit()
     logger.info("Created 5 scan records")
 
     # --- Skipped files (from scans, not jobs) ---

@@ -9,7 +9,6 @@
  */
 
 import { esc, showToast } from './toast.js';
-import { openFileDrawer } from './drawer.js';
 
 const GIB = 1073741824;
 
@@ -640,14 +639,8 @@ document.addEventListener('click', async (e) => {
             e.stopPropagation();
             queueShow(actionEl.dataset.showName, actionEl);
         }
-        return;
     }
-
-    // Row click → file-detail drawer (not from form controls or buttons).
-    const row = e.target.closest('[data-file-id]');
-    if (row && !e.target.closest('input, button, select, a, label')) {
-        openFileDrawer(row.dataset.fileId);
-    }
+    // Row click → file-detail drawer is handled globally by drawer.js.
 });
 
 if (document.getElementById('movies-content')) initMovies();

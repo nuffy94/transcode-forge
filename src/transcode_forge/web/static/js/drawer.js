@@ -153,6 +153,14 @@ function initDrawer() {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeFileDrawer();
     });
+    // Any row carrying data-file-id opens the drawer, on every page —
+    // unless the click landed on a control inside the row.
+    document.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-file-id]');
+        if (row && !e.target.closest('input, button, select, a, label')) {
+            openFileDrawer(row.dataset.fileId);
+        }
+    });
     if (location.hash.startsWith('#file=')) {
         openFileDrawer(decodeURIComponent(location.hash.slice(6)));
     }
