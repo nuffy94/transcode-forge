@@ -18,10 +18,11 @@ deterministic test to lock the behaviour.
 ---
 
 ### S1 — Dashboard & navigation
-Load `/`, then visit every nav item (Movies, TV, Queue, Workers, History,
-Skipped, Stats, Settings). Each should load with seeded content and no errors.
-Judge: is the dashboard legible at a glance? Any dead links, empty states that
-look broken, or numbers that don't add up?
+Load `/`, then visit every nav item (Movies, TV Shows, Queue, Activity,
+Workers, Stats, Settings). On Activity, switch between the two facets
+(Encode outcomes / Scan skips). Each should load with seeded content and no
+errors. Judge: is the dashboard legible at a glance? Any dead links, empty
+states that look broken, or numbers that don't add up?
 
 ### S2 — Library lifecycle (add → scan → browse → remove)
 Settings → **Add Library** (name e.g. "QA Movies", type movies, a path).
@@ -41,10 +42,11 @@ a confusing default? Are field labels clear? Should quality be a labelled
 slider?
 
 ### S5 — Worker onboarding
-Settings → Workers → **Issue Token** (label e.g. "qa-node"). Confirm the
-copy-paste command block shows `TF_SERVER_URL` + `TF_WORKER_TOKEN`. Then
-**revoke** it and confirm it disappears. Judge: is the one-command flow clear
-to a newcomer?
+Workers → **Add a worker** → issue a token (label e.g. "qa-node"). Confirm
+the copy-paste command blocks show `TF_SERVER_URL` + `TF_WORKER_TOKEN`, then
+**revoke** the token from the Worker tokens panel and confirm its status
+flips. Also confirm Settings only links here rather than duplicating the
+flow. Judge: is the one-command flow clear to a newcomer?
 
 ### S6 — Schedules (create → verify → delete)
 Settings → Schedules → **New Window** (name, start/end hour, pick days) → Add.
@@ -52,8 +54,10 @@ Confirm it renders in the schedule list with the right day summary. Then
 delete it. Judge: are the hour/day inputs clear? Does the summary read right?
 
 ### S7 — Exclusions ("don't try again")
-From History or Skipped, exercise the **Don't try again** / unexclude flow.
-Confirm the file moves to Skipped and can be lifted back. Judge clarity.
+From Activity (either facet), exclude a file via the row action, then open
+that file's detail drawer (click the row from Movies/TV or Activity) and
+**lift the exclusion** from there. Confirm both directions are reflected in
+the UI. Judge clarity — does the drawer make the exclusion state obvious?
 
 ### S8 — Error-path probes (must show a clear, persistent error)
 Deliberately do invalid things and confirm a **readable error toast** appears
