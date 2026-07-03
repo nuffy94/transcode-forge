@@ -307,10 +307,8 @@ class TestNavigation:
     def test_page_navigation(self, page: Page, base_url: str, path: str, title_contains: str):
         page.goto(f"{base_url}{path}")
         expect(page).to_have_title(re.compile(title_contains))
-        # No console errors
+        # No console errors — everything is self-hosted now, so no exemptions.
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.wait_for_load_state("networkidle")
-        # Allow font loading errors (Google Fonts CDN in test env)
-        real_errors = [e for e in errors if "font" not in e.lower()]
-        assert len(real_errors) == 0, f"Console errors on {path}: {real_errors}"
+        assert len(errors) == 0, f"Console errors on {path}: {errors}"
