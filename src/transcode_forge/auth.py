@@ -17,6 +17,7 @@ exists yet).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -58,7 +59,7 @@ UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 CSRF_EXEMPT_PATHS = frozenset({"/api/auth/setup", "/api/auth/login"})
 
 
-def _csrf_check(scope: dict) -> Response | None:
+def _csrf_check(scope: dict[str, Any]) -> Response | None:
     """Reject cross-site state-changing requests by Origin/Referer.
 
     Browsers attach Origin/Sec-Fetch-Site to cross-origin fetches; if a

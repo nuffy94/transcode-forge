@@ -37,8 +37,8 @@ def is_active_now(schedule: dict[str, Any], now: datetime | None = None) -> bool
     if not (schedule["days_mask"] & weekday_bit):
         return False
 
-    start = schedule["start_hour"]
-    end = schedule["end_hour"]
+    start: int = schedule["start_hour"]
+    end: int = schedule["end_hour"]
     hour = n.hour
 
     if start == end:

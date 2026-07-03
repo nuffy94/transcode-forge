@@ -8,6 +8,7 @@ All data is deterministic (seeded RNG) for reproducible demos.
 import logging
 import random
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from transcode_forge.db import DBConnection
@@ -149,7 +150,7 @@ _TV_SHOWS: list[tuple[str, list[tuple[int, int]]]] = [
     ("Shogun", [(1, 10)]),
 ]
 
-_WORKERS: list[dict[str, object]] = [
+_WORKERS: list[dict[str, Any]] = [
     {
         "name": "encoder-node",
         "host": "10.0.0.11",
@@ -198,7 +199,7 @@ _FAIL_MESSAGES = [
     "Timeout: transcode exceeded 4 hour limit",
 ]
 
-_RESOLUTIONS = {
+_RESOLUTIONS: dict[str, dict[str, Any]] = {
     "720p": {"width": 1280, "height": 720, "label": "720p"},
     "1080p": {"width": 1920, "height": 1080, "label": "1080p"},
     "4K": {"width": 3840, "height": 2160, "label": "2160p"},
@@ -300,9 +301,9 @@ async def seed_demo_data(db: DBConnection) -> None:
             id=wid,
             name=str(w["name"]),
             host=str(w["host"]),
-            capabilities=list(w["caps"]),  # type: ignore[arg-type]
+            capabilities=list(w["caps"]),
             ffmpeg_version=str(w["ffmpeg"]),
-            status=w["status"],  # type: ignore[arg-type]
+            status=w["status"],
             last_heartbeat=now if w["status"] != WorkerStatus.OFFLINE else _past(48),
             registered_at=_past(72),
         )
