@@ -145,7 +145,13 @@ async def queue_selected_files(
     # jobs with a stale quality value.
     seen: set[str] = set()
     async with db.transaction() as tx:
-        presets = {lib["id"]: lib["quality_preset"] for lib in await lib_repo.list_libraries(tx)}
+        libs = await lib_repo.list_libraries(tx)
+        presets = {lib["id"]: lib["quality_preset"] for lib in libs}
+        # Jobs carry the library NAME — the queue/Activity filters and the
+        # stats group-bys all match on it. Storing the UUID here made
+        # media-queued jobs invisible to library filtering (fixed along
+        # with migration 0008, which backfills old rows).
+        lib_names = {lib["id"]: lib["name"] for lib in libs}
         for mf in candidates:
             path = mf["file_path"]
             if path in excluded or path in active or path in seen:
@@ -155,7 +161,7 @@ async def queue_selected_files(
 
             job = Job(
                 source_path=path,
-                library=mf["library_id"],
+                library=lib_names.get(mf["library_id"], mf["library_id"]),
                 source_codec=mf["video_codec"],
                 source_resolution=mf["resolution"],
                 source_bitrate=mf["bitrate"],
