@@ -15,7 +15,7 @@
 # prints secrets.
 #
 # <UDF name="server_url" label="Scheduler URL" example="https://forge.example.com" />
-# <UDF name="worker_token_password" label="Worker token (scheduler UI: Workers -> Issue token)" />
+# <UDF name="worker_token_password" label="Worker token (issue in the scheduler UI under Workers)" />
 # <UDF name="s3_endpoint" label="Object Storage endpoint URL (same endpoint as the scheduler)" example="https://us-ord-1.linodeobjects.com" />
 # <UDF name="s3_access_key" label="Object Storage access key" />
 # <UDF name="s3_secret_password" label="Object Storage secret key" />

@@ -75,6 +75,11 @@ Cloud Manager → StackScripts → Create StackScript → paste
 `stackscript-scheduler.sh` (target image: Ubuntu 24.04 LTS). Repeat for
 `stackscript-worker.sh`. (Or `linode-cli stackscripts create …`.)
 
+If you edit the scripts first, mind Linode's StackScript parser: script
+content must be **ASCII-only**, and UDF `label` values can't contain
+apostrophes or `>` (both read as malformed tags and the API rejects the
+whole script with a confusing "mismatched quotes" error).
+
 ### 2. (Multi-node / Object Storage) create and seed the bucket
 
 Cloud Manager → Object Storage → create a bucket + access keys. Seed it
