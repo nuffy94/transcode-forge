@@ -1,7 +1,5 @@
-# Production install — pulls the pre-built image instead of building from
-# source. The package is private, so authenticate once first:
-#     echo <github-PAT-with-read:packages> | docker login ghcr.io -u <user> --password-stdin
-# Then:
+# Production install — pulls the pre-built public image instead of building
+# from source:
 #     ./bootstrap.sh && docker compose -f docker-compose.prod.yml up -d
 #
 # Postgres/Redis are internal-only; only the web UI is published. Pin a

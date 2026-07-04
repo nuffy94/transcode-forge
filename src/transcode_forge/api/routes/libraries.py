@@ -4,12 +4,14 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from transcode_forge.api.deps import get_db
+from transcode_forge.api.deps import get_db, get_settings
+from transcode_forge.api.routes.scan import run_scan
+from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
+from transcode_forge.models.library import StorageBackendType
 from transcode_forge.repos import libraries as lib_repo
-from transcode_forge.scanner.scanner import scan_library
 
 router = APIRouter(tags=["libraries"])
 
@@ -17,10 +19,28 @@ router = APIRouter(tags=["libraries"])
 class LibraryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     media_type: str = Field(pattern=r"^(movies|tv|anime)$")
-    path: str = Field(min_length=1)
+    # Required for filesystem libraries; derived (s3://bucket/prefix) for S3.
+    path: str = ""
     quality_preset: int = Field(default=21, ge=1, le=51)
     auto_scan: bool = False
     scan_interval_hours: int = Field(default=24, ge=1)
+    backend: StorageBackendType = StorageBackendType.FILESYSTEM
+    s3_bucket: str | None = Field(default=None, max_length=63)
+    s3_prefix: str | None = Field(default=None, max_length=1024)
+
+    @model_validator(mode="after")
+    def _validate_backend_fields(self) -> "LibraryCreate":
+        if self.backend == StorageBackendType.S3:
+            if not self.s3_bucket:
+                raise ValueError("s3_bucket is required for an S3 library")
+            if not self.path:
+                self.path = f"s3://{self.s3_bucket}/{self.s3_prefix or ''}"
+        else:
+            if not self.path:
+                raise ValueError("path is required for a filesystem library")
+            self.s3_bucket = None
+            self.s3_prefix = None
+        return self
 
 
 class LibraryUpdate(BaseModel):
@@ -56,6 +76,9 @@ async def create_library(
         quality_preset=body.quality_preset,
         auto_scan=body.auto_scan,
         scan_interval_hours=body.scan_interval_hours,
+        backend=body.backend,
+        s3_bucket=body.s3_bucket,
+        s3_prefix=body.s3_prefix,
     )
     lib = await lib_repo.get_library(db, lib_id)
     trigger = {"showToast": {"message": "Library added", "type": "success"}}
@@ -98,18 +121,21 @@ async def trigger_library_scan(
     background_tasks: BackgroundTasks,
     max_files: int = 0,
     db: DBConnection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     lib = await lib_repo.get_library(db, lib_id)
     if not lib:
         raise HTTPException(404, "Library not found")
 
+    # run_scan dispatches on the library backend (filesystem vs S3).
     background_tasks.add_task(
-        scan_library,
-        library_id=lib["id"],
-        library_name=lib["name"],
-        library_path=lib["path"],
-        media_type=lib["media_type"],
-        db=db,
-        max_files=max_files,
+        run_scan,
+        lib["id"],
+        lib["name"],
+        lib["path"],
+        lib["media_type"],
+        max_files,
+        db,
+        settings,
     )
     return {"status": "scanning", "library": lib["name"]}

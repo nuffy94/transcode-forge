@@ -56,6 +56,62 @@ class TestLibrariesEndpoint:
         second = await client.post("/api/libraries", json={**body, "name": "Lib B"})
         assert second.status_code == 409
 
+    async def test_create_filesystem_requires_path(self, client: AsyncClient):
+        resp = await client.post("/api/libraries", json={"name": "Lib", "media_type": "movies"})
+        assert resp.status_code == 422
+
+    async def test_create_s3_requires_bucket(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/libraries",
+            json={"name": "Cloud", "media_type": "movies", "backend": "s3"},
+        )
+        assert resp.status_code == 422
+
+    async def test_create_s3_library_derives_path(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/libraries",
+            json={
+                "name": "Cloud Movies",
+                "media_type": "movies",
+                "backend": "s3",
+                "s3_bucket": "forge-media",
+                "s3_prefix": "masters/movies/",
+            },
+        )
+        assert resp.status_code == 201
+        lib = resp.json()["data"]
+        assert lib["backend"] == "s3"
+        assert lib["s3_bucket"] == "forge-media"
+        assert lib["s3_prefix"] == "masters/movies/"
+        assert lib["path"] == "s3://forge-media/masters/movies/"
+
+    async def test_library_scan_dispatches_s3_scanner(self, client: AsyncClient, monkeypatch):
+        """The per-library Scan button must route S3 libraries to the S3
+        scanner, not the filesystem scanner (which would FAIL on s3:// paths)."""
+        created = await client.post(
+            "/api/libraries",
+            json={
+                "name": "Cloud Movies",
+                "media_type": "movies",
+                "backend": "s3",
+                "s3_bucket": "forge-media",
+                "s3_prefix": "masters/movies/",
+            },
+        )
+        lib_id = created.json()["data"]["id"]
+
+        called: dict = {}
+
+        async def fake_s3_scan(**kwargs):
+            called.update(kwargs)
+            return {"files_found": 0}
+
+        monkeypatch.setattr("transcode_forge.scanner.s3_scanner.scan_s3_library", fake_s3_scan)
+        resp = await client.post(f"/api/libraries/{lib_id}/scan")
+        assert resp.status_code == 202
+        assert called["bucket"] == "forge-media"
+        assert called["prefix"] == "masters/movies/"
+
 
 class TestJobsEndpoint:
     async def test_list_jobs_empty(self, client: AsyncClient):

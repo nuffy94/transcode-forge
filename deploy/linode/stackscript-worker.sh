@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# Transcode Forge — worker StackScript (Linode Compute).
+#
+# Joins a CPU transcode worker to an existing scheduler. HTTP-only: the
+# worker holds a server-issued token, never DB or Redis credentials. It is
+# outbound-only (scheduler + Object Storage) — lock its Cloud Firewall down
+# to SSH at most.
+#
+# Object Storage is required: a remote worker cannot see the scheduler's
+# local disk, so media must live in a bucket (the scheduler passes the
+# bucket per job; the worker only needs endpoint + keys).
+#
+# Tested target image: Ubuntu 24.04 LTS. Run as root at first boot.
+# Output persists on disk at /root/StackScript.out — this script never
+# prints secrets.
+#
+# <UDF name="server_url" label="Scheduler URL" example="https://forge.example.com" />
+# <UDF name="worker_token_password" label="Worker token (scheduler UI: Workers -> Issue token)" />
+# <UDF name="s3_endpoint" label="Object Storage endpoint URL (must match the scheduler's)" example="https://us-ord-1.linodeobjects.com" />
+# <UDF name="s3_access_key" label="Object Storage access key" />
+# <UDF name="s3_secret_password" label="Object Storage secret key" />
+# <UDF name="worker_name" label="Worker name shown in the UI (blank = hostname)" default="" example="linode-worker-1" />
+# <UDF name="worker_max_concurrent" label="Concurrent jobs, 1-4 (blank = auto from CPU count)" default="" />
+
+set -euo pipefail
+
+SERVER_URL="${SERVER_URL:?server_url UDF is required}"
+WORKER_TOKEN_PASSWORD="${WORKER_TOKEN_PASSWORD:?worker_token_password UDF is required}"
+S3_ENDPOINT="${S3_ENDPOINT:?s3_endpoint UDF is required}"
+S3_ACCESS_KEY="${S3_ACCESS_KEY:?s3_access_key UDF is required}"
+S3_SECRET_PASSWORD="${S3_SECRET_PASSWORD:?s3_secret_password UDF is required}"
+WORKER_NAME="${WORKER_NAME:-}"
+WORKER_MAX_CONCURRENT="${WORKER_MAX_CONCURRENT:-}"
+
+# Render-only mode (tests / dry runs): set TF_SS_RENDER_DIR to a directory and
+# the script renders every config file there and exits — no installs, no
+# mounts, no docker.
+RENDER_DIR="${TF_SS_RENDER_DIR:-}"
+
+APP_DIR="${RENDER_DIR:-/opt/transcode-forge}"
+
+log() { echo "[transcode-forge] $*"; }
+
+# ---------------------------------------------------------------- derivations
+
+# Normalize the S3 endpoint to an https:// URL and derive the signing region
+# from its first hostname label (us-ord-1.linodeobjects.com -> us-ord-1).
+[[ "$S3_ENDPOINT" == http*://* ]] || S3_ENDPOINT="https://${S3_ENDPOINT}"
+S3_HOST="${S3_ENDPOINT#*://}"
+S3_HOST="${S3_HOST%%/*}"
+S3_REGION="${S3_HOST%%.*}"
+
+# Auto-tune concurrency to the plan (D9): one CPU transcode saturates ~4
+# vCPUs of x265/SVT-AV1. Clamp to the app's 1..4 range.
+if [[ -z "$WORKER_MAX_CONCURRENT" ]]; then
+    CPUS="$(nproc 2>/dev/null || echo 4)"
+    WORKER_MAX_CONCURRENT=$(( CPUS / 4 ))
+fi
+(( WORKER_MAX_CONCURRENT < 1 )) && WORKER_MAX_CONCURRENT=1
+(( WORKER_MAX_CONCURRENT > 4 )) && WORKER_MAX_CONCURRENT=4
+
+[[ -n "$WORKER_NAME" ]] || WORKER_NAME="linode-$(hostname)"
+
+# ------------------------------------------------- block storage (skip render)
+
+DATA_DIR="/mnt/data"
+if [[ -z "$RENDER_DIR" ]]; then
+    volume_device="$(find /dev/disk/by-id -name 'scsi-0Linode_Volume_*' 2>/dev/null | head -n1 || true)"
+    if [[ -n "$volume_device" ]]; then
+        if ! blkid "$volume_device" >/dev/null 2>&1; then
+            log "Formatting attached Block Storage volume (no filesystem found)."
+            mkfs.ext4 -q "$volume_device"
+        fi
+        mkdir -p "$DATA_DIR"
+        if ! mountpoint -q "$DATA_DIR"; then
+            mount "$volume_device" "$DATA_DIR"
+            echo "$volume_device $DATA_DIR ext4 defaults,noatime 0 2" >> /etc/fstab
+        fi
+        log "Block Storage volume mounted at $DATA_DIR (scratch)."
+    else
+        DATA_DIR="/opt/transcode-forge/data"
+        log "WARNING: no Block Storage volume attached — scratch will live on the"
+        log "root disk ($DATA_DIR). Size it for ~2x your largest media file, or"
+        log "attach a volume."
+    fi
+    mkdir -p "$DATA_DIR/scratch"
+fi
+
+# ------------------------------------------------------------- render configs
+
+mkdir -p "$APP_DIR"
+
+# .env holds every dynamic value; the compose file stays static and reads
+# ${VARS} from here at up-time. Never printed to stdout.
+{
+    printf 'TF_VERSION=latest\n'
+    printf 'TF_DATA_DIR=%s\n' "$DATA_DIR"
+    printf 'TF_SERVER_URL=%s\n' "$SERVER_URL"
+    printf 'TF_WORKER_TOKEN=%s\n' "$WORKER_TOKEN_PASSWORD"
+    printf 'TF_WORKER_NAME=%s\n' "$WORKER_NAME"
+    printf 'TF_WORKER_MAX_CONCURRENT=%s\n' "$WORKER_MAX_CONCURRENT"
+    printf 'TF_S3_ENDPOINT_URL=%s\n' "$S3_ENDPOINT"
+    printf 'TF_S3_REGION=%s\n' "$S3_REGION"
+    printf 'TF_S3_ACCESS_KEY_ID=%s\n' "$S3_ACCESS_KEY"
+    printf 'TF_S3_SECRET_ACCESS_KEY=%s\n' "$S3_SECRET_PASSWORD"
+    printf 'TF_LOG_LEVEL=info\n'
+} > "$APP_DIR/.env"
+chmod 600 "$APP_DIR/.env"
+
+cat > "$APP_DIR/docker-compose.yml" <<'EOF'
+# Generated by the Transcode Forge worker StackScript. Values come from the
+# .env file next to this file. No inbound ports — the worker dials out.
+
+services:
+  worker:
+    image: ghcr.io/nuffy94/transcode-forge:${TF_VERSION:-latest}
+    command: ["python", "-m", "transcode_forge.worker"]
+    environment:
+      TF_SERVER_URL: ${TF_SERVER_URL}
+      TF_WORKER_TOKEN: ${TF_WORKER_TOKEN}
+      TF_WORKER_NAME: ${TF_WORKER_NAME}
+      TF_PREFERRED_BACKEND: "cpu"
+      TF_WORKER_MAX_CONCURRENT: ${TF_WORKER_MAX_CONCURRENT:-1}
+      TF_SCRATCH_DIR: "/scratch"
+      TF_S3_ENDPOINT_URL: ${TF_S3_ENDPOINT_URL}
+      TF_S3_REGION: ${TF_S3_REGION}
+      TF_S3_ACCESS_KEY_ID: ${TF_S3_ACCESS_KEY_ID}
+      TF_S3_SECRET_ACCESS_KEY: ${TF_S3_SECRET_ACCESS_KEY}
+      TF_LOG_LEVEL: ${TF_LOG_LEVEL:-info}
+    volumes:
+      - ${TF_DATA_DIR}/scratch:/scratch
+    restart: unless-stopped
+EOF
+
+if [[ -n "$RENDER_DIR" ]]; then
+    log "Render-only mode: configs written to $RENDER_DIR. Exiting."
+    exit 0
+fi
+
+# ------------------------------------------------------------ system install
+
+log "Installing Docker CE (get.docker.com)…"
+curl -fsSL https://get.docker.com | sh >/dev/null
+
+log "Pulling the image and starting the worker…"
+cd "$APP_DIR"
+docker compose pull -q
+docker compose up -d
+
+sleep 10
+if docker compose ps --status running | grep -q worker; then
+    log "Worker container is running — it should appear on the scheduler's"
+    log "Workers page within a heartbeat (~10s). If not, check the token:"
+    log "  docker compose logs worker"
+else
+    log "WARNING: worker container is not running — check 'docker compose logs worker'."
+fi
