@@ -211,7 +211,9 @@ const verified = await parallel(
     )
   })
 )
-const confirmed = verified.filter(Boolean).filter((v) => v.verdict && v.verdict.real)
+// A dead verifier agent yields verdict=null — that is NOT "verified".
+const verdicts = verified.filter(Boolean).filter((v) => v.verdict != null)
+const confirmed = verdicts.filter((v) => v.verdict.real)
 if (unverifiedOverflow.length) log(`verification cap hit — unverified overflow: ${JSON.stringify(unverifiedOverflow)}`)
 
 phase('Synthesize')
@@ -220,7 +222,7 @@ const coverage = {
   scenarios_completed: perScenario.length,
   scenarios_failed: failed,
   findings_flagged: flaggedTotal,
-  findings_verified: verified.filter(Boolean).length,
+  findings_verified: verdicts.length,
   findings_confirmed: confirmed.length,
   unverified_overflow: unverifiedOverflow,
 }
