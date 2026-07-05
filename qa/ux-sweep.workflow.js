@@ -1,43 +1,54 @@
 export const meta = {
   name: 'ux-qa-sweep',
-  description: 'Task-driven AI UX sweep: agents drive the seeded demo app through real user scenarios, judge what works/breaks, verify, and synthesize a report',
-  whenToUse: 'On-demand UX/QA discovery against a running demo-static instance. Launch the app first, then run with args {baseUrl, password}.',
+  description: 'AI UX sweep v2: isolated per-scenario demo instances, durable per-scenario results, bounded waves, fresh-instance verification, coverage-honest report',
+  whenToUse: 'On-demand UX/QA discovery. Self-contained — provisions its own demo instances. Optional args: {waveSize, runDir}.',
   phases: [
-    { title: 'Explore', detail: 'one agent per scenario drives the app + judges' },
-    { title: 'Verify', detail: 'independently re-check each "broke" finding' },
-    { title: 'Synthesize', detail: 'dedupe + prioritize + suggest deterministic tests' },
+    { title: 'Prep', detail: 'rotate run dirs + read scenarios.md (single source of truth)' },
+    { title: 'Explore', detail: 'one agent + one FRESH instance per scenario, in bounded waves; findings hit disk per scenario' },
+    { title: 'Verify', detail: 'each flagged finding re-checked on its own fresh instance' },
+    { title: 'Synthesize', detail: 'coverage-honest report + diff vs the previous run' },
   ],
 }
 
 // --- inputs -----------------------------------------------------------------
-// args may arrive as an object or a JSON string depending on the caller.
 let A = args || {}
-if (typeof A === 'string') {
-  try { A = JSON.parse(A) } catch (e) { A = {} }
-}
-// Defaults match the documented launcher in docs/QA.md (demo-static on :18799
-// with this throwaway admin password). Override via args to point elsewhere.
-const BASE = A.baseUrl || 'http://127.0.0.1:18799'
-const PW = A.password || 'qa-sweep-password-123'
+if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }
+const WAVE = Math.max(1, Math.min(5, A.waveSize || 3))
+const RUN_DIR = A.runDir || 'qa/runs/latest'
+const PREV_DIR = 'qa/runs/previous'
+const PW = 'qa-sweep-password-123'
+// Port blocks: explorers 18811+i, verifiers 18841+3*i+n. Nothing else in
+// this repo uses the 188xx range (tests/qa uses 18799/18801).
+const EXPLORE_PORT = (i) => 18811 + i
+const VERIFY_PORT = (i, n) => 18841 + i * 3 + n
 
-// Scenario briefs mirror qa/scenarios.md (kept short here; full detail there).
-const SCENARIOS = [
-  { id: 'S1', title: 'Dashboard & navigation', brief: 'Load / then visit every nav item (Movies, TV, Queue, Workers, History, Skipped, Stats, Settings). Each should load with seeded content and no errors. Judge legibility and empty states.' },
-  { id: 'S2', title: 'Library lifecycle', brief: 'Settings → Add Library (name "QA-S2 Movies", type movies, a path like /media/movies) → verify it appears → Scan it → check Movies reflects it → remove the library → verify it is gone.' },
-  { id: 'S3', title: 'Queue a transcode', brief: 'Movies → select one file via its row checkbox → Queue Selected → go to Queue and confirm the job appears → pause then resume the queue.' },
-  { id: 'S4', title: 'Settings persist', brief: 'Change a quality preset and another settings field. Save, reload, confirm values stuck. Judge UX: confusing defaults? unclear labels? should quality be a labelled slider?' },
-  { id: 'S5', title: 'Worker onboarding', brief: 'Settings → Workers → Issue Token (label "qa-S5-node") → confirm the command block shows TF_SERVER_URL + TF_WORKER_TOKEN → revoke it → confirm it disappears.' },
-  { id: 'S6', title: 'Schedules', brief: 'Settings → Schedules → New Window (name "qa-S6", start 23, end 7, pick weekdays) → Add → confirm it renders with the right day summary → delete it.' },
-  { id: 'S7', title: 'Exclusions', brief: 'From History or Skipped, exercise the "Don\'t try again" / unexclude flow. Confirm the file moves to Skipped and can be lifted back.' },
-  { id: 'S8', title: 'Error-path probes', brief: 'Do invalid things and confirm a CLEAR, PERSISTENT error toast appears each time: (a) add a library with empty name, (b) add a library with a duplicate path, (c) issue a worker token with empty label, (d) create a schedule with an out-of-range hour. Judge whether each message is specific and understandable.' },
-  { id: 'S9', title: 'Visual & a11y judgement', brief: 'Visit /login (log out first via /api/auth/logout if needed), /settings, /movies, /queue. Judge text contrast (muted text, inputs, toast copy), label clarity, confusing wording, and layout/overflow.' },
-]
+// --- schemas ----------------------------------------------------------------
+const SCENARIO_LIST = {
+  type: 'object',
+  properties: {
+    rotated: { type: 'boolean' },
+    scenarios: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          brief: { type: 'string' },
+        },
+        required: ['id', 'title', 'brief'],
+      },
+    },
+  },
+  required: ['rotated', 'scenarios'],
+}
 
 const FINDINGS = {
   type: 'object',
   properties: {
     scenario: { type: 'string' },
     summary: { type: 'string' },
+    resumed_from_disk: { type: 'boolean' },
     steps: {
       type: 'array',
       items: {
@@ -48,6 +59,7 @@ const FINDINGS = {
           detail: { type: 'string' },
           severity: { type: 'string', enum: ['high', 'medium', 'low'] },
           evidence: { type: 'string' },
+          repro: { type: 'array', items: { type: 'string' } },
           suggested_test: { type: 'string' },
         },
         required: ['step', 'status', 'detail'],
@@ -78,92 +90,158 @@ const REPORT = {
           title: { type: 'string' },
           severity: { type: 'string' },
           scenario: { type: 'string' },
+          novelty: { type: 'string', enum: ['new', 'known'] },
           suggested_test: { type: 'string' },
         },
-        required: ['title', 'severity'],
+        required: ['title', 'severity', 'novelty'],
       },
     },
   },
   required: ['markdown', 'confirmed_issues'],
 }
 
-function explorePrompt(s) {
-  return `You are a senior QA engineer testing a RUNNING demo of Transcode Forge (a self-hosted media transcoder web app) at ${BASE}. Admin password: ${JSON.stringify(PW)}.
+// --- prompts ----------------------------------------------------------------
+function explorePrompt(s, i) {
+  const port = EXPLORE_PORT(i)
+  const base = `http://127.0.0.1:${port}`
+  return `You are a senior QA engineer running scenario ${s.id} of the Transcode Forge UX sweep. Work from the repo root.
+
+RESUME CHECK FIRST: if ${RUN_DIR}/${s.id}.json exists and parses as JSON, return its contents verbatim (set resumed_from_disk=true) and do NOTHING else.
 
 SCENARIO ${s.id} — ${s.title}:
 ${s.brief}
 
-Drive the REAL app with Playwright (Python, installed). Write a script to qa/.sweep_${s.id}.py and run it from the repo root with: uv run python qa/.sweep_${s.id}.py
+You get your OWN fresh app instance — no other agent touches it, so every state change you observe is yours:
+1. Launch it:  uv run python qa/launch_demo.py --start --port ${port} --run-dir ${RUN_DIR}
+   (waits for READY; fresh empty-admin instance in demo-static mode, seeded data)
+2. Drive the REAL app with Playwright (Python, installed). Write your script to ${RUN_DIR}/script_${s.id}.py and run it with: uv run python ${RUN_DIR}/script_${s.id}.py
+   Set QA_RUN_DIR=${RUN_DIR} in the script's environment (or os.environ before importing sweep_helpers) so screenshots land in ${RUN_DIR}/shots/.
+   Start from this preamble (the helper logs in AND completes first-run setup — your fresh instance has no admin yet, session() handles it):
 
-Start the script with this exact preamble (a shared helper handles login + error capture):
+       import os, sys, pathlib, json
+       os.environ.setdefault("QA_RUN_DIR", ${JSON.stringify(RUN_DIR)})
+       sys.path.insert(0, str(pathlib.Path("qa").resolve()))
+       from sweep_helpers import session, error_toasts, console_errors, snap
+       BASE = ${JSON.stringify(base)}; PW = ${JSON.stringify(PW)}
+       with session(BASE, PW) as page:
+           # scenario steps; after each meaningful action: snap(page, "${s.id}_<step>") and check error_toasts(page)
+           print(json.dumps({"observations": "...", "console_errors": console_errors(page)}, default=str))
 
-    import sys, pathlib, json
-    sys.path.insert(0, str(pathlib.Path("qa").resolve()))
-    from sweep_helpers import session, error_toasts, console_errors, snap
-    BASE = ${JSON.stringify(BASE)}; PW = ${JSON.stringify(PW)}
-    with session(BASE, PW) as page:
-        # ... your scenario steps: page.goto(BASE + "/settings"), page.click(...), page.fill(...),
-        # page.wait_for_timeout(800), page.query_selector(...), etc.
-        # After each meaningful action: snap(page, "S?_step"); and read error_toasts(page).
-        print(json.dumps({"observations": ..., "console_errors": console_errors(page)}, default=str))
+   Find selectors by inspecting the page; iterate until the script genuinely completes the scenario. Mutating this instance is fine — it is yours alone.
+3. JUDGE like a reviewer. Per step: did the RIGHT thing happen (not just "no crash")? Was it clear? "worked" is a valid, common result; "broke" only for genuine failures (unexpected/persistent error toast, wrong or silently-missing outcome, JS error, dead control); "confusing" for real UX problems. For every broke/confusing step include: severity, evidence (exact toast text / console error / screenshot path), and repro — a SHORT numbered list of UI actions a verifier on a FRESH instance can follow exactly.
+4. PERSIST BEFORE RETURNING (this is what makes the run survivable): write your findings JSON (matching the return schema) to ${RUN_DIR}/${s.id}.json.
+5. Clean up:  uv run python qa/launch_demo.py --stop --port ${port} --run-dir ${RUN_DIR}
+   (run this even if earlier steps failed)
 
-Find selectors by inspecting the page (you may add page.content()[:3000] dumps and re-run). Iterate until the script actually completes the scenario. The demo data is disposable — mutating it is fine; use the unique names in the brief.
-
-Then JUDGE like a reviewer. For each step: did the RIGHT thing happen (not just "no crash")? Was it clear? Did an error toast or console error appear? Be honest — "worked" is a valid, common result; only use "broke" for a genuine failure (unexpected error toast, wrong/missing outcome, JS error, dead control). Use "confusing" for real UX problems. For each, give severity, evidence (toast text / console error / screenshot path), and a concrete suggested deterministic test (a tests/qa/ assertion) that would lock the behaviour.
-
-Return findings matching the schema.`
+Return the findings object.`
 }
 
-function verifyPrompt(s, b) {
-  return `A QA agent reported this as a problem in Transcode Forge scenario ${s.id} (${s.title}), app at ${BASE} (password ${JSON.stringify(PW)}):
+function verifyPrompt(s, b, port) {
+  const base = `http://127.0.0.1:${port}`
+  return `Independently verify a flagged QA finding for Transcode Forge (repo root). You get a FRESH instance — reproduce from scratch; the explorer's state is gone, which is the point.
 
+FINDING (scenario ${s.id} — ${s.title}):
   step: ${b.step}
   status: ${b.status}
   detail: ${b.detail}
   evidence: ${b.evidence || '(none)'}
+  repro: ${JSON.stringify(b.repro || [])}
 
-Independently re-check it: write and run your own short Playwright script (same preamble as the sweep — sys.path.insert(0, str(pathlib.Path("qa").resolve())); from sweep_helpers import session, error_toasts, console_errors). Decide whether this is a REAL defect/UX problem or a test artifact (bad selector, timing, or actually-correct behaviour). Default to real=false if you cannot reproduce it. Return {real, reason}.`
+1. Launch:  uv run python qa/launch_demo.py --start --port ${port} --run-dir ${RUN_DIR}
+2. Write+run a short Playwright script (${RUN_DIR}/verify_${s.id}_${port}.py) using the sweep_helpers preamble (session/error_toasts/console_errors; BASE=${JSON.stringify(base)}, PW=${JSON.stringify(PW)}; session() completes first-run setup automatically). Follow the repro steps exactly.
+3. Decide: REAL defect/UX problem, or artifact (bad selector, timing, actually-correct behavior)? Default real=false if you cannot reproduce it on clean state.
+4. Write your verdict JSON to ${RUN_DIR}/${s.id}.verify-${port}.json, then stop the instance:  uv run python qa/launch_demo.py --stop --port ${port} --run-dir ${RUN_DIR}
+
+Return {real, reason}.`
 }
 
 // --- run --------------------------------------------------------------------
-log(`UX sweep against ${BASE} — ${SCENARIOS.length} scenarios`)
-
-const perScenario = await pipeline(
-  SCENARIOS,
-  (s) => agent(explorePrompt(s), { label: `explore:${s.id}`, phase: 'Explore', schema: FINDINGS }),
-  (res, s) => {
-    if (!res) return { scenario: s.id, findings: null, verified: [] }
-    const flagged = (res.steps || []).filter((x) => x.status === 'broke' || (x.status === 'confusing' && x.severity === 'high'))
-    if (!flagged.length) return { scenario: s.id, findings: res, verified: [] }
-    return parallel(
-      flagged.map((b) => () =>
-        agent(verifyPrompt(s, b), { label: `verify:${s.id}`, phase: 'Verify', schema: VERDICT })
-          .then((v) => ({ ...b, verdict: v }))
-      )
-    ).then((vs) => ({ scenario: s.id, findings: res, verified: vs.filter(Boolean) }))
-  }
+phase('Prep')
+const prep = await agent(
+  `Prepare the Transcode Forge UX-sweep run (repo root, use Bash/file tools):
+1. Rotate run dirs: if ${RUN_DIR} exists and contains any ${'S'}*.json or report files, delete ${PREV_DIR} (if present) and move ${RUN_DIR} to ${PREV_DIR}. Then create ${RUN_DIR} (and ${RUN_DIR}/shots). If ${RUN_DIR} is empty/missing, just create it. Also kill any stale instances: for every pidfile under ${RUN_DIR}/instances and ${PREV_DIR}/instances, run qa/launch_demo.py --stop for that port (ignore failures).
+2. Read qa/scenarios.md — it is the SINGLE source of truth. Return every scenario as {id (e.g. "S1"), title (the heading text after the em dash), brief (the full body text of that scenario, verbatim)}. Set rotated=true if you moved a previous run into ${PREV_DIR}.`,
+  { label: 'prep', phase: 'Prep', schema: SCENARIO_LIST }
 )
+if (!prep || !prep.scenarios || !prep.scenarios.length) {
+  throw new Error('prep agent returned no scenarios — cannot sweep')
+}
+const SCENARIOS = prep.scenarios
+log(`${SCENARIOS.length} scenarios from qa/scenarios.md · waves of ${WAVE} · run dir ${RUN_DIR}${prep.rotated ? ' (previous run rotated)' : ''}`)
+
+// Explore in bounded waves: a rate-limit meltdown costs one wave, and
+// per-scenario JSON on disk means a resumed run skips finished scenarios.
+phase('Explore')
+const perScenario = []
+const failed = []
+for (let w = 0; w < SCENARIOS.length; w += WAVE) {
+  const wave = SCENARIOS.slice(w, w + WAVE)
+  log(`wave ${1 + w / WAVE}: ${wave.map((s) => s.id).join(', ')}`)
+  const results = await parallel(
+    wave.map((s, j) => () =>
+      agent(explorePrompt(s, w + j), { label: `explore:${s.id}`, phase: 'Explore', schema: FINDINGS })
+    )
+  )
+  results.forEach((res, j) => {
+    if (res) perScenario.push({ scenario: wave[j], findings: res })
+    else failed.push(wave[j].id)
+  })
+}
+if (failed.length) log(`explore incomplete — no result for: ${failed.join(', ')} (their ${RUN_DIR}/<id>.json may still exist from a partial run)`)
+
+// Verify flagged findings, each on its own fresh instance. Max 3 verifier
+// instances per scenario (port block size) — overflow is REPORTED, not
+// silently dropped.
+phase('Verify')
+let flaggedTotal = 0
+const unverifiedOverflow = []
+const verified = await parallel(
+  perScenario.flatMap((r, i) => {
+    const flagged = (r.findings.steps || []).filter(
+      (x) => x.status === 'broke' || (x.status === 'confusing' && x.severity === 'high')
+    )
+    flaggedTotal += flagged.length
+    flagged.slice(3).forEach((b) => unverifiedOverflow.push({ scenario: r.scenario.id, step: b.step }))
+    return flagged.slice(0, 3).map((b, n) => () =>
+      agent(verifyPrompt(r.scenario, b, VERIFY_PORT(i, n)), {
+        label: `verify:${r.scenario.id}`,
+        phase: 'Verify',
+        schema: VERDICT,
+      }).then((v) => ({ scenario: r.scenario.id, finding: b, verdict: v }))
+    )
+  })
+)
+const confirmed = verified.filter(Boolean).filter((v) => v.verdict && v.verdict.real)
+if (unverifiedOverflow.length) log(`verification cap hit — unverified overflow: ${JSON.stringify(unverifiedOverflow)}`)
 
 phase('Synthesize')
-const confirmed = perScenario
-  .filter(Boolean)
-  .flatMap((r) =>
-    (r.verified || [])
-      .filter((v) => v.verdict && v.verdict.real)
-      .map((v) => ({ scenario: r.scenario, ...v }))
-  )
-
+const coverage = {
+  scenarios_total: SCENARIOS.length,
+  scenarios_completed: perScenario.length,
+  scenarios_failed: failed,
+  findings_flagged: flaggedTotal,
+  findings_verified: verified.filter(Boolean).length,
+  findings_confirmed: confirmed.length,
+  unverified_overflow: unverifiedOverflow,
+}
 const report = await agent(
-  `You are synthesizing a UX/QA sweep of Transcode Forge. Here are the per-scenario findings (raw) and the independently-VERIFIED issues.
+  `Synthesize the Transcode Forge UX-sweep run in ${RUN_DIR} (repo root).
 
-VERIFIED ISSUES (real=true):
+COVERAGE (state this prominently and honestly in the report — unswept scenarios are unknowns, not passes):
+${JSON.stringify(coverage, null, 2)}
+
+CONFIRMED ISSUES (independently reproduced on fresh instances):
 ${JSON.stringify(confirmed, null, 2)}
 
-ALL PER-SCENARIO FINDINGS (context, includes unverified + "worked"):
-${JSON.stringify(perScenario, null, 2)}
+ALL PER-SCENARIO FINDINGS:
+${JSON.stringify(perScenario.map((r) => ({ id: r.scenario.id, findings: r.findings })), null, 2)}
 
-Write a prioritized markdown report: group by severity, lead with the verified issues, note what worked, and for each real issue give a one-line repro + a concrete suggested tests/qa/ assertion to lock it (the "explore once, replay free" loop). Also return confirmed_issues as structured data.`,
-  { schema: REPORT, phase: 'Synthesize' }
+Steps:
+1. If ${PREV_DIR}/report.json exists, read it and mark each confirmed issue's novelty: "known" if the previous run confirmed substantially the same issue (same scenario + same failure), else "new". No previous report → everything is "new".
+2. Write a prioritized markdown report: coverage first, then confirmed issues by severity (novelty-tagged), then notable "confusing" items that failed verification (say why), then what worked. Per confirmed issue: one-line repro + a concrete suggested tests/qa/ assertion (the codify loop).
+3. Write the markdown to ${RUN_DIR}/report.md and the structured data (your full return value) to ${RUN_DIR}/report.json.
+4. Return {markdown, confirmed_issues} matching the schema.`,
+  { label: 'report', phase: 'Synthesize', schema: REPORT }
 )
 
-return report
+return { coverage, report }

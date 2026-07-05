@@ -86,24 +86,43 @@ wrapper).
 
 ## L3 — AI exploratory sweep (`qa/ux-sweep.workflow.js`)
 
-The on-demand discovery pass. One agent per scenario (see `qa/scenarios.md`)
-**drives the running demo app** through a real user task — add a library and
-scan it, queue a transcode, issue/revoke a worker token, create/delete a
-schedule, probe invalid inputs — and *judges* what happened (did the right
-thing happen, was it clear, did anything break or go silently missing), not just
-whether it 200'd. Each "broke" finding is independently re-verified by a second
-agent before it lands in the report.
+The on-demand discovery pass. One agent per scenario (from
+`qa/scenarios.md` — the workflow reads it at run time, so the file is the
+single source of truth) **drives a real app instance** through a user task
+and *judges* what happened (did the right thing happen, was it clear, did
+anything break or go silently missing), not just whether it 200'd.
+
+Built for trustworthy findings and survivable runs (v2, 2026-07-05):
+
+- **Isolation** — every explorer gets its **own fresh instance**
+  (`qa/launch_demo.py` starts a detached demo-static app per agent on its
+  own port + throwaway sqlite; torn down after). Scenarios can't
+  contaminate each other's judgments, and every flagged finding is
+  re-verified by an independent agent **on another fresh instance** from
+  the finding's repro steps — clean-state reproduction or it doesn't count.
+- **Durability** — each scenario writes its findings to
+  `qa/runs/latest/<id>.json` the moment they exist. A run that dies
+  mid-way (rate limits, crash) keeps everything completed; re-running
+  skips scenarios whose results are already on disk.
+- **Bounded waves** — scenarios run `waveSize` at a time (default 3), so
+  a meltdown costs one wave, not the run.
+- **Honest coverage** — the report leads with what ran, what didn't, and
+  any verification overflow. Unswept scenarios are unknowns, not passes.
+- **Run history** — `qa/runs/latest` rotates to `qa/runs/previous`;
+  confirmed issues are tagged **new** vs **known** against the previous
+  report, so repeat runs surface only what changed.
 
 ```bash
-# 1. Launch the demo target (above) and set the admin password.
-# 2. Run the workflow (defaults to http://127.0.0.1:18799 + the demo password):
-#    invoke the Workflow tool with scriptPath "qa/ux-sweep.workflow.js"
-#    (override args {baseUrl, password} to point elsewhere).
+# Fully self-contained — no manual launch step:
+#   invoke the Workflow tool with scriptPath "qa/ux-sweep.workflow.js"
+#   optional args: {waveSize: 3, runDir: "qa/runs/latest"}
+# Artifacts: qa/runs/latest/{report.md, report.json, S*.json, shots/}
 ```
 
-It returns a prioritized report of verified issues plus, for each, a suggested
-`tests/qa/` assertion to lock it (the L4 loop). `qa/sweep_helpers.py` gives the
-agents login + error-capture so their scenario scripts stay short.
+It returns coverage + a prioritized report of verified issues, each with a
+suggested `tests/qa/` assertion to lock it (the L4 loop).
+`qa/sweep_helpers.py` gives agents login + first-run setup + error-capture
+so scenario scripts stay short.
 
 ## The codify loop (L4)
 
