@@ -4,6 +4,29 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-07-05
+
+### Added
+- **Linode Compute deploy path** (`deploy/linode/`) — scheduler and worker
+  StackScripts (Caddy TLS edge with Cloudflare DNS-01 or HTTP-01, Object
+  Storage media plane, Managed Database toggle, Block Storage handling,
+  plan-aware concurrency auto-tuning), a CC-BY seed-media helper, and a
+  full runbook with a Dedicated CPU plan table and Cloud Firewall guidance.
+- **S3 library creation** — `POST /api/libraries` and the add-library
+  modal now accept an S3 Object Storage backend (bucket + prefix; the
+  library path is derived as `s3://bucket/prefix`). Scan, claim, and
+  worker paths already supported S3 libraries; creation was the missing
+  piece.
+- Throwaway staging compose profile (`docker-compose.staging.yml`) for
+  pre-release smoke tests (`docs/STAGING.md`).
+- CI hardening: `mypy src/` gate and a real-ffmpeg pipeline integration
+  test.
+
+### Fixed
+- The per-library **Scan** button now dispatches S3 libraries to the S3
+  scanner; previously it always ran the filesystem scanner, so an S3
+  library scan failed behind a success toast.
+
 ## [0.9.0] - 2026-07-03
 
 ### Added
