@@ -1,0 +1,1066 @@
+/* ====================================================================
+   FORGE Console v2 — Tailwind v4 source of truth.
+
+   Built to src/transcode_forge/web/static/css/app.css by
+   scripts/build_css.py (pinned standalone CLI, no Node). DO NOT hand-edit
+   the built file — edit here and rebuild.
+
+   Design system reference: docs/design-system.md. The rules that matter:
+   every visual decision lands here as a token or component (no one-off
+   page styles), dynamic class names built in JS use component classes
+   only, and the data-contract hooks (forge-stat-value, data-job-id,
+   data-toast-type, …) are load-bearing for tests.
+
+   Content auto-detection is disabled (source(none)) and the scanned paths
+   are listed explicitly below, so the compiled output is byte-identical on
+   Windows (dev) and Linux (CI/Docker) — the css-fresh gate depends on that.
+   ==================================================================== */
+@import "tailwindcss" source(none);
+
+/* First-party forms plugin — bundled in the standalone binary. Preserves the
+   current form-control rendering. Its resets land in Tailwind's `base` layer;
+   the element-qualified `input.forge-*` rules in @layer components below beat
+   them because the components layer outranks base (this is why those rules keep
+   the element prefix — see the note in the form-controls section). */
+@plugin "@tailwindcss/forms";
+
+@source "../../src/transcode_forge/web/templates/**/*.html";
+@source "../../src/transcode_forge/web/static/js/**/*.js";
+
+/* ====================================================================
+   Theme tokens — Forge Console v2.
+
+   Warm graphite field, hot-iron heat, temperature-coded verdicts.
+   faint is reserved for decoration and disabled states — never body
+   text (it fails AA).
+   ==================================================================== */
+@theme {
+    /* Forge palette */
+    --color-forge-bg:          #0d0b08;
+    --color-forge-well:        #0a0806;   /* recessed slots: table heads, meter troughs */
+    --color-forge-surface:     #15120e;
+    --color-forge-panel:       #1c1813;
+    --color-forge-panel-hi:    #252018;
+    --color-forge-rule:        #3a342a;
+    --color-forge-rule-bright: #5a4f3e;
+    --color-forge-ember:       #ff7a1a;
+    --color-forge-ember-deep:  #cc4f00;
+    --color-forge-ember-hot:   #ffb86b;
+    --color-forge-steel:       #7d8da3;
+    --color-forge-steel-hi:    #a4b4ca;
+    --color-forge-oxide:       #7eba78;
+    --color-forge-rust:        #dc6743;
+    --color-forge-brass:       #d9b35c;
+    --color-forge-paper:       #ede7d8;
+    --color-forge-ink:         #c8c0ad;
+    --color-forge-mute:        #9a8f7d;
+    --color-forge-faint:       #6b6350;
+
+    /* Type families — Big Shoulders is reserved for the wordmark and rare
+       display moments; ALL numerals render in IBM Plex Mono (tabular). */
+    --font-display:  "Big Shoulders Display", Impact, sans-serif;
+    --font-body:     "IBM Plex Sans", system-ui, sans-serif;
+    --font-mono:     "IBM Plex Mono", ui-monospace, monospace;
+    --font-label:    "IBM Plex Mono", ui-monospace, monospace;
+
+    /* Stamped/uppercase label tracking — the connective voice of the console */
+    --tracking-stamp: 0.18em;
+
+    /* Micro type step for stamped labels and data captions */
+    --text-2xs: 0.625rem;
+    --text-2xs--line-height: 0.875rem;
+
+    /* Motion — functional only. One easing, short durations. */
+    --ease-forge: cubic-bezier(0.22, 1, 0.36, 1);
+
+    /* No radius tokens: v2 components are square (industrial). Templates may
+       still use built-in `rounded`/`rounded-full` utilities until their
+       rebuild step. */
+}
+
+/* ====================================================================
+   Vendored fonts (latin subsets, self-hosted — no Google Fonts CDN).
+   Big Shoulders Display and IBM Plex Sans are variable (weight-range faces);
+   IBM Plex Mono ships static per weight. All OFL-1.1 — license text in
+   static/vendor/fonts/OFL.txt.
+   ==================================================================== */
+@font-face {
+    font-family: "Big Shoulders Display";
+    font-style: normal;
+    font-weight: 500 900;
+    font-display: swap;
+    src: url("/static/vendor/fonts/big-shoulders-display.woff2") format("woff2");
+}
+@font-face {
+    font-family: "IBM Plex Sans";
+    font-style: normal;
+    font-weight: 300 700;
+    font-display: swap;
+    src: url("/static/vendor/fonts/ibm-plex-sans.woff2") format("woff2");
+}
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/static/vendor/fonts/ibm-plex-mono-400.woff2") format("woff2");
+}
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("/static/vendor/fonts/ibm-plex-mono-500.woff2") format("woff2");
+}
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("/static/vendor/fonts/ibm-plex-mono-600.woff2") format("woff2");
+}
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("/static/vendor/fonts/ibm-plex-mono-700.woff2") format("woff2");
+}
+
+/* ====================================================================
+   Component layer — the Forge Console v2 library.
+   ==================================================================== */
+@layer components {
+:root {
+    --forge-bg:          #0d0b08;
+    --forge-well:        #0a0806;
+    --forge-surface:     #15120e;
+    --forge-panel:       #1c1813;
+    --forge-panel-hi:    #252018;
+    --forge-rule:        #3a342a;
+    --forge-rule-bright: #5a4f3e;
+    --forge-ember:       #ff7a1a;
+    --forge-ember-deep:  #cc4f00;
+    --forge-ember-hot:   #ffb86b;
+    --forge-steel:       #7d8da3;
+    --forge-steel-hi:    #a4b4ca;
+    --forge-oxide:       #7eba78;
+    --forge-rust:        #dc6743;
+    --forge-brass:       #d9b35c;
+    --forge-paper:       #ede7d8;
+    --forge-ink:         #c8c0ad;
+    --forge-mute:        #9a8f7d;
+    --forge-faint:       #6b6350;
+    --forge-ease:        cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---- Global typography — instrument numerals everywhere data lives */
+html { background: var(--forge-bg); color-scheme: dark; }
+body {
+    font-feature-settings: "ss01" 1, "cv11" 1;
+}
+.font-mono, code, pre, [class*="font-mono"] {
+    font-feature-settings: "tnum" 1, "zero" 1, "ss03" 1;
+}
+/* Ensure numeric tables read like a readout, not a wall of text */
+td, th, .tabular { font-variant-numeric: tabular-nums; }
+
+/* ---- Icons — inline SVG sprite (templates/partials/_icons.html) */
+.forge-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    vertical-align: -0.2em;
+}
+.forge-icon--sm { width: 13px; height: 13px; }
+.forge-icon--lg { width: 18px; height: 18px; }
+.forge-icon--xl { width: 22px; height: 22px; }
+.forge-icon--spin { animation: forge-spin 1s linear infinite; }
+@keyframes forge-spin { to { transform: rotate(360deg); } }
+
+/* ---- Atmosphere: subtle warm grain — aged paper / worn metal */
+body.forge-grain::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 0.85  0 0 0 0 0.6  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+body.forge-grain::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    /* hairline graph lines — extremely faint, draftsman's paper */
+    background-image:
+        linear-gradient(to right,  rgba(90, 79, 62, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(90, 79, 62, 0.05) 1px, transparent 1px);
+    background-size: 56px 56px;
+}
+main, header, aside, footer { position: relative; z-index: 1; }
+
+/* ---- Scrollbar — narrow, warm */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--forge-bg); }
+::-webkit-scrollbar-thumb { background: var(--forge-rule); }
+::-webkit-scrollbar-thumb:hover { background: var(--forge-rule-bright); }
+
+/* ====================================================================
+   Heat seam — the signature. A molten 2px line along the top edge of
+   the console: hottest at the brand corner, cooling as it runs right.
+   The same gradient metal reappears in every progress meter.
+   ==================================================================== */
+.forge-seam {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    z-index: 60;
+    pointer-events: none;
+    background: linear-gradient(90deg,
+        var(--forge-ember-deep) 0%,
+        var(--forge-ember) 18%,
+        rgba(255, 122, 26, 0.55) 42%,
+        rgba(255, 122, 26, 0.14) 75%,
+        transparent 100%);
+}
+.forge-seam::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 0;
+    width: 40%;
+    height: 10px;
+    background: linear-gradient(90deg, rgba(255, 122, 26, 0.18), transparent 85%);
+    filter: blur(6px);
+}
+
+/* ====================================================================
+   Sidebar — the console rack
+   ==================================================================== */
+.forge-sidebar {
+    background: var(--forge-surface);
+    border-right: 1px solid var(--forge-rule);
+}
+
+/* Brand lockup — compact plate, warm-lit by the seam above it */
+.forge-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 14px 12px;
+    border-bottom: 1px solid var(--forge-rule);
+    position: relative;
+}
+.forge-brand::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(220px 90px at 15% -30%, rgba(255, 122, 26, 0.13), transparent 70%);
+    pointer-events: none;
+}
+.forge-brand-mark {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    color: var(--forge-ember);
+    background: linear-gradient(180deg, rgba(255, 122, 26, 0.16), rgba(255, 122, 26, 0.04));
+    border: 1px solid rgba(255, 122, 26, 0.45);
+    box-shadow: 0 0 12px rgba(255, 122, 26, 0.16), inset 0 0 8px rgba(255, 122, 26, 0.08);
+}
+.forge-brand-eyebrow {
+    display: block;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: var(--forge-mute);
+}
+.forge-brand-word {
+    display: block;
+    font-family: 'Big Shoulders Display', Impact, sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--forge-paper);
+}
+.forge-brand-ver {
+    margin-left: auto;
+    align-self: flex-end;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    color: var(--forge-mute);
+    letter-spacing: 0.05em;
+}
+
+/* Nav group label */
+.forge-navgroup {
+    padding: 0 16px;
+    margin: 14px 0 4px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--forge-mute);
+}
+
+/* Nav rows — dense, icon + label, ember rule when active */
+.forge-navlink {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 10px;
+    margin: 1px 6px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--forge-ink);
+    border-left: 2px solid transparent;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.forge-navlink:hover {
+    background: var(--forge-panel);
+    color: var(--forge-paper);
+}
+.forge-navlink-icon { color: var(--forge-mute); transition: color 120ms ease; }
+.forge-navlink:hover .forge-navlink-icon { color: var(--forge-ink); }
+.forge-navlink-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.forge-navlink.is-active {
+    background: linear-gradient(90deg, rgba(255, 122, 26, 0.12), rgba(255, 122, 26, 0.02) 75%);
+    border-left-color: var(--forge-ember);
+    color: var(--forge-ember-hot);
+}
+.forge-navlink.is-active .forge-navlink-icon { color: var(--forge-ember); }
+.forge-navlink.is-active .forge-navlink-label { font-weight: 600; }
+
+/* Queue count chip in the nav */
+.forge-navbadge {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    padding: 3px 5px;
+    color: var(--forge-ember);
+    background: rgba(255, 122, 26, 0.12);
+    border: 1px solid rgba(255, 122, 26, 0.35);
+}
+
+/* ====================================================================
+   Header — datum strip
+   ==================================================================== */
+.forge-header {
+    background: rgba(13, 11, 8, 0.82);
+    backdrop-filter: blur(10px) saturate(120%);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    border-bottom: 1px solid var(--forge-rule);
+}
+.forge-crumb {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--forge-mute);
+}
+
+/* ====================================================================
+   Panels — flat graphite plates, hairline-ruled
+   ==================================================================== */
+.forge-panel {
+    position: relative;
+    background: var(--forge-panel);
+    border: 1px solid var(--forge-rule);
+}
+/* Ember variant — a molten spine along the left edge (no corner brackets) */
+.forge-panel--ember {
+    border-color: rgba(255, 122, 26, 0.38);
+    background:
+        linear-gradient(180deg, rgba(255, 122, 26, 0.05), transparent 55%),
+        var(--forge-panel);
+    box-shadow: inset 2px 0 0 0 var(--forge-ember);
+}
+/* Panel header strip — the v2 section-title language (replaces poster
+   headings as pages rebuild): recessed slot + stamped label. */
+.forge-panel-hd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    background: var(--forge-well);
+    border-bottom: 1px solid var(--forge-rule);
+}
+.forge-panel-title {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--forge-mute);
+}
+
+/* ====================================================================
+   Stat readouts — instrument numerals (Plex Mono, tabular, slashed zero).
+   DOM shape is load-bearing (tests/test_view_consistency.py): the label
+   precedes the value in DOM order and the value's text is the bare
+   integer. Consumers set the value's font-size.
+   ==================================================================== */
+.forge-stat-label {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--forge-mute);
+}
+.forge-stat-value {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: var(--forge-paper);
+}
+.forge-stat-unit {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--forge-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+.forge-stat-meta {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--forge-ink);
+    letter-spacing: 0.04em;
+}
+
+/* ====================================================================
+   Progress meter — molten metal in a recessed trough. The fill keeps a
+   minimum width so 0% reads as a lit pilot light ("starting"), never as
+   a broken empty bar; pair it with an honest status label in markup.
+   ==================================================================== */
+.forge-meter {
+    position: relative;
+    height: 8px;
+    background: var(--forge-well);
+    border: 1px solid var(--forge-rule);
+    overflow: hidden;
+}
+.forge-meter-fill {
+    position: relative;
+    height: 100%;
+    min-width: 3px;
+    background: linear-gradient(90deg, var(--forge-ember-deep), var(--forge-ember) 60%, var(--forge-ember-hot));
+    box-shadow: 0 0 8px rgba(255, 122, 26, 0.45);
+    transition: width 500ms var(--forge-ease);
+}
+.forge-meter-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+    animation: forge-meter-shimmer 2.4s linear infinite;
+}
+@keyframes forge-meter-shimmer {
+    from { transform: translateX(-100%); }
+    to   { transform: translateX(100%); }
+}
+/* ====================================================================
+   Status language — ONE temperature-coded system for pills and dots.
+   ember = working · oxide = good · steel = waiting · rust = failed ·
+   brass = caution · mute = inert. Dynamic class strings in JS must use
+   these component classes (never utilities).
+   ==================================================================== */
+.forge-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 7px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border: 1px solid;
+    background: rgba(0, 0, 0, 0.3);
+    white-space: nowrap;
+}
+/* Tinted pills use SOLID backgrounds (not alpha) so text contrast stays
+   AA no matter what row striping sits underneath — rust especially is
+   marginal over anything lighter than these. */
+.forge-pill--complete   { color: var(--forge-oxide);    border-color: rgba(126, 186, 120, 0.4);  background: #161c12; }
+.forge-pill--running    { color: var(--forge-ember);    border-color: rgba(255, 122, 26, 0.5);   background: #26160b; }
+.forge-pill--queued     { color: var(--forge-steel-hi); border-color: rgba(164, 180, 202, 0.35); background: #171b21; }
+.forge-pill--pending    { color: var(--forge-mute);     border-color: var(--forge-rule-bright); }
+.forge-pill--failed     { color: var(--forge-rust);     border-color: rgba(220, 103, 67, 0.5);   background: #23120d; }
+.forge-pill--skipped    { color: var(--forge-mute);     border-color: var(--forge-rule); }
+.forge-pill--cancelled  { color: var(--forge-mute);     border-color: var(--forge-rule); opacity: 0.75; }
+.forge-pill--caution    { color: var(--forge-brass);    border-color: rgba(217, 179, 92, 0.4);   background: #201a0e; }
+
+.forge-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.forge-dot--on  { background: var(--forge-oxide); box-shadow: 0 0 6px rgba(126, 186, 120, 0.6); }
+.forge-dot--hot { background: var(--forge-ember); box-shadow: 0 0 6px rgba(255, 122, 26, 0.6); }
+.forge-dot--off { background: var(--forge-faint); }
+.forge-dot--err { background: var(--forge-rust); box-shadow: 0 0 6px rgba(220, 103, 67, 0.6); }
+
+@keyframes forge-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+}
+.forge-pulse { animation: forge-pulse 2.2s ease-in-out infinite; }
+
+/* Source-codec badge — built dynamically in catalog.js (component class
+   on purpose: the scanner can't see runtime-assembled strings). */
+.codec-badge {
+    display: inline-flex;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.codec-h264  { background: rgba(255, 122, 26, 0.10); color: var(--forge-ember);  border-color: rgba(255, 122, 26, 0.35); }
+.codec-hevc  { background: rgba(126, 186, 120, 0.10);color: var(--forge-oxide);  border-color: rgba(126, 186, 120, 0.35); }
+.codec-other { background: rgba(133, 125, 108, 0.10);color: var(--forge-mute);   border-color: var(--forge-rule); }
+
+/* ====================================================================
+   Buttons — machine controls
+   ==================================================================== */
+.forge-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    padding: 0 12px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    border: 1px solid var(--forge-rule-bright);
+    background: var(--forge-panel);
+    color: var(--forge-ink);
+    transition: all 120ms ease;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.forge-btn:hover {
+    border-color: var(--forge-ember);
+    color: var(--forge-paper);
+    box-shadow: inset 0 0 14px rgba(255, 122, 26, 0.08);
+}
+.forge-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.forge-btn--ember {
+    border-color: var(--forge-ember);
+    background: linear-gradient(180deg, rgba(255, 122, 26, 0.18), rgba(255, 122, 26, 0.07));
+    color: var(--forge-ember-hot);
+}
+.forge-btn--ember:hover {
+    background: linear-gradient(180deg, rgba(255, 122, 26, 0.30), rgba(255, 122, 26, 0.13));
+    box-shadow: 0 0 14px rgba(255, 122, 26, 0.3), inset 0 0 14px rgba(255, 184, 107, 0.12);
+}
+.forge-btn--danger {
+    border-color: rgba(220, 103, 67, 0.5);
+    color: var(--forge-rust);
+}
+.forge-btn--danger:hover {
+    border-color: var(--forge-rust);
+    background: rgba(220, 103, 67, 0.08);
+    box-shadow: inset 0 0 14px rgba(220, 103, 67, 0.1);
+}
+
+/* Icon button — small action in tables and panel headers */
+.forge-iconbtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--forge-rule);
+    color: var(--forge-mute);
+    background: transparent;
+    transition: all 120ms ease;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.forge-iconbtn:hover {
+    border-color: var(--forge-ember);
+    color: var(--forge-ember);
+    background: rgba(255, 122, 26, 0.06);
+}
+.forge-iconbtn--danger:hover {
+    border-color: var(--forge-rust);
+    color: var(--forge-rust);
+    background: rgba(220, 103, 67, 0.06);
+}
+
+/* ====================================================================
+   Form controls — workshop dials and switches
+   ==================================================================== */
+/* Element-qualified (input./select./textarea.) on purpose: the `forms` plugin
+   injects `[type='text']{...}` base styles at equal specificity (0,1,0).
+   Qualifying with the tag lifts us to (0,1,1) AND the components layer outranks
+   the plugin's base layer, so the dark forge styling reliably wins. Do not drop
+   the element prefix. */
+input.forge-input, select.forge-select, textarea.forge-textarea {
+    background: var(--forge-well);
+    border: 1px solid var(--forge-rule);
+    color: var(--forge-paper);
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 12px;
+    padding: 6px 10px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+input.forge-input:focus, select.forge-select:focus, textarea.forge-textarea:focus {
+    outline: none;
+    border-color: var(--forge-ember);
+    box-shadow: 0 0 0 1px rgba(255, 122, 26, 0.35), inset 0 0 12px rgba(255, 122, 26, 0.05);
+}
+select.forge-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%239a8f7d' d='M5 6L0 0h10z'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+}
+.forge-input::placeholder { color: var(--forge-faint); }
+.forge-input:disabled, .forge-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+/* Search inputs use the `pl-8` utility to clear their leading magnifier icon,
+   but the element-qualified `input.forge-input` padding above outranks a plain
+   utility class — this matching-specificity rule restores the icon clearance. */
+input.forge-input.pl-8 { padding-left: 2rem; }
+
+/* Checkbox */
+.forge-check {
+    width: 14px;
+    height: 14px;
+    background: var(--forge-well);
+    border: 1px solid var(--forge-rule-bright);
+    accent-color: var(--forge-ember);
+    cursor: pointer;
+}
+
+/* ====================================================================
+   Tables — dense ledger. Headers sit in a recessed well; rows warm on
+   hover. Add .forge-table--sticky inside a .forge-scroll container for
+   a pinned header; th.is-sortable / .is-sorted-asc / .is-sorted-desc
+   are the sort hooks.
+   ==================================================================== */
+.forge-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+}
+.forge-table thead tr {
+    background: var(--forge-well);
+    border-bottom: 1px solid var(--forge-rule);
+}
+.forge-table th {
+    padding: 7px 12px;
+    text-align: left;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--forge-mute);
+    white-space: nowrap;
+}
+.forge-table tbody tr {
+    border-bottom: 1px solid rgba(58, 52, 42, 0.55);
+    transition: background 120ms ease;
+}
+.forge-table tbody tr:last-child { border-bottom: none; }
+.forge-table tbody tr:hover {
+    background: rgba(255, 122, 26, 0.03);
+}
+.forge-table tbody tr.is-active {
+    background: rgba(255, 122, 26, 0.05);
+}
+.forge-table td {
+    padding: 8px 12px;
+    font-size: 12.5px;
+    color: var(--forge-ink);
+    vertical-align: middle;
+}
+.forge-table .col-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* Sticky header variant — requires a solid th background */
+.forge-scroll { overflow: auto; }
+.forge-table--sticky thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--forge-well);
+}
+
+/* Sort hooks */
+.forge-table th.is-sortable { cursor: pointer; user-select: none; }
+.forge-table th.is-sortable:hover { color: var(--forge-ink); }
+.forge-table th.is-sorted-asc::after,
+.forge-table th.is-sorted-desc::after {
+    display: inline-block;
+    margin-left: 5px;
+    font-size: 8px;
+    color: var(--forge-ember);
+}
+.forge-table th.is-sorted-asc::after  { content: "▲"; }
+.forge-table th.is-sorted-desc::after { content: "▼"; }
+
+/* ====================================================================
+   Modal dialog
+   ==================================================================== */
+.forge-dialog {
+    background: transparent;
+    padding: 0;
+    border: none;
+    color: var(--forge-paper);
+    max-width: none;
+}
+.forge-dialog::backdrop {
+    background: rgba(13, 11, 8, 0.78);
+    backdrop-filter: blur(6px);
+}
+.forge-dialog[open] {
+    animation: forge-dialog-pop 200ms var(--forge-ease);
+}
+@keyframes forge-dialog-pop {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ====================================================================
+   Drawer — right-side detail panel scaffold (the file-detail drawer in
+   Step 3 is the first consumer). Toggle .is-open on both elements.
+   ==================================================================== */
+.forge-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 80;
+    width: min(440px, 92vw);
+    display: flex;
+    flex-direction: column;
+    background: var(--forge-surface);
+    border-left: 1px solid var(--forge-rule-bright);
+    box-shadow: -24px 0 48px rgba(0, 0, 0, 0.5);
+    transform: translateX(100%);
+    transition: transform 240ms var(--forge-ease);
+}
+.forge-drawer.is-open { transform: translateX(0); }
+.forge-drawer-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 75;
+    background: rgba(13, 11, 8, 0.6);
+    backdrop-filter: blur(3px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms ease;
+}
+.forge-drawer-overlay.is-open { opacity: 1; pointer-events: auto; }
+.forge-drawer-hd {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--forge-rule);
+    background: var(--forge-well);
+}
+.forge-drawer-bd {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+/* ====================================================================
+   Tile button — a stat readout that doubles as a filter shortcut
+   (queue status strip). Toggle .is-active from JS.
+   ==================================================================== */
+.forge-tile {
+    cursor: pointer;
+    transition: background 120ms ease, box-shadow 120ms ease;
+}
+.forge-tile:hover {
+    background: rgba(255, 122, 26, 0.04);
+}
+.forge-tile.is-active {
+    background: rgba(255, 122, 26, 0.07);
+    box-shadow: inset 0 -2px 0 0 var(--forge-ember);
+}
+
+/* ====================================================================
+   Tabs — file dividers
+   ==================================================================== */
+.forge-tab {
+    padding: 6px 12px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--forge-mute);
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 120ms ease;
+}
+.forge-tab:hover { color: var(--forge-paper); }
+.forge-tab.is-active {
+    color: var(--forge-ember);
+    border-bottom-color: var(--forge-ember);
+    font-weight: 600;
+}
+
+/* ====================================================================
+   Toasts — console messages. data-toast-type + role are load-bearing
+   for QA (error toasts persist until dismissed BY DESIGN).
+   ==================================================================== */
+.forge-toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px;
+    background: var(--forge-panel);
+    border: 1px solid var(--forge-rule-bright);
+    border-left-width: 2px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.forge-toast--success { border-left-color: var(--forge-oxide); }
+.forge-toast--error   { border-left-color: var(--forge-rust); }
+.forge-toast--warning { border-left-color: var(--forge-brass); }
+.forge-toast--info    { border-left-color: var(--forge-ember); }
+.forge-toast-tag {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+}
+.forge-toast--success .forge-toast-tag { color: var(--forge-oxide); }
+.forge-toast--error   .forge-toast-tag { color: var(--forge-rust); }
+.forge-toast--warning .forge-toast-tag { color: var(--forge-brass); }
+.forge-toast--info    .forge-toast-tag { color: var(--forge-ember); }
+.forge-toast-msg { color: var(--forge-paper); }
+.forge-toast-x {
+    margin-left: auto;
+    padding: 0 2px;
+    color: var(--forge-mute);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+.forge-toast-x:hover { color: var(--forge-paper); }
+
+@keyframes forge-slide-in {
+    from { transform: translateX(120%); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes forge-fade-out {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateY(8px); }
+}
+.forge-slide-in { animation: forge-slide-in 280ms var(--forge-ease); }
+.forge-fade-out { animation: forge-fade-out 280ms ease-out forwards; }
+
+/* ====================================================================
+   Banner — startup/preflight problems (rendered by static/js/app.js)
+   ==================================================================== */
+.forge-banner {
+    margin-bottom: 20px;
+    padding: 10px 14px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px;
+    border: 1px solid;
+    border-left-width: 2px;
+}
+.forge-banner--critical {
+    color: var(--forge-rust);
+    border-color: rgba(220, 103, 67, 0.5);
+    border-left-color: var(--forge-rust);
+    background: rgba(220, 103, 67, 0.07);
+}
+.forge-banner--warn {
+    color: var(--forge-brass);
+    border-color: rgba(217, 179, 92, 0.5);
+    border-left-color: var(--forge-brass);
+    background: rgba(217, 179, 92, 0.07);
+}
+.forge-banner-hd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+.forge-banner-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+}
+.forge-banner-x {
+    padding: 0 2px;
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+.forge-banner-x:hover { opacity: 1; }
+.forge-banner-list {
+    list-style: disc;
+    padding-left: 20px;
+    line-height: 1.6;
+    color: var(--forge-ink);
+}
+
+/* ====================================================================
+   Empty state — an invitation to act, not a void
+   ==================================================================== */
+.forge-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 36px 20px;
+    text-align: center;
+}
+.forge-empty .forge-icon {
+    width: 26px;
+    height: 26px;
+    color: var(--forge-faint);
+    stroke-width: 1.5;
+}
+.forge-empty-title {
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--forge-ink);
+}
+.forge-empty-hint {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--forge-mute);
+    max-width: 360px;
+    line-height: 1.6;
+}
+
+/* ====================================================================
+   Pagination — table footer controls
+   ==================================================================== */
+.forge-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--forge-rule);
+}
+.forge-pager-info {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--forge-mute);
+    font-variant-numeric: tabular-nums;
+}
+.forge-pager-btns { display: flex; align-items: center; gap: 4px; }
+.forge-pager-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--forge-rule);
+    color: var(--forge-mute);
+    background: transparent;
+    cursor: pointer;
+    transition: all 120ms ease;
+}
+.forge-pager-btn:hover:not(:disabled) {
+    border-color: var(--forge-ember);
+    color: var(--forge-ember);
+}
+.forge-pager-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ====================================================================
+   HTMX transitions
+   ==================================================================== */
+.htmx-settling { opacity: 0; }
+.htmx-added    { transition: opacity 0.2s ease-in; opacity: 1; }
+
+/* ---- Focus indicators (WCAG 2.4.7) ---- */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
+    outline: 2px solid var(--forge-ember);
+    outline-offset: 2px;
+}
+
+/* ---- Reduced motion: kill every non-essential animation ---- */
+@media (prefers-reduced-motion: reduce) {
+    .forge-pulse,
+    .forge-icon--spin,
+    .forge-meter-fill::after,
+    .forge-slide-in,
+    .forge-fade-out,
+    .forge-dialog[open] {
+        animation: none !important;
+    }
+    .forge-drawer,
+    .forge-drawer-overlay,
+    .forge-meter-fill {
+        transition: none !important;
+    }
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+}

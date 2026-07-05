@@ -14,6 +14,7 @@ from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
 from transcode_forge.db import DBConnection, check_db_health
 from transcode_forge.redis import check_redis_health
+from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import scans as scan_repo
@@ -118,14 +119,27 @@ async def workers_page(request: Request) -> Response:
     return _render(request, "workers.html", {"active_page": "workers"})
 
 
+@router.get("/activity", response_class=HTMLResponse)
+async def activity_page(request: Request, view: str = "outcomes") -> Response:
+    """One ledger, two honest facets: encode outcomes (jobs table) and
+    scan skips (skipped_files table — never attempted)."""
+    return _render(
+        request,
+        "activity.html",
+        {"active_page": "activity", "view": "skips" if view == "skips" else "outcomes"},
+    )
+
+
 @router.get("/history", response_class=HTMLResponse)
 async def history_page(request: Request) -> Response:
-    return _render(request, "history.html", {"active_page": "history"})
+    """History merged into Activity (encode-outcomes facet)."""
+    return Response(status_code=301, headers={"Location": "/activity?view=outcomes"})
 
 
 @router.get("/skipped", response_class=HTMLResponse)
 async def skipped_page(request: Request) -> Response:
-    return _render(request, "skipped.html", {"active_page": "skipped"})
+    """Skipped merged into Activity (scan-skips facet)."""
+    return Response(status_code=301, headers={"Location": "/activity?view=skips"})
 
 
 @router.get("/stats", response_class=HTMLResponse)
@@ -213,6 +227,18 @@ async def dashboard_stats_partial(
     )
 
 
+async def _job_row_context(db: DBConnection, jobs: list[Any]) -> dict[str, Any]:
+    """Shared enrichment for job-row partials: worker names for honest
+    attribution, and media-file ids so rows can open the file drawer."""
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    file_ids = await media_repo.ids_by_paths(db, [j.source_path for j in jobs])
+    return {
+        "jobs": [j.model_dump(mode="json") for j in jobs],
+        "worker_names": worker_names,
+        "file_ids": file_ids,
+    }
+
+
 @router.get("/partials/active-transcodes", response_class=HTMLResponse)
 async def active_transcodes_partial(
     request: Request,
@@ -222,9 +248,7 @@ async def active_transcodes_partial(
     return _render(
         request,
         "partials/active_transcodes.html",
-        {
-            "jobs": [j.model_dump(mode="json") for j in jobs],
-        },
+        await _job_row_context(db, jobs),
     )
 
 
@@ -237,9 +261,7 @@ async def recent_activity_partial(
     return _render(
         request,
         "partials/recent_activity.html",
-        {
-            "jobs": [j.model_dump(mode="json") for j in jobs],
-        },
+        await _job_row_context(db, jobs),
     )
 
 
@@ -282,7 +304,8 @@ async def jobs_partial(
     # Codecs at least one live worker can encode — pending jobs whose
     # target codec isn't covered get a "waiting for a capable worker" hint.
     online_codecs: set[str] = set()
-    for w in await worker_repo.list_workers(db):
+    workers_list = await worker_repo.list_workers(db)
+    for w in workers_list:
         if w.status in ("online", "busy"):
             online_codecs.update(w.supported_codecs)
     return _render(
@@ -296,6 +319,8 @@ async def jobs_partial(
             "sort": sort,
             "dir": dir,
             "online_codecs": online_codecs,
+            "worker_names": {w.id: w.name for w in workers_list},
+            "file_ids": await media_repo.ids_by_paths(db, [j.source_path for j in jobs]),
         },
     )
 
@@ -368,8 +393,8 @@ async def queue_badge_partial(
     return Response(content=content, media_type="text/html")
 
 
-@router.get("/partials/history", response_class=HTMLResponse)
-async def history_partial(
+@router.get("/partials/activity-outcomes", response_class=HTMLResponse)
+async def activity_outcomes_partial(
     request: Request,
     status: str | None = None,
     library: str | None = None,
@@ -380,6 +405,7 @@ async def history_partial(
     per_page: int = 50,
     db: DBConnection = Depends(get_db),
 ) -> Response:
+    """Encode outcomes — finished/failed/discarded rows off the jobs table."""
     offset = (page - 1) * per_page
     filter_status = status or "complete,failed,skipped"
     since_map = {"24h": 24, "7d": 7 * 24, "30d": 30 * 24}
@@ -394,6 +420,8 @@ async def history_partial(
         limit=per_page,
         offset=offset,
     )
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    file_ids = await media_repo.ids_by_paths(db, [j.source_path for j in jobs])
     job_dicts = []
     for j in jobs:
         d = j.model_dump(mode="json")
@@ -402,10 +430,11 @@ async def history_partial(
             if j.started_at and j.completed_at
             else "—"
         )
+        d["worker_name"] = worker_names.get(j.worker_id) if j.worker_id else None
         job_dicts.append(d)
     return _render(
         request,
-        "partials/history.html",
+        "partials/activity_outcomes.html",
         {
             "jobs": job_dicts,
             "total": total,
@@ -416,12 +445,13 @@ async def history_partial(
             "since_filter": since or "",
             "sort": sort,
             "dir": dir,
+            "file_ids": file_ids,
         },
     )
 
 
-@router.get("/partials/skipped", response_class=HTMLResponse)
-async def skipped_partial(
+@router.get("/partials/activity-skips", response_class=HTMLResponse)
+async def activity_skips_partial(
     request: Request,
     reason: str | None = None,
     library: str | None = None,
@@ -443,7 +473,7 @@ async def skipped_partial(
     )
     return _render(
         request,
-        "partials/skipped.html",
+        "partials/activity_skips.html",
         {
             "files": [f.model_dump(mode="json") for f in files],
             "total": total,
@@ -541,6 +571,73 @@ async def worker_tokens_partial(
 
     tokens = await token_repo.list_all(db)
     return _render(request, "partials/worker_tokens.html", {"tokens": tokens})
+
+
+@router.get("/partials/file-detail", response_class=HTMLResponse)
+async def file_detail_partial(
+    request: Request,
+    file_id: str,
+    db: DBConnection = Depends(get_db),
+) -> Response:
+    """Everything known about one file — the body of the file-detail drawer.
+
+    404-safe: an unknown id renders a small "file not found" body with a
+    404 status instead of an exception page (the drawer shows whatever
+    comes back).
+    """
+    from transcode_forge.repos import libraries as lib_repo
+
+    f = await media_repo.get_media_file(db, file_id)
+    if f is None:
+        resp = _render(request, "partials/file_detail.html", {"file": None})
+        resp.status_code = 404
+        return resp
+
+    lib = await lib_repo.get_library(db, f["library_id"]) if f.get("library_id") else None
+    f = {**f, "library_name": lib["name"] if lib else None}
+
+    jobs, _ = await job_repo.list_jobs(
+        db,
+        source_path=f["file_path"],
+        sort_by="created_at",
+        sort_dir="desc",
+        limit=20,
+    )
+    worker_names = {w.id: w.name for w in await worker_repo.list_workers(db)}
+    job_dicts = []
+    for j in jobs:
+        d = j.model_dump(mode="json")
+        d["duration"] = (
+            _format_duration(j.started_at, j.completed_at)
+            if j.started_at and j.completed_at
+            else None
+        )
+        d["worker_name"] = worker_names.get(j.worker_id) if j.worker_id else None
+        job_dicts.append(d)
+
+    # Latest finished encode with a real output — the economics section.
+    best = next(
+        (d for d in job_dicts if d["status"] == "complete" and d.get("output_size")),
+        None,
+    )
+    excluded = await excl_repo.is_excluded(db, f["file_path"])
+    queueable = (
+        f.get("video_codec") == "h264"
+        and f.get("transcode_status") not in ("queued", "transcoding", "complete")
+        and not excluded
+    )
+
+    return _render(
+        request,
+        "partials/file_detail.html",
+        {
+            "file": f,
+            "jobs": job_dicts,
+            "best": best,
+            "excluded": excluded,
+            "queueable": queueable,
+        },
+    )
 
 
 @router.get("/partials/tv-episodes", response_class=HTMLResponse)

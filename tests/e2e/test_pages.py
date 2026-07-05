@@ -17,8 +17,9 @@ class TestSidebar:
 
     def test_sidebar_renders(self, page: Page, base_url: str):
         page.goto(base_url)
-        sidebar = page.locator("aside")
-        expect(sidebar).to_be_visible()
+        # aside.forge-sidebar specifically — the file-detail drawer is a
+        # second <aside>, so a bare tag locator is ambiguous.
+        expect(page.locator("aside.forge-sidebar")).to_be_visible()
 
     def test_sidebar_has_all_nav_items(self, page: Page, base_url: str):
         page.goto(base_url)
@@ -27,23 +28,35 @@ class TestSidebar:
             "Movies",
             "TV Shows",
             "Queue",
+            "Activity",
             "Workers",
-            "History",
-            "Skipped",
             "Stats",
             "Settings",
         ]:
-            expect(page.locator(f"aside >> text={label}")).to_be_visible()
+            expect(page.locator(".forge-navlink-label", has_text=label)).to_be_visible()
 
     def test_sidebar_logo(self, page: Page, base_url: str):
+        """The v2 brand lockup: mono eyebrow over the Big Shoulders wordmark."""
         page.goto(base_url)
-        expect(page.locator("text=Forge")).to_be_visible()
-        expect(page.locator("text=Precision Engine")).to_be_visible()
+        expect(page.locator(".forge-brand-word")).to_have_text("FORGE")
+        expect(page.locator(".forge-brand-eyebrow")).to_have_text("Transcode")
 
     def test_active_nav_highlighting(self, page: Page, base_url: str):
         page.goto(f"{base_url}/movies")
         movies_link = page.locator("aside a[href='/movies']")
-        expect(movies_link).to_have_class(re.compile("border-primary"))
+        expect(movies_link).to_have_class(re.compile("is-active"))
+
+    def test_nav_uses_sprite_icons(self, page: Page, base_url: str):
+        """Shell nav renders inline SVG sprite icons (not the Material font)."""
+        page.goto(base_url)
+        icons = page.locator("aside .forge-navlink svg.forge-icon")
+        assert icons.count() >= 9, "every nav row should carry a sprite icon"
+        expect(page.locator("aside .material-symbols-outlined")).to_have_count(0)
+
+    def test_nav_has_no_numbered_markers(self, page: Page, base_url: str):
+        """v2 killed the 01/02 ledger numbers — nav order carries no meaning."""
+        page.goto(base_url)
+        expect(page.locator(".forge-navlink-num")).to_have_count(0)
 
 
 class TestDashboard:
@@ -57,9 +70,10 @@ class TestDashboard:
         page.goto(base_url)
         # Wait for HTMX to load dashboard-stats partial
         page.wait_for_selector("#dashboard-stats", state="attached")
-        expect(page.locator("text=Space Saved")).to_be_visible(timeout=15_000)
-        expect(page.locator("text=Completed")).to_be_visible()
-        expect(page.locator("#dashboard-stats >> text=Workers")).to_be_visible()
+        stats = page.locator("#dashboard-stats")
+        expect(stats.get_by_text("Space Reclaimed")).to_be_visible(timeout=15_000)
+        expect(stats.get_by_text("Completed")).to_be_visible()
+        expect(stats.get_by_text("Workers")).to_be_visible()
 
     def test_active_transcodes_section(self, page: Page, base_url: str):
         page.goto(base_url)
@@ -152,32 +166,36 @@ class TestWorkers:
         expect(page.locator("text=No workers registered")).to_be_visible(timeout=15_000)
 
 
-class TestHistory:
-    """History page renders with tabs and table."""
+class TestActivity:
+    """Activity — the merged History+Skipped ledger with two facets."""
 
-    def test_history_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/history")
-        expect(page).to_have_title(re.compile("History"))
-        # History page uses tabs instead of a heading
-        expect(page.locator("#history-tabs")).to_be_visible()
+    def test_activity_loads(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        expect(page).to_have_title(re.compile("Activity"))
+        expect(page.locator("#activity-tabs")).to_be_visible()
 
-    def test_history_container_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/history")
-        page.wait_for_selector("#history-container", state="attached")
-        expect(page.locator("text=No history yet")).to_be_visible(timeout=15_000)
+    def test_outcomes_container_loads(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        page.wait_for_selector("#outcomes-container", state="attached")
+        expect(page.locator("text=No outcomes yet")).to_be_visible(timeout=15_000)
 
-
-class TestSkipped:
-    """Skipped files page renders with filters."""
-
-    def test_skipped_loads(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/skipped")
-        expect(page).to_have_title(re.compile("Skipped"))
-
-    def test_filter_controls(self, page: Page, base_url: str):
-        page.goto(f"{base_url}/skipped")
+    def test_facet_switch_shows_skip_filters(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity")
+        page.click("#tab-skips")
         expect(page.locator("#skip-reason-filter")).to_be_visible()
         expect(page.locator("#skip-library-filter")).to_be_visible()
+        expect(page.locator("#outcomes-view")).to_be_hidden()
+
+    def test_skips_deep_link(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/activity?view=skips")
+        expect(page.locator("#skips-view")).to_be_visible()
+        expect(page.locator("#outcomes-view")).to_be_hidden()
+
+    def test_old_routes_redirect(self, page: Page, base_url: str):
+        page.goto(f"{base_url}/history")
+        expect(page).to_have_url(re.compile("/activity"))
+        page.goto(f"{base_url}/skipped")
+        expect(page).to_have_url(re.compile(r"/activity\?view=skips"))
 
 
 class TestStats:
@@ -202,21 +220,21 @@ class TestSettings:
 
     def test_settings_sections(self, page: Page, base_url: str):
         page.goto(f"{base_url}/settings")
-        expect(page.get_by_role("heading", name="Libraries")).to_be_visible()
+        expect(page.locator("#tab-libraries")).to_be_visible()
 
 
 class TestTopBar:
-    """Top header bar renders correctly."""
+    """Top header bar renders the live status strip (no search box / bell)."""
 
-    def test_search_input(self, page: Page, base_url: str):
+    def test_status_strip(self, page: Page, base_url: str):
         page.goto(base_url)
-        search = page.locator("header input[type='text']")
-        expect(search).to_be_visible()
-        expect(search).to_have_attribute("placeholder", re.compile("Search"))
+        expect(page.locator("header >> text=Online")).to_be_visible()
+        expect(page.locator("#forge-clock")).to_be_attached()
 
-    def test_notification_bell(self, page: Page, base_url: str):
-        page.goto(base_url)
-        expect(page.locator("header >> text=notifications")).to_be_visible()
+    def test_section_crumb(self, page: Page, base_url: str):
+        """The header carries the active section as a stamped crumb."""
+        page.goto(f"{base_url}/queue")
+        expect(page.locator(".forge-crumb")).to_contain_text("Queue")
 
 
 class TestHTMXPolling:
@@ -242,25 +260,32 @@ class TestDesignSystem:
     def test_dark_background(self, page: Page, base_url: str):
         page.goto(base_url)
         bg_color = page.evaluate("getComputedStyle(document.body).backgroundColor")
-        # Should be dark (#131313 → rgb(19, 19, 19))
-        assert "19" in bg_color or "131313" in bg_color
+        # Forge warm graphite #0d0b08 → rgb(13, 11, 8)
+        assert "13, 11, 8" in bg_color or "0d0b08" in bg_color
 
-    def test_material_symbols_loaded(self, page: Page, base_url: str):
+    def test_heat_seam_present(self, page: Page, base_url: str):
+        """The v2 signature — the molten seam along the top edge."""
         page.goto(base_url)
-        # Material Symbols should render (not show as text boxes)
-        icon = page.locator(".material-symbols-outlined").first
-        expect(icon).to_be_visible()
+        expect(page.locator(".forge-seam")).to_be_attached()
 
-    def test_manrope_font_loaded(self, page: Page, base_url: str):
+    def test_sprite_icons_render(self, page: Page, base_url: str):
+        """Rebuilt pages use the inline SVG sprite. (Replaced the old
+        Material-Symbols assertion in Step 4 — the dashboard is de-iconed;
+        the font survives only on not-yet-rebuilt pages until Step 7.)"""
         page.goto(base_url)
-        # Check that Manrope is used for headlines
+        assert page.locator("svg.forge-icon").count() >= 10
+        expect(page.locator("#dashboard-stats .material-symbols-outlined")).to_have_count(0)
+
+    def test_display_font_loaded(self, page: Page, base_url: str):
+        page.goto(base_url)
+        # The FORGE wordmark uses Big Shoulders Display (font-display).
         font = page.evaluate("""
             () => {
-                const el = document.querySelector('.font-headline');
+                const el = document.querySelector('.font-display');
                 return el ? getComputedStyle(el).fontFamily : 'not found';
             }
         """)
-        assert "Manrope" in font or "not found" not in font
+        assert "Big Shoulders" in font
 
 
 class TestNavigation:
@@ -273,9 +298,8 @@ class TestNavigation:
             ("/movies", "Movies"),
             ("/tv", "TV"),
             ("/queue", "Queue"),
+            ("/activity", "Activity"),
             ("/workers", "Workers"),
-            ("/history", "History"),
-            ("/skipped", "Skipped"),
             ("/stats", "Statistic"),
             ("/settings", "Settings"),
         ],
@@ -283,10 +307,8 @@ class TestNavigation:
     def test_page_navigation(self, page: Page, base_url: str, path: str, title_contains: str):
         page.goto(f"{base_url}{path}")
         expect(page).to_have_title(re.compile(title_contains))
-        # No console errors
+        # No console errors — everything is self-hosted now, so no exemptions.
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.wait_for_load_state("networkidle")
-        # Allow font loading errors (Google Fonts CDN in test env)
-        real_errors = [e for e in errors if "font" not in e.lower()]
-        assert len(real_errors) == 0, f"Console errors on {path}: {real_errors}"
+        assert len(errors) == 0, f"Console errors on {path}: {errors}"

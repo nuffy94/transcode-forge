@@ -1,9 +1,9 @@
 {% if jobs %}
-<div class="divide-y divide-forge-rule/40">
+<div>
     {% for job in jobs %}
-    <div class="px-6 py-3.5 grid grid-cols-[auto_1fr_auto] gap-4 items-center hover:bg-forge-panel-hi/30 transition-colors">
-        <!-- Status pill -->
-        <div class="w-24">
+    <div class="px-4 py-2.5 grid grid-cols-[5.5rem_1fr_auto] gap-3 items-center {% if not loop.last %}border-b border-forge-rule/60{% endif %} hover:bg-forge-panel-hi/30 transition-colors {% if file_ids.get(job.source_path) %}cursor-pointer{% endif %}"
+         {% if file_ids.get(job.source_path) %}data-file-id="{{ file_ids[job.source_path] }}"{% endif %}>
+        <div>
             {% if job.status == 'complete' %}
             <span class="forge-pill forge-pill--complete">Complete</span>
             {% elif job.status == 'failed' %}
@@ -14,27 +14,28 @@
             <span class="forge-pill forge-pill--pending">{{ job.status|capitalize }}</span>
             {% endif %}
         </div>
-        <!-- Filename + timestamp -->
         <div class="min-w-0">
-            <p class="font-body text-sm text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</p>
-            <p class="font-mono text-[10px] text-forge-mute mt-0.5">
-                {{ job.completed_at[:16] if job.completed_at else '—' }}
+            <p class="text-[13px] text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</p>
+            <p class="font-mono text-2xs text-forge-mute mt-0.5 tabular-nums">
+                {{ job.completed_at[:16]|replace('T', ' ') if job.completed_at else '—' }}
+                {% if worker_names.get(job.worker_id) %}<span class="text-forge-steel ml-1.5">{{ worker_names[job.worker_id] }}</span>{% endif %}
             </p>
         </div>
-        <!-- Saved -->
         <div class="text-right tabular-nums">
             {% if job.space_saved %}
-            <p class="font-mono font-semibold text-sm text-forge-oxide">+{{ (job.space_saved / 1048576)|round(0)|int }}<span class="text-forge-mute text-xs"> MiB</span></p>
+            <p class="font-mono font-semibold text-xs text-forge-oxide">−{{ "%.1f"|format(job.space_saved / 1073741824) }}<span class="text-forge-mute font-normal"> GiB</span></p>
+            {% elif job.status == 'failed' %}
+            <p class="font-mono text-2xs text-forge-rust truncate max-w-[11rem]" title="{{ job.error_message or '' }}">{{ job.error_message or 'failed' }}</p>
             {% else %}
-            <p class="font-mono text-sm text-forge-mute/60">—</p>
+            <p class="font-mono text-xs text-forge-mute/60">—</p>
             {% endif %}
         </div>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<div class="px-8 py-12 text-center">
-    <p class="font-display font-bold text-xl text-forge-mute uppercase tracking-tight mb-1">No Activity Yet</p>
-    <p class="font-mono text-[10px] text-forge-mute uppercase tracking-stamp">Run a scan or queue a job</p>
+<div class="forge-empty">
+    <p class="forge-empty-title">No activity yet</p>
+    <p class="forge-empty-hint">Finished, failed, and skipped encodes land here. Run a scan or queue a job.</p>
 </div>
 {% endif %}

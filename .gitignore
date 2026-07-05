@@ -43,6 +43,9 @@ htmlcov/
 .docker/
 .playwright-mcp/
 
+# Tailwind standalone CLI binary cache (downloaded by scripts/build_css.py)
+/.tailwind/
+
 # Claude Code agent tooling / local settings — not part of the shipped project
 .claude/
 

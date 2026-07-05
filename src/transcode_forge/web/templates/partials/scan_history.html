@@ -1,16 +1,16 @@
 {% if scans %}
-<div class="divide-y divide-forge-rule/40">
+<div>
     {% for scan in scans %}
-    <div class="px-5 py-3.5 flex items-start justify-between gap-3">
+    <div class="px-4 py-2.5 flex items-center justify-between gap-3 {% if not loop.last %}border-b border-forge-rule/60{% endif %}">
         <div class="min-w-0">
             <p class="font-mono text-xs font-semibold text-forge-paper uppercase tracking-wider">{{ scan.library }}</p>
-            <p class="font-mono text-[10px] text-forge-mute mt-1">
-                <span class="text-forge-ink">{{ "%04d"|format(scan.files_found|default(0)) }}</span> found
+            <p class="font-mono text-2xs text-forge-mute mt-0.5 tabular-nums">
+                <span class="text-forge-ink">{{ scan.files_found|default(0) }}</span> found
                 <span class="text-forge-rule-bright mx-1">·</span>
-                <span class="text-forge-ember">{{ "%04d"|format(scan.files_new|default(0)) }}</span> new
+                <span class="{% if scan.files_new %}text-forge-ember{% else %}text-forge-mute{% endif %}">{{ scan.files_new|default(0) }}</span> new
             </p>
         </div>
-        <div class="flex flex-col items-end gap-2 flex-shrink-0">
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
             {% if scan.status == 'running' %}
             <span class="forge-pill forge-pill--running"><span class="forge-dot forge-dot--hot forge-pulse"></span>Scanning</span>
             {% elif scan.status == 'complete' %}
@@ -18,13 +18,13 @@
             {% elif scan.status == 'failed' %}
             <span class="forge-pill forge-pill--failed">Failed</span>
             {% endif %}
-            <span class="font-mono text-[9px] text-forge-mute">{{ scan.started_at[11:16] if scan.started_at else '' }}</span>
+            <span class="font-mono text-2xs text-forge-mute tabular-nums">{{ scan.started_at[5:16]|replace('T', ' ') if scan.started_at else '' }}</span>
         </div>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<div class="p-6 text-center">
-    <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-mute">No scans yet</p>
+<div class="forge-empty py-6">
+    <p class="forge-empty-hint">No scans yet — run one from the Queue page.</p>
 </div>
 {% endif %}
