@@ -14,8 +14,8 @@ import json
 import logging
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 
 API = "http://localhost:8000"
 TARGET_COUNT = 75
@@ -60,14 +60,15 @@ def wait_for_scans():
     api_post("/api/scan", {"library_ids": lib_ids})
 
     # Wait up to 30 minutes for scan to finish
-    for i in range(60):
+    for _i in range(60):
         time.sleep(30)
         stats = api_get("/api/media/stats")["data"]
         total = sum(v.get("count", 0) for v in stats.get("codecs", {}).values())
         h264 = stats.get("codecs", {}).get("h264", {}).get("count", 0)
         log.info(
             "Scan progress: %d total files indexed, %d h264 found",
-            total, h264,
+            total,
+            h264,
         )
         if h264 >= TARGET_COUNT:
             log.info("Enough h264 files found, proceeding")
@@ -125,7 +126,8 @@ def find_overweight_files(count: int) -> list[dict]:
     selected = all_files[:count]
     log.info(
         "Selected %d overweight files (from %d h264 candidates)",
-        len(selected), len(all_files),
+        len(selected),
+        len(all_files),
     )
     return selected
 
@@ -141,7 +143,9 @@ def queue_files(files: list[dict]) -> int:
         total_queued += resp.get("queued", 0)
         log.info(
             "Queued batch %d: %d queued, %d skipped",
-            i // 20 + 1, resp.get("queued", 0), resp.get("skipped", 0),
+            i // 20 + 1,
+            resp.get("queued", 0),
+            resp.get("skipped", 0),
         )
     return total_queued
 
@@ -160,9 +164,7 @@ def monitor_jobs() -> dict:
             # Get job counts by status
             complete = api_get("/api/jobs?status=complete&per_page=1")
             failed = api_get("/api/jobs?status=failed&per_page=1")
-            active = api_get(
-                "/api/jobs?status=pending,queued,assigned,transcoding&per_page=1"
-            )
+            active = api_get("/api/jobs?status=pending,queued,assigned,transcoding&per_page=1")
             skipped = api_get("/api/jobs?status=skipped&per_page=1")
 
             n_complete = complete["meta"]["total"]
@@ -172,7 +174,11 @@ def monitor_jobs() -> dict:
 
             log.info(
                 "[%.0fm] complete=%d  failed=%d  skipped=%d  active=%d",
-                elapsed, n_complete, n_failed, n_skipped, n_active,
+                elapsed,
+                n_complete,
+                n_failed,
+                n_skipped,
+                n_active,
             )
 
             # Retry failed jobs (up to 3 times each)
@@ -229,9 +235,7 @@ def get_space_saved() -> float:
     """Get total space saved in GB."""
     try:
         resp = api_get("/api/jobs?status=complete&per_page=200")
-        total = sum(
-            j.get("space_saved", 0) or 0 for j in resp["data"]
-        )
+        total = sum(j.get("space_saved", 0) or 0 for j in resp["data"])
         return total / 1073741824
     except Exception:
         return 0.0
@@ -245,16 +249,16 @@ def write_report(stats: dict, files_selected: int) -> None:
     report = f"""
 ========================================
   OVERNIGHT TRANSCODE TEST REPORT
-  {time.strftime('%Y-%m-%d %H:%M:%S')}
+  {time.strftime("%Y-%m-%d %H:%M:%S")}
 ========================================
 
 FILES SELECTED:  {files_selected}
-COMPLETED:       {stats['complete']}
-FAILED:          {stats['failed']}
-SKIPPED (size):  {stats['skipped']}
-ELAPSED:         {stats['elapsed_min']} minutes
+COMPLETED:       {stats["complete"]}
+FAILED:          {stats["failed"]}
+SKIPPED (size):  {stats["skipped"]}
+ELAPSED:         {stats["elapsed_min"]} minutes
 SPACE SAVED:     {space_gb:.2f} GB
-TIMED OUT:       {stats.get('timed_out', False)}
+TIMED OUT:       {stats.get("timed_out", False)}
 
 WORKERS ({len(workers)} registered):
 """

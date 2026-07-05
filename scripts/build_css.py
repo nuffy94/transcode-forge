@@ -82,7 +82,7 @@ def _ensure_binary() -> Path:
     )
     print(f"Downloading Tailwind {TAILWIND_VERSION} for {key} ...", file=sys.stderr)
     req = urllib.request.Request(url, headers={"User-Agent": "transcode-forge-build"})
-    with urllib.request.urlopen(req, timeout=180) as resp:  # noqa: S310 — pinned github URL
+    with urllib.request.urlopen(req, timeout=180) as resp:
         data = resp.read()
 
     digest = _sha256(data)
