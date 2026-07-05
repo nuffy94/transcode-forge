@@ -46,8 +46,10 @@ def start(run_dir: Path, port: int) -> int:
         "TF_AUTH_SECRET": "qa-sweep-fixed-secret",
         "TF_LOG_LEVEL": "warning",
     }
+    # CREATE_NO_WINDOW (not DETACHED_PROCESS): the instance must never pop a
+    # console window — the operator's desktop is in use while sweeps run.
     detach_flags: dict[str, object] = (
-        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
         if os.name == "nt"
         else {"start_new_session": True}
     )
