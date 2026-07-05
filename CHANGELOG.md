@@ -4,6 +4,32 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-07-05
+
+### Fixed
+- **S3 worker job-loop crash** — `S3Backend.cleanup()` assumed a dict but
+  receives the Pydantic `Job` model; the resulting `AttributeError`
+  escaped the pipeline's cleanup path on every S3 job and killed the
+  worker's job loop. All S3-library deployments on 0.9.x should upgrade.
+- Worker no longer stays `busy` with a dead job id after a fetch failure
+  or a dedup early-complete.
+- Oversized worker error messages are truncated server-side (never
+  rejected), and the worker also truncates before sending.
+
+### Added
+- Token-rebind guard: a token bound to a live worker rejects a second
+  machine with 409 (unique binding enforced by migration 0010); same-
+  machine crash recovery and silent-worker replacement still work.
+- Worker-startup SWAP recovery scan: originals hidden as `.tf_bak` by a
+  power loss mid-swap are restored and stale locks cleared.
+- Benchmark harness (`scripts/bench/`): throughput/economics reports and
+  A/B gate tooling (`docs/BENCHMARKS.md`).
+- QA sweep v2 (dialog states, 390px mobile pass, first-run /setup flow,
+  structural anchors) plus mobile overflow fixes it caught on queue,
+  Activity, and stats.
+- Hardening test suites: worker crash recovery, failure lifecycle, S3
+  error paths, swap recovery (repo now at ~690 tests).
+
 ## [0.9.1] - 2026-07-05
 
 ### Added
