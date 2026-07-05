@@ -328,8 +328,9 @@ class S3Backend:
         Releases scratch space and orphaned S3 parts.
 
         Args:
-            job: Job dict with id.
+            job: Job model or dict with id (the agent passes the Pydantic
+                Job model; assuming a dict here crashed the job loop).
         """
-        job_id = job.get("id", "")
+        job_id = job.id if hasattr(job, "id") else job.get("id", "")
         logger.info("Cleaning up S3 job %s", job_id)
         await self.scratch_manager.release(job_id=job_id)
