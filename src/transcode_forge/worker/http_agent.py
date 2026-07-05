@@ -28,6 +28,7 @@ from transcode_forge.worker.pipeline import (
     VmafGateError,
     run_pipeline,
 )
+from transcode_forge.worker.storage.filesystem import recover_orphaned_backups
 from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,13 @@ class HttpWorkerAgent:
         self.worker_id = registration["worker_id"]
         logger.info("Registered as worker_id=%s", self.worker_id)
 
+        # Crash recovery (filesystem backend only): a power loss inside the
+        # pipeline's SWAP window leaves the original hidden as .tf_bak with a
+        # stale .tf_lock blocking retries. Restore before claiming any jobs.
+        # Runs after registration so locks written by this worker's previous
+        # life (same token → same worker_id) are recognized as our own.
+        await self._recover_filesystem_state()
+
         try:
             await asyncio.gather(
                 self._heartbeat_loop(),
@@ -110,6 +118,34 @@ class HttpWorkerAgent:
             )
         finally:
             await self._cleanup()
+
+    def _recovery_roots(self) -> list[Path]:
+        """Local media roots to swap-recovery-scan: the local sides of
+        TF_PATH_MAP plus any configured TF_LIBRARY_* paths. Only directories
+        that actually exist on this machine are returned — S3 jobs work in
+        scratch space and are covered by the scratch manager instead."""
+        candidates = list(self.settings.path_map.values())
+        candidates += [path for path, _quality in self.settings.libraries.values()]
+        roots: list[Path] = []
+        for candidate in candidates:
+            p = Path(candidate)
+            if p.is_dir() and p not in roots:
+                roots.append(p)
+        return roots
+
+    async def _recover_filesystem_state(self) -> None:
+        """Run the filesystem swap-recovery scan (see storage/filesystem.py)."""
+        if self.worker_id is None:
+            raise RuntimeError("worker_id is unset — registration must succeed before this runs")
+        roots = self._recovery_roots()
+        if not roots:
+            logger.info(
+                "No local media roots found (TF_PATH_MAP / TF_LIBRARY_*) — "
+                "skipping the swap-recovery scan"
+            )
+            return
+        logger.info("Swap-recovery scan over %s", [str(r) for r in roots])
+        await asyncio.to_thread(recover_orphaned_backups, roots, worker_id=self.worker_id)
 
     def _handle_shutdown(self) -> None:
         if self._shutting_down:
@@ -211,6 +247,7 @@ class HttpWorkerAgent:
                 error_message=f"Failed to fetch source: {e}",
                 retry_count=job.retry_count + 1,
             )
+            self._current_job_id = None
             return
 
         # Check for dedup/reuse opportunity (S3-only for now).
@@ -232,6 +269,7 @@ class HttpWorkerAgent:
                     dedup_result.get("derivative_key", "unknown"),
                 )
                 await storage.cleanup(job)
+                self._current_job_id = None
                 return
 
         async def on_progress(progress: float, speed: float | None) -> None:

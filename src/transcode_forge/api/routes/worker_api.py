@@ -15,7 +15,7 @@ requires a valid bearer token. That's enforced via the
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -43,6 +43,30 @@ def _progress_channel(request: Request) -> str:
     settings = getattr(request.app.state, "settings", None)
     prefix = settings.redis_prefix if settings is not None else "tf"
     return f"{prefix}:pub:progress"
+
+
+# How recent a bound worker's heartbeat must be for the token-rebind guard
+# to consider it alive. Matches the scheduler's stale-worker sweep default
+# (3x the 30s heartbeat timeout, repos/workers.cleanup_stale_workers).
+REBIND_LIVENESS_SECONDS = 90
+
+
+def _worker_is_live(worker: Worker) -> bool:
+    """True when a worker looks actively connected (recent heartbeat).
+
+    Used by the token-rebind guard: a second machine presenting an
+    already-bound token is only rejected while the bound worker is live —
+    once it has gone silent, the token may legitimately move to a
+    replacement machine (re-provisioned host, recreated container).
+    """
+    if worker.status not in (WorkerStatus.ONLINE, WorkerStatus.BUSY):
+        return False
+    if worker.last_heartbeat is None:
+        return False
+    last = worker.last_heartbeat
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    return datetime.now(UTC) - last < timedelta(seconds=REBIND_LIVENESS_SECONDS)
 
 
 def _require_worker_identity(token_row: dict[str, Any], worker_id: str) -> None:
@@ -129,8 +153,11 @@ class CompleteRequest(BaseModel):
 
 
 # Worker-reported error messages can embed ffmpeg stderr; cap what we
-# persist. Truncated server-side (not rejected with 422) so a worker
-# carrying a huge message can still mark its job failed.
+# persist. Truncated server-side (NOT rejected with 422) so any worker —
+# including a lagging v0.9.x one without client-side truncation — can
+# always mark its job failed; the error path must be maximally accepting.
+# The worker's http_client also truncates before sending (defense in
+# depth). Keep this constant in sync with worker/http_client.py.
 MAX_ERROR_MESSAGE_LEN = 10_000
 
 
@@ -178,16 +205,68 @@ async def register(
     First call with this token creates a row in `workers` and stamps
     its UUID into `worker_tokens.worker_id`. Subsequent calls update
     the existing row (e.g., capabilities changed after a driver update).
+
+    Token-reuse guard (review item 16): a token already bound to a LIVE
+    worker with a different machine identity (name/host) is rejected with
+    409 — a second machine presenting a leaked token must not silently
+    take over the legitimate worker's identity and release its jobs.
+    Crash recovery is preserved: the same machine (matching name + host)
+    always re-registers, and once the bound worker has gone silent the
+    token may move to a replacement machine. The first-time bind itself
+    is an atomic conditional UPDATE (link_worker CAS), so two concurrent
+    first registrations with the same token can't both win.
     """
-    bound_id = token_row.get("worker_id")
+    original_bound = token_row.get("worker_id")
+    bound_id = original_bound
     if bound_id is not None:
         # Re-register: keep the same worker_id if it still exists in workers.
         existing = await worker_repo.get_worker(db, bound_id)
         if existing is None:
             # Worker row was wiped but token still references it — recreate.
             bound_id = None
+        elif (existing.name, existing.host) != (body.name, body.host):
+            if _worker_is_live(existing):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Token is already bound to a live worker "
+                        f"({existing.name}@{existing.host}). Issue a separate "
+                        "token for each worker."
+                    ),
+                )
+            logger.warning(
+                "Token %s… rebinding worker %s to a new machine identity: "
+                "%s@%s → %s@%s (previous worker is no longer live)",
+                token_row.get("token_prefix", ""),
+                bound_id[:8],
+                existing.name,
+                existing.host,
+                body.name,
+                body.host,
+            )
 
     worker_id = bound_id or str(uuid4())
+
+    if bound_id is None:
+        # Claim the binding BEFORE creating the worker row. The conditional
+        # UPDATE only succeeds if the token still has the binding we read
+        # above — a concurrent registration that got there first makes this
+        # a no-op and the loser gets 409 instead of silently rebinding.
+        claimed = await token_repo.link_worker(
+            db,
+            token_hash=token_row["token_hash"],
+            worker_id=worker_id,
+            expected_worker_id=original_bound,
+        )
+        if not claimed:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Token was bound to another worker by a concurrent "
+                    "registration. Issue a separate token for each worker."
+                ),
+            )
+
     worker = Worker(
         id=worker_id,
         name=body.name,
@@ -199,9 +278,6 @@ async def register(
         status=WorkerStatus.ONLINE,
     )
     await worker_repo.upsert_worker(db, worker)
-
-    if bound_id is None:
-        await token_repo.link_worker(db, token_hash=token_row["token_hash"], worker_id=worker.id)
 
     # Release any jobs this worker had claimed before its restart. The
     # worker's process is fresh — it has no in-memory pipeline state for

@@ -1,5 +1,6 @@
 """Tests for the schema migration runner."""
 
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -146,6 +147,39 @@ class TestNeverEditReleasedMigrations:
         migrations = discover_migrations()
         versions = [v for v, _, _ in migrations]
         assert len(versions) == len(set(versions)), "duplicate migration version"
+
+
+class TestWorkerTokenUniqueBinding:
+    """Migration 0010: one worker identity per token, enforced by a unique
+    index (SQLite can't ALTER TABLE ADD CONSTRAINT; the index form is valid
+    on both dialects)."""
+
+    async def test_unique_index_enforced_and_nulls_allowed(self, tmp_path: Path):
+        db_path = tmp_path / "uq.db"
+        conn = await aiosqlite.connect(db_path)
+        try:
+            await apply_sqlite(conn)
+
+            cur = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name='uq_worker_tokens_worker_id'"
+            )
+            assert (await cur.fetchone()) is not None
+
+            # Multiple unbound tokens (NULL worker_id) coexist fine.
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, label, created_at) VALUES ('t1', 'a', 'x')"
+            )
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, label, created_at) VALUES ('t2', 'b', 'x')"
+            )
+
+            # Two tokens bound to the same worker identity are rejected.
+            await conn.execute("UPDATE worker_tokens SET worker_id = 'w' WHERE token = 't1'")
+            with pytest.raises(sqlite3.IntegrityError):
+                await conn.execute("UPDATE worker_tokens SET worker_id = 'w' WHERE token = 't2'")
+        finally:
+            await conn.close()
 
 
 class TestPostgresAdapter:

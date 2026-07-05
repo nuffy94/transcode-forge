@@ -15,6 +15,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# The scheduler rejects /failed bodies whose error_message exceeds this
+# (FailedRequest in api/routes/worker_api.py — keep in sync). Truncate
+# client-side so a worker carrying a huge ffmpeg stderr dump can still
+# mark its job failed instead of getting a 422.
+MAX_ERROR_MESSAGE_LEN = 10_000
+
 
 def _raise_for_status(r: httpx.Response) -> None:
     """Like httpx's ``raise_for_status``, but fold the server's error
@@ -133,7 +139,10 @@ class WorkerHttpClient:
     async def failed(self, *, job_id: str, error_message: str, retry_count: int = 0) -> None:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/failed",
-            json={"error_message": error_message, "retry_count": retry_count},
+            json={
+                "error_message": error_message[:MAX_ERROR_MESSAGE_LEN],
+                "retry_count": retry_count,
+            },
         )
         _raise_for_status(r)
 

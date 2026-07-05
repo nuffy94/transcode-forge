@@ -483,3 +483,49 @@ class TestDerivativeKeyConsistency:
         params2 = {**params1, "backend": "nvenc", "crf": 32, "preset": "p7"}
 
         assert compute_derivative_key(**params1) == compute_derivative_key(**params2)
+
+
+class TestHttpClientErrorMessageBound:
+    """failed() truncates to the server's FailedRequest bound so a huge
+    ffmpeg stderr dump can never become a 422 that leaves the job stuck
+    in 'transcoding'."""
+
+    def test_client_bound_matches_server_bound(self):
+        from transcode_forge.api.routes.worker_api import (
+            MAX_ERROR_MESSAGE_LEN as SERVER_LEN,
+        )
+        from transcode_forge.worker.http_client import (
+            MAX_ERROR_MESSAGE_LEN as CLIENT_LEN,
+        )
+
+        assert CLIENT_LEN == SERVER_LEN
+
+    @pytest.mark.asyncio
+    async def test_failed_truncates_error_message(self):
+        import json as jsonlib
+
+        import httpx
+
+        from transcode_forge.worker.http_client import (
+            MAX_ERROR_MESSAGE_LEN,
+            WorkerHttpClient,
+        )
+
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["json"] = jsonlib.loads(request.content)
+            return httpx.Response(204)
+
+        client = WorkerHttpClient("http://scheduler", "test-token")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://scheduler"
+        )
+        try:
+            await client.failed(job_id="j1", error_message="x" * 50_000, retry_count=2)
+        finally:
+            await client.aclose()
+
+        assert len(captured["json"]["error_message"]) == MAX_ERROR_MESSAGE_LEN
+        assert captured["json"]["retry_count"] == 2

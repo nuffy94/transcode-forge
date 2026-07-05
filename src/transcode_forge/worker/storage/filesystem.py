@@ -17,7 +17,8 @@ import json
 import logging
 import os
 import stat
-from datetime import UTC, datetime
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 LOCK_SUFFIX = ".tf_lock"
 BAK_SUFFIX = ".tf_bak"
+TMP_SUFFIX = ".tf_tmp"
+
+# Locks from OTHER workers older than this are presumed dead (matches the
+# find_stale_locks default in worker/pipeline.py). Our own locks are always
+# stale at startup — a freshly started worker has no pipeline in flight.
+RECOVERY_STALE_LOCK_HOURS = 2.0
 
 
 class FilesystemBackend:
@@ -302,3 +309,173 @@ def _safe_delete(path: Path) -> None:
             path.unlink()
     except OSError as e:
         logger.warning("Failed to delete %s: %s", path, e)
+
+
+# ── Startup swap recovery ─────────────────────────────────────────────
+#
+# A power loss inside the pipeline's SWAP window (between the two renames,
+# or before CLEANUP/UNLOCK) leaves the original hidden as .tf_bak and a
+# stale .tf_lock that blocks every retry of that path at the LOCK step.
+# The worker runs this scan over its local media roots at startup.
+
+
+def _lock_is_active(lock_path: Path, *, worker_id: str, stale_after: timedelta) -> bool:
+    """True when a lock belongs to a DIFFERENT worker and is still fresh.
+
+    Such a lock must be respected — on shared storage (NFS/SMB) another
+    worker may be mid-pipeline on the same file. Our own locks are always
+    stale at startup (a freshly started worker has no pipeline in flight),
+    and unreadable or ancient locks are treated as stale too.
+    """
+    try:
+        content = json.loads(lock_path.read_text())
+        lock_worker = content.get("worker_id")
+        ts = datetime.fromisoformat(str(content["timestamp"]))
+    except (OSError, ValueError, KeyError):
+        return False
+    if lock_worker == worker_id:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return datetime.now(UTC) - ts < stale_after
+
+
+def recover_orphaned_backups(
+    roots: Iterable[Path | str],
+    *,
+    worker_id: str,
+    stale_lock_hours: float = RECOVERY_STALE_LOCK_HOURS,
+) -> dict[str, int]:
+    """Worker-startup recovery scan for the filesystem backend.
+
+    Cases handled, per orphaned ``.tf_bak``:
+
+    - Original path MISSING → crash between the two swap renames: the
+      backup IS the original; rename it back.
+    - Original present, lock still held → crash after the swap but before
+      CONFIRM/CLEANUP: the file at the original path is an unconfirmed
+      encode. Restore the backup over it — originals are never sacrificed
+      for unverified output (the job re-queues at registration anyway).
+    - Original present, NO lock → the pipeline finished (UNLOCK ran);
+      almost certainly a completed job whose backup deletion failed. The
+      original path holds a confirmed encode — do NOT clobber it; log
+      loudly for the operator instead.
+
+    Separately, stale ``.tf_lock``/``.tf_tmp`` leftovers without a backup
+    (crash mid-transcode) are removed so the path can be retried.
+
+    Locks held by other workers are respected unless older than
+    ``stale_lock_hours``. Returns action counters for logging and tests.
+    """
+    stats = {
+        "restored": 0,
+        "locks_removed": 0,
+        "tmp_removed": 0,
+        "skipped_active": 0,
+        "needs_attention": 0,
+    }
+    stale_after = timedelta(hours=stale_lock_hours)
+
+    for root_like in roots:
+        root = Path(root_like)
+        if not root.is_dir():
+            continue
+        _recover_backups_under(root, worker_id=worker_id, stale_after=stale_after, stats=stats)
+        _remove_stale_locks_under(root, worker_id=worker_id, stale_after=stale_after, stats=stats)
+
+    if any(stats[k] for k in ("restored", "locks_removed", "tmp_removed", "needs_attention")):
+        logger.warning(
+            "[RECOVERY] Startup swap-recovery: restored %d original(s), removed "
+            "%d stale lock(s) and %d leftover tmp file(s); skipped %d in "
+            "progress elsewhere; %d need manual attention",
+            stats["restored"],
+            stats["locks_removed"],
+            stats["tmp_removed"],
+            stats["skipped_active"],
+            stats["needs_attention"],
+        )
+    return stats
+
+
+def _recover_backups_under(
+    root: Path, *, worker_id: str, stale_after: timedelta, stats: dict[str, int]
+) -> None:
+    """Restore orphaned .tf_bak files under ``root`` (see recover_orphaned_backups)."""
+    for bak in sorted(root.rglob(f"*{BAK_SUFFIX}*")):
+        if not bak.is_file() or BAK_SUFFIX not in bak.name:
+            continue
+        # movie.tf_bak.mkv → movie.mkv (inverse of the pipeline's naming).
+        original = bak.with_name(bak.name.replace(BAK_SUFFIX, "", 1))
+        lock = original.with_name(original.name + LOCK_SUFFIX)
+        tmp = original.with_name(original.stem + TMP_SUFFIX + original.suffix)
+
+        if lock.exists() and _lock_is_active(lock, worker_id=worker_id, stale_after=stale_after):
+            logger.info("[RECOVERY] %s: lock held by another live worker — leaving it alone", bak)
+            stats["skipped_active"] += 1
+            continue
+
+        if original.exists() and not lock.exists():
+            logger.critical(
+                "[RECOVERY] MANUAL ATTENTION: backup %s exists but %s looks like a "
+                "finished transcode (pipeline unlocked). Not touching either file — "
+                "delete the backup after verifying the media plays, or restore it "
+                "manually.",
+                bak,
+                original,
+            )
+            stats["needs_attention"] += 1
+            continue
+
+        try:
+            clobbered_unconfirmed = original.exists()
+            bak.replace(original)
+            logger.warning(
+                "[RECOVERY] Restored %s: %s (from %s)",
+                "original over unconfirmed encode" if clobbered_unconfirmed else "missing original",
+                original,
+                bak,
+            )
+            stats["restored"] += 1
+        except OSError as e:
+            logger.error("[RECOVERY] Could not restore %s → %s: %s", bak, original, e)
+            continue
+
+        for leftover, key in ((lock, "locks_removed"), (tmp, "tmp_removed")):
+            try:
+                if leftover.exists():
+                    leftover.unlink()
+                    stats[key] += 1
+            except OSError as e:
+                logger.warning("[RECOVERY] Could not delete %s: %s", leftover, e)
+
+
+def _remove_stale_locks_under(
+    root: Path, *, worker_id: str, stale_after: timedelta, stats: dict[str, int]
+) -> None:
+    """Remove stale locks (and their tmp partials) left by a mid-transcode
+    crash — without this, the LOCK step rejects every retry of that path."""
+    for lock in sorted(root.rglob(f"*{LOCK_SUFFIX}")):
+        if not lock.is_file():
+            continue
+        if _lock_is_active(lock, worker_id=worker_id, stale_after=stale_after):
+            # Another worker is (or recently was) mid-pipeline here. Counted
+            # by the backups pass when a .tf_bak is involved — don't double
+            # count, just leave the lock in place.
+            logger.info("[RECOVERY] %s: held by another live worker — leaving it", lock)
+            continue
+        original = lock.with_name(lock.name.removesuffix(LOCK_SUFFIX))
+        tmp = original.with_name(original.stem + TMP_SUFFIX + original.suffix)
+        try:
+            lock.unlink()
+            stats["locks_removed"] += 1
+            logger.warning("[RECOVERY] Removed stale lock: %s", lock)
+        except OSError as e:
+            logger.warning("[RECOVERY] Could not delete stale lock %s: %s", lock, e)
+            continue
+        try:
+            if tmp.exists():
+                tmp.unlink()
+                stats["tmp_removed"] += 1
+                logger.warning("[RECOVERY] Removed leftover tmp file: %s", tmp)
+        except OSError as e:
+            logger.warning("[RECOVERY] Could not delete %s: %s", tmp, e)
