@@ -23,17 +23,17 @@ full resolved set. Highlights:
 
 No copyleft (GPL/AGPL/LGPL) or proprietary Python packages are used.
 
-## Front-end assets (loaded from CDNs at runtime, not bundled)
+## Front-end assets (vendored — bundled in this repository; the UI loads
+nothing from third-party hosts at runtime)
 
-| Asset | License |
-|-------|---------|
-| Tailwind CSS | MIT |
-| HTMX + `htmx-ext-ws` | BSD-2-Clause |
-| Chart.js | MIT |
-| Big Shoulders Display, IBM Plex Sans, IBM Plex Mono (Google Fonts) | SIL Open Font License 1.1 |
-| Material Symbols (Google Fonts icons) | Apache-2.0 |
+| Asset | License | Where |
+|-------|---------|-------|
+| Big Shoulders Display, IBM Plex Sans, IBM Plex Mono (latin woff2 subsets) | SIL Open Font License 1.1 — text shipped alongside (`static/vendor/fonts/OFL.txt`) | `src/transcode_forge/web/static/vendor/fonts/` |
+| HTMX 2.0.4 + `htmx-ext-ws` | BSD-2-Clause | `src/transcode_forge/web/static/vendor/` |
+| Lucide icon path data (v1.23.0, curated subset) | ISC — attribution comment in the file | inlined in `src/transcode_forge/web/templates/partials/_icons.html` |
+| Tailwind CSS v4 | MIT | build-time tool only (pinned standalone CLI, cached locally, not committed); its compiled output is `static/css/app.css` |
 
-## Vendored file
+## Vendored file (dev/test only)
 
 | File | License | Notes |
 |------|---------|-------|

@@ -4,6 +4,48 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-03
+
+### Added
+- **Forge Console v2** — the web UI rebuilt as a dense ops console on a
+  documented design system (`docs/design-system.md`): instrument numerals
+  (tabular, slashed-zero), temperature-coded status language, heat-seam
+  signature, honest zero states everywhere.
+- **File-detail drawer** — click any file/job row for probe data, encode
+  economics (savings, achieved VMAF vs. target, resolved CRF, encoder
+  backend), the full attempt timeline, and queue/exclude actions.
+  Deep-linkable via `#file=<id>`. Backed by a `jobs.source_path` index
+  (migration 0007).
+- **Activity** — History and Skipped merged into one ledger with two honest
+  facets: encode outcomes (jobs that ran, incl. discarded-after-encode) and
+  scan skips (never attempted). `/history` and `/skipped` return 301s.
+- Real Tailwind v4 build pipeline (pinned standalone CLI, committed CSS,
+  CI freshness gate) replacing the runtime Play CDN; fonts, HTMX, and a
+  Lucide-derived inline SVG icon sprite are all vendored — the UI makes
+  zero third-party requests.
+- Queue status tiles double as filter shortcuts; live WebSocket progress
+  on dashboard, queue, and worker cards; worker names (not UUIDs) in every
+  attribution column.
+
+### Changed
+- Worker tokens live in one place — the Workers page (issue, live connect
+  status, revoke). Settings keeps a pointer.
+- `settings.html` split into four focused sub-templates; all inline page
+  scripts replaced by ES modules under `static/js/`.
+- mypy runs in CI; the E2E harness authenticates properly (the suite was
+  previously red on main).
+
+### Fixed
+- Demo seed wrote outcome fields through `create_job`/`create_scan`, which
+  silently drop them — the "0.0 GiB reclaimed", stuck-0% bars, dash worker
+  columns, and "0000 found" scan rows all traced to this. Outcomes now land
+  via the update paths, same as production.
+- The workers page's token-revoke button called a function that only
+  existed on Settings — it now works where the tokens live.
+- Catalog stat tiles rendered an API field that never existed (always
+  `0000`); Movies reads real per-status counts, TV derives its strip from
+  the show rows.
+
 ## [0.8.1] - 2026-07-01
 
 ### Fixed

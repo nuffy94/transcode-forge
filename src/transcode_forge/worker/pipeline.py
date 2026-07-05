@@ -372,7 +372,7 @@ async def _decode_check(path: Path, duration: float) -> None:
     bitstream corruption ffprobe missed."""
     if duration < DECODE_SAMPLE_SECONDS * 1.5:
         # File too short to bother sampling — decode the whole thing once.
-        offsets = (0.0,)
+        offsets: tuple[float, ...] = (0.0,)
         sample = duration
     else:
         offsets = tuple(duration * f for f in DECODE_SAMPLE_OFFSETS)

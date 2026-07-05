@@ -8,6 +8,7 @@ All data is deterministic (seeded RNG) for reproducible demos.
 import logging
 import random
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from transcode_forge.db import DBConnection
@@ -149,7 +150,7 @@ _TV_SHOWS: list[tuple[str, list[tuple[int, int]]]] = [
     ("Shogun", [(1, 10)]),
 ]
 
-_WORKERS: list[dict[str, object]] = [
+_WORKERS: list[dict[str, Any]] = [
     {
         "name": "encoder-node",
         "host": "10.0.0.11",
@@ -198,11 +199,14 @@ _FAIL_MESSAGES = [
     "Timeout: transcode exceeded 4 hour limit",
 ]
 
-_RESOLUTIONS = {
+_RESOLUTIONS: dict[str, dict[str, Any]] = {
     "720p": {"width": 1280, "height": 720, "label": "720p"},
     "1080p": {"width": 1920, "height": 1080, "label": "1080p"},
     "4K": {"width": 3840, "height": 2160, "label": "2160p"},
 }
+
+# Encoder backends completed demo jobs claim to have used (file-detail drawer).
+_BACKENDS = ["hevc_qsv", "hevc_nvenc", "libx265"]
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +304,9 @@ async def seed_demo_data(db: DBConnection) -> None:
             id=wid,
             name=str(w["name"]),
             host=str(w["host"]),
-            capabilities=list(w["caps"]),  # type: ignore[arg-type]
+            capabilities=list(w["caps"]),
             ffmpeg_version=str(w["ffmpeg"]),
-            status=w["status"],  # type: ignore[arg-type]
+            status=w["status"],
             last_heartbeat=now if w["status"] != WorkerStatus.OFFLINE else _past(48),
             registered_at=_past(72),
         )
@@ -398,7 +402,10 @@ async def seed_demo_data(db: DBConnection) -> None:
     job_candidates = all_h264[: min(80, len(all_h264))]
     idx = 0
 
-    # 45 completed jobs
+    # 45 completed jobs. The first 6 carry an earlier FAILED attempt on the
+    # same path so the file-detail drawer has a real retry timeline to show
+    # (created_at is backdated directly — create_job always stamps now(),
+    # which would leave the timeline order to sub-second tiebreaks).
     for _i in range(min(45, len(job_candidates) - idx)):
         fid, fpath = job_candidates[idx]
         idx += 1
@@ -409,31 +416,74 @@ async def seed_demo_data(db: DBConnection) -> None:
         output_size = int(source_size * (1 - savings_pct))
         hours_ago = _rng.uniform(2, 168)
         duration_s = _rng.uniform(60, 7200)
+        resolution = _rng.choice(["1080p", "720p", "2160p"])
+        retried = _i < 6
+
+        if retried:
+            first_try = Job(
+                source_path=fpath,
+                library=lib,
+                source_codec="h264",
+                source_resolution=resolution,
+                source_size=source_size,
+                quality_value=quality,
+                target_vmaf=95.0,
+                status=JobStatus.FAILED,
+            )
+            await job_repo.create_job(db, first_try)
+            # create_job only inserts the queue-time columns — outcome fields
+            # (worker, timestamps, error) land via update_job, same as prod.
+            await job_repo.update_job(
+                db,
+                first_try.id,
+                worker_id=_rng.choice(online_worker_ids),
+                error_message=_rng.choice(_FAIL_MESSAGES),
+                started_at=_past(hours_ago + 7).isoformat(),
+                completed_at=_past(hours_ago + 6.5).isoformat(),
+            )
+            await db.execute(
+                "UPDATE jobs SET created_at = ? WHERE id = ?",
+                (_past(hours_ago + 7).isoformat(), first_try.id),
+            )
 
         job = Job(
             source_path=fpath,
             library=lib,
             source_codec="h264",
-            source_resolution=_rng.choice(["1080p", "720p", "2160p"]),
+            source_resolution=resolution,
             source_bitrate=_rng.randint(3_000_000, 20_000_000),
             source_duration=duration_s,
             source_size=source_size,
             quality_value=quality,
+            target_vmaf=95.0,
             status=JobStatus.COMPLETE,
+            retry_count=1 if retried else 0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db,
+            job.id,
             worker_id=_rng.choice(online_worker_ids),
             progress=1.0,
             output_size=output_size,
             space_saved=source_size - output_size,
-            started_at=_past(hours_ago + 1),
-            completed_at=_past(hours_ago),
+            resolved_crf=_rng.randint(18, 28),
+            achieved_vmaf=round(_rng.uniform(93.6, 98.4), 1),
+            backend_used=_rng.choice(_BACKENDS),
+            started_at=_past(hours_ago + 1).isoformat(),
+            completed_at=_past(hours_ago).isoformat(),
         )
-        await job_repo.create_job(db, job)
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(hours_ago + 1.2).isoformat(), job.id),
+        )
         await media_repo.update_media_status(
             db,
             fid,
             transcode_status="complete",
             job_id=job.id,
         )
+    await db.commit()
 
     # 8 failed jobs
     for _i in range(min(8, len(job_candidates) - idx)):
@@ -451,12 +501,16 @@ async def seed_demo_data(db: DBConnection) -> None:
             source_size=_rng.randint(1_000_000_000, 10_000_000_000),
             quality_value=quality,
             status=JobStatus.FAILED,
-            worker_id=_rng.choice(online_worker_ids),
-            error_message=_rng.choice(_FAIL_MESSAGES),
-            started_at=_past(hours_ago + 0.5),
-            completed_at=_past(hours_ago),
         )
         await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db,
+            job.id,
+            worker_id=_rng.choice(online_worker_ids),
+            error_message=_rng.choice(_FAIL_MESSAGES),
+            started_at=_past(hours_ago + 0.5).isoformat(),
+            completed_at=_past(hours_ago).isoformat(),
+        )
         await media_repo.update_media_status(
             db,
             fid,
@@ -532,11 +586,15 @@ async def seed_demo_data(db: DBConnection) -> None:
             source_size=_rng.randint(2_000_000_000, 12_000_000_000),
             quality_value=quality,
             status=JobStatus.TRANSCODING,
-            worker_id=wid,
-            progress=_rng.uniform(0.05, 0.75),
-            started_at=_past(_rng.uniform(0.1, 2)),
         )
         await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db,
+            job.id,
+            worker_id=wid,
+            progress=round(_rng.uniform(0.05, 0.75), 3),
+            started_at=_past(_rng.uniform(0.1, 2)).isoformat(),
+        )
         await media_repo.update_media_status(
             db,
             fid,
@@ -567,13 +625,17 @@ async def seed_demo_data(db: DBConnection) -> None:
             source_size=source_size,
             quality_value=quality,
             status=JobStatus.SKIPPED,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db,
+            job.id,
             worker_id=_rng.choice(online_worker_ids),
             output_size=int(source_size * 1.1),
             error_message="Output file is larger than source (size regression)",
-            started_at=_past(24),
-            completed_at=_past(23.5),
+            started_at=_past(24).isoformat(),
+            completed_at=_past(23.5).isoformat(),
         )
-        await job_repo.create_job(db, job)
         await media_repo.update_media_status(
             db,
             fid,
@@ -587,21 +649,37 @@ async def seed_demo_data(db: DBConnection) -> None:
     )
 
     # --- Scans ---
+    # create_scan hardcodes zero counts and stamps started_at=now (production
+    # fills them via update_scan as the scan progresses) — the seed does the
+    # same dance so the history shows real found/new numbers and times.
     scan_times = [_past(168), _past(72), _past(24), _past(6), _past(1)]
     for i, started in enumerate(scan_times):
         lib_name = "movies" if i % 2 == 0 else "tv"
         found = _rng.randint(80, 200)
         scan = Scan(
             library=lib_name,
+            started_at=started,
+            status=ScanStatus.RUNNING,
+        )
+        await scan_repo.create_scan(db, scan)
+        await scan_repo.update_scan(
+            db,
+            scan.id,
             files_found=found,
             files_new=_rng.randint(0, 20),
             files_updated=_rng.randint(0, 10),
             files_skipped=found - _rng.randint(10, 30),
-            started_at=started,
-            completed_at=started + timedelta(minutes=_rng.randint(1, 15)),
             status=ScanStatus.COMPLETE,
         )
-        await scan_repo.create_scan(db, scan)
+        await db.execute(
+            "UPDATE scans SET started_at = ?, completed_at = ? WHERE id = ?",
+            (
+                started.isoformat(),
+                (started + timedelta(minutes=_rng.randint(1, 15))).isoformat(),
+                scan.id,
+            ),
+        )
+    await db.commit()
     logger.info("Created 5 scan records")
 
     # --- Skipped files (from scans, not jobs) ---

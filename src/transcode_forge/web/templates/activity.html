@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% from "partials/_icons.html" import icon %}
+{% block title %}Activity — Transcode Forge{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-4">
+
+    <header>
+        <h1 class="text-[15px] font-semibold text-forge-paper">Activity</h1>
+        <p class="font-mono text-2xs text-forge-mute mt-0.5">
+            Two honest ledgers — encode outcomes are jobs that ran; scan skips were never attempted.
+        </p>
+    </header>
+
+    <!-- Facet tabs -->
+    <div class="border-b border-forge-rule">
+        <nav class="flex items-center gap-1" role="tablist" id="activity-tabs">
+            <button id="tab-outcomes" class="forge-tab {% if view == 'outcomes' %}is-active{% endif %}"
+                    role="tab" aria-selected="{{ 'true' if view == 'outcomes' else 'false' }}" data-view="outcomes">
+                {{ icon('history', 'forge-icon--sm') }} Encode outcomes
+            </button>
+            <button id="tab-skips" class="forge-tab {% if view == 'skips' %}is-active{% endif %}"
+                    role="tab" aria-selected="{{ 'true' if view == 'skips' else 'false' }}" data-view="skips">
+                {{ icon('ban', 'forge-icon--sm') }} Scan skips
+            </button>
+        </nav>
+    </div>
+
+    <!-- ============ Encode outcomes facet ============ -->
+    <div id="outcomes-view" class="flex flex-col gap-4 {% if view != 'outcomes' %}hidden{% endif %}">
+
+        <section class="forge-panel grid grid-cols-2 lg:grid-cols-4">
+            <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+                <p class="forge-stat-label">Completed</p>
+                <p id="stat-completed" class="forge-stat-value text-xl mt-1.5 text-forge-oxide">—</p>
+            </div>
+            <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
+                <p class="forge-stat-label">Space saved</p>
+                <p id="stat-saved" class="forge-stat-value text-xl mt-1.5 text-forge-ember-hot">—</p>
+            </div>
+            <div class="p-3.5 lg:border-r border-forge-rule/60">
+                <p class="forge-stat-label">Avg savings</p>
+                <p id="stat-avg" class="forge-stat-value text-xl mt-1.5">—</p>
+            </div>
+            <div class="p-3.5">
+                <p class="forge-stat-label">Failed</p>
+                <p id="stat-failed" class="forge-stat-value text-xl mt-1.5 text-forge-rust">—</p>
+            </div>
+        </section>
+
+        <section class="forge-panel">
+            <div class="px-3 py-2.5 border-b border-forge-rule flex flex-wrap items-center gap-2">
+                <select id="outcomes-status" aria-label="Filter outcomes by status" class="forge-select" name="status"
+                        hx-get="/partials/activity-outcomes" hx-trigger="change" hx-target="#outcomes-container"
+                        hx-include="#outcomes-library, #outcomes-since, #outcomes-sort, #outcomes-dir">
+                    <option value="" selected>All outcomes</option>
+                    <option value="complete">Completed</option>
+                    <option value="failed">Failed</option>
+                    <option value="skipped">Discarded (post-encode)</option>
+                </select>
+                <select id="outcomes-library" aria-label="Filter outcomes by library" class="forge-select" name="library"
+                        hx-get="/partials/activity-outcomes" hx-trigger="change" hx-target="#outcomes-container"
+                        hx-include="#outcomes-status, #outcomes-since, #outcomes-sort, #outcomes-dir">
+                    <option value="">All libraries</option>
+                </select>
+                <select id="outcomes-since" aria-label="Outcomes time range" class="forge-select" name="since"
+                        hx-get="/partials/activity-outcomes" hx-trigger="change" hx-target="#outcomes-container"
+                        hx-include="#outcomes-status, #outcomes-library, #outcomes-sort, #outcomes-dir">
+                    <option value="">All time</option>
+                    <option value="24h">Last 24 hours</option>
+                    <option value="7d">Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                </select>
+            </div>
+
+            <input type="hidden" id="outcomes-sort" name="sort" value="created_at">
+            <input type="hidden" id="outcomes-dir" name="dir" value="desc">
+
+            <div id="outcomes-container"
+                 hx-get="/partials/activity-outcomes"
+                 hx-trigger="load, refresh, every 15s"
+                 hx-swap="innerHTML"
+                 hx-include="#outcomes-status, #outcomes-library, #outcomes-since, #outcomes-sort, #outcomes-dir">
+                <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ============ Scan skips facet ============ -->
+    <div id="skips-view" class="flex flex-col gap-4 {% if view != 'skips' %}hidden{% endif %}">
+
+        <div id="skip-stats"
+             hx-get="/partials/skip-stats"
+             hx-trigger="load, every 30s"
+             hx-swap="innerHTML">
+        </div>
+
+        <section class="forge-panel">
+            <div class="px-3 py-2.5 border-b border-forge-rule flex flex-wrap items-center gap-2">
+                <select id="skip-reason-filter" aria-label="Filter by skip reason" class="forge-select" name="reason"
+                        hx-get="/partials/activity-skips" hx-trigger="change" hx-target="#skipped-container"
+                        hx-include="#skip-library-filter, #skip-sort, #skip-dir">
+                    <option value="">All reasons</option>
+                    <option value="already_hevc">Already HEVC</option>
+                    <option value="not_h264">Not H264</option>
+                    <option value="size_regression">Size regression</option>
+                    <option value="below_vmaf_floor">Below VMAF floor</option>
+                    <option value="too_small">Too small</option>
+                    <option value="manual_skip">Manual skip</option>
+                </select>
+                <select id="skip-library-filter" aria-label="Filter by library" class="forge-select" name="library"
+                        hx-get="/partials/activity-skips" hx-trigger="change" hx-target="#skipped-container"
+                        hx-include="#skip-reason-filter, #skip-sort, #skip-dir">
+                    <option value="">All libraries</option>
+                </select>
+                <p class="ml-auto font-mono text-2xs text-forge-mute">
+                    Never attempted — unskip to retry on the next scan.
+                </p>
+            </div>
+
+            <input type="hidden" id="skip-sort" name="sort" value="updated_at">
+            <input type="hidden" id="skip-dir" name="dir" value="desc">
+
+            <div id="skipped-container"
+                 hx-get="/partials/activity-skips"
+                 hx-trigger="load, refresh"
+                 hx-swap="innerHTML"
+                 hx-include="#skip-reason-filter, #skip-library-filter, #skip-sort, #skip-dir">
+                <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/activity.js"></script>
+{% endblock %}

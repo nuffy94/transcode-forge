@@ -1,60 +1,45 @@
+{% from "partials/_icons.html" import icon %}
 <!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% include "partials/_head.html" %}
     <title>First-run setup — Transcode Forge</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/app.css">
-    <script>
-    tailwind.config = { darkMode: "class", theme: { extend: { colors: {
-        "forge-bg":"#0d0b08","forge-surface":"#15120e","forge-panel":"#1c1813",
-        "forge-paper":"#e8e4dd","forge-ink":"#a8a195","forge-mute":"#9a8f7d",
-        "forge-rule":"#3a342a","forge-rule-bright":"#5a4f3e",
-        "forge-ember":"#ff7a1a","forge-ember-hot":"#ffa856","forge-rust":"#d75d3a",
-    }, fontFamily: {
-        display: ["Big Shoulders Display","sans-serif"],
-        body:    ["IBM Plex Sans","sans-serif"],
-        mono:    ["IBM Plex Mono","monospace"],
-    }}}};
-    </script>
 </head>
-<body class="bg-forge-bg text-forge-paper font-body antialiased min-h-screen flex items-center justify-center px-6">
-    <div class="w-full max-w-md">
-        <div class="text-center mb-8">
-            <p class="font-mono text-[10px] uppercase tracking-[0.3em] text-forge-mute mb-2">Transcode</p>
-            <h1 class="font-display font-black text-6xl text-forge-paper leading-none tracking-tight">FORGE</h1>
-            <p class="font-mono text-[10px] uppercase tracking-stamp text-forge-ember mt-3">First Run</p>
+<body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
+    <div class="forge-seam" aria-hidden="true"></div>
+
+    <div class="w-full max-w-md relative z-10">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <span class="forge-brand-mark">{{ icon('flame', 'forge-icon--lg') }}</span>
+            <span>
+                <span class="forge-brand-eyebrow">Transcode</span>
+                <span class="forge-brand-word font-display !text-3xl">FORGE</span>
+            </span>
         </div>
 
-        <div class="forge-panel forge-panel--ember p-7 relative">
-            <span class="forge-tick forge-tick-tl"></span>
-            <span class="forge-tick forge-tick-br"></span>
-            <p class="forge-stat-label mb-2">Pick an admin password</p>
-            <p class="font-mono text-[11px] text-forge-ink mb-5 leading-relaxed">
-                Used to sign in to the dashboard. Workers don't use this — they get
-                their own tokens issued from the Workers tab.
-            </p>
-
-            <form class="space-y-4" onsubmit="return doSetup(event)">
+        <div class="forge-panel forge-panel--ember">
+            <div class="forge-panel-hd">
+                <h1 class="forge-panel-title">First run — pick an admin password</h1>
+            </div>
+            <form class="p-4 space-y-4" onsubmit="return doSetup(event)">
+                <p class="font-mono text-2xs text-forge-ink leading-relaxed">
+                    This signs you in to the console. Workers never use it — they
+                    join with their own revocable tokens from the Workers page.
+                </p>
                 <div>
-                    <label for="password" class="forge-stat-label block mb-1.5">Password (8+ chars)</label>
+                    <label for="password" class="forge-stat-label block mb-1.5">Password (8+ characters)</label>
                     <input id="password" type="password" required minlength="8" autofocus
-                           class="forge-input w-full">
+                           class="forge-input w-full" autocomplete="new-password">
                 </div>
                 <div>
-                    <label for="password2" class="forge-stat-label block mb-1.5">Confirm</label>
+                    <label for="password2" class="forge-stat-label block mb-1.5">Confirm password</label>
                     <input id="password2" type="password" required minlength="8"
-                           class="forge-input w-full">
+                           class="forge-input w-full" autocomplete="new-password">
                 </div>
                 <button type="submit" class="forge-btn forge-btn--ember w-full justify-center">
                     Create admin and sign in
                 </button>
-                <p id="err" class="font-mono text-xs text-forge-rust hidden"></p>
+                <p id="err" class="font-mono text-xs text-forge-rust hidden" role="alert"></p>
             </form>
         </div>
     </div>
@@ -85,7 +70,7 @@
                 err.classList.remove('hidden');
             }
         } catch (_) {
-            err.textContent = 'Network error';
+            err.textContent = 'Network error — is the scheduler up?';
             err.classList.remove('hidden');
         }
         return false;

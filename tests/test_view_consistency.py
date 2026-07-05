@@ -75,8 +75,7 @@ class TestQueueCountConsistency:
 
         assert _extract_stat(dash, "Queued") == 0
         assert badge == ""  # badge is blank (not "0") when empty
-        # scheduler-info renders 0 when there are no queued jobs
-        assert "0" in sched  # weak but present
+        assert _extract_scheduler_info_queue(sched) == 0
         assert stats.get("pending", 0) + stats.get("queued", 0) == 0
 
     async def test_pending_and_queued_both_count(self, client: AsyncClient, app):
@@ -86,11 +85,13 @@ class TestQueueCountConsistency:
 
         dash = _extract_stat((await client.get("/partials/dashboard-stats")).text, "Queued")
         badge = (await client.get("/partials/queue-badge")).text.strip()
+        sched = (await client.get("/partials/scheduler-info")).text
         stats = (await client.get("/api/stats")).json()["data"]["jobs_by_status"]
         api_total = stats.get("pending", 0) + stats.get("queued", 0)
 
         assert dash == 5
         assert badge == "5"
+        assert _extract_scheduler_info_queue(sched) == 5
         assert api_total == 5
 
     async def test_other_statuses_do_not_count(self, client: AsyncClient, app):

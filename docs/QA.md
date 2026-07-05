@@ -35,14 +35,23 @@ to re-discover the same bug.
 uv run pytest tests/qa/        # excluded from the default suite
 ```
 
-Against the seeded demo it visits every page and fails on:
+Against the seeded demo it visits every page — the `PAGES` list in
+`tests/qa/test_sweep.py` covers dashboard, movies, tv, queue, both Activity
+facets (`/activity` and `/activity?view=skips`), workers, stats, and
+settings — and fails on:
 
 - **axe-core** serious/critical violations — `color-contrast` and the missing
   `label` family (vendored `tests/qa/vendor/axe.min.js`, so it works offline).
 - **console / page errors** and **failed `/api` responses** during browsing.
 - **error toasts** present on any page. Error toasts are *persistent* by design
-  (they require a click to dismiss — see `base.html`), specifically so a
-  transient error can never slip past a screenshot or an assertion.
+  (they require a click to dismiss — see `static/js/toast.js`), specifically so
+  a transient error can never slip past a screenshot or an assertion.
+
+After the page loop it also opens the **file-detail drawer** on a transcoded
+movie (axe re-runs against the open state; `movies_drawer.png` is captured)
+and sweeps **`/login` in a fresh unauthenticated context**. `/setup` cannot be
+swept — the session fixture creates the admin before any test runs, so the
+route 302s; verify it by eyeball on a fresh live instance instead.
 
 Full-page screenshots of each page land in `tests/qa/shots/` (gitignored) for
 visual review / diffing.
