@@ -39,9 +39,10 @@ uv run python scripts/build_css.py --check    # fail if committed app.css is sta
 ```
 
 CI (`.github/workflows/tests.yml`) runs `ruff check`, `ruff format --check`,
-`pytest --cov`, and a `css-fresh` job (`build_css.py --check`) on every push
-and PR. A formatting or CSS drift will fail the build — always run
-`ruff format` and rebuild the CSS before committing.
+`mypy src/`, `pytest --cov`, and a `css-fresh` job (`build_css.py --check`)
+on every push and PR. A formatting drift, type error, or CSS drift will
+fail the build — always run `ruff format`, `mypy src/`, and rebuild the CSS
+before committing.
 
 The served `src/transcode_forge/web/static/css/app.css` is **generated** by the
 pinned Tailwind v4 standalone CLI (no Node). Edit the source

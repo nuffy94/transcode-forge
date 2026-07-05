@@ -9,7 +9,7 @@ breaking — those live in the agent loop.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -72,8 +72,7 @@ class WorkerHttpClient:
             },
         )
         _raise_for_status(r)
-        data: dict[str, Any] = r.json()
-        return data
+        return cast(dict[str, Any], r.json())
 
     async def heartbeat(
         self,
@@ -98,9 +97,7 @@ class WorkerHttpClient:
             json={"worker_id": worker_id},
         )
         _raise_for_status(r)
-        data: dict[str, Any] = r.json()
-        job: dict[str, Any] | None = data.get("job")
-        return job
+        return cast("dict[str, Any] | None", r.json().get("job"))
 
     async def progress(self, *, job_id: str, progress: float, speed: float | None) -> None:
         r = await self._client.post(
