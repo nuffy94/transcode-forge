@@ -72,3 +72,14 @@ Judge: is each error message specific and understandable, or generic/cryptic?
 Across the captured screenshots, judge: text contrast (esp. muted text, inputs,
 toast/popup copy), label clarity, confusing wording, and layout/overflow issues.
 Flag anything a design-conscious reviewer would call out.
+
+### S10 — S3 Object Storage library (add → scan → judge)
+Settings → **Add Library** → switch Storage to **S3 Object Storage**. Confirm
+the Path field is replaced by Bucket + Prefix inputs (and the hint about
+TF_S3_* environment credentials). Add one (name e.g. "QA Cloud", bucket
+"qa-bucket", prefix "masters/movies/"), confirm it lists with an
+`s3://qa-bucket/masters/movies/` path, then trigger a **Scan** — the
+scan-started toast must appear and no error toast (the demo instance has no
+real bucket, so judge how the inevitable scan failure is surfaced in
+Activity: is it honest and findable, or silent?). Then remove the library.
+Judge: would a user who picked S3 by accident understand how to get back?

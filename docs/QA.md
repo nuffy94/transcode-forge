@@ -35,30 +35,54 @@ to re-discover the same bug.
 uv run pytest tests/qa/        # excluded from the default suite
 ```
 
-Against the seeded demo it visits every page — the `PAGES` list in
-`tests/qa/test_sweep.py` covers dashboard, movies, tv, queue, both Activity
-facets (`/activity` and `/activity?view=skips`), workers, stats, and
-settings — and fails on:
+Four modules share one seeded demo instance (helpers in
+`tests/qa/sweep_lib.py` — the `BLOCKING_RULES` axe set, error capture,
+login, overflow/focus checks live there once):
 
-- **axe-core** serious/critical violations — `color-contrast` and the missing
-  `label` family (vendored `tests/qa/vendor/axe.min.js`, so it works offline).
+**`test_sweep.py`** visits every page — the `PAGES` list covers dashboard,
+movies, tv, queue, both Activity facets (`/activity` and
+`/activity?view=skips`), workers, stats, and settings — and fails on:
+
+- **axe-core** blocking violations — `color-contrast`, the missing-`label`
+  family, and the interactive-name family (`button-name`, `link-name`,
+  `aria-required-attr`, `duplicate-id-aria`, `image-alt`). Vendored
+  `tests/qa/vendor/axe.min.js`, so it works offline.
 - **console / page errors** and **failed `/api` responses** during browsing.
 - **error toasts** present on any page. Error toasts are *persistent* by design
   (they require a click to dismiss — see `static/js/toast.js`), specifically so
   a transient error can never slip past a screenshot or an assertion.
+- a **load-bearing element missing** (`STRUCTURAL_ANCHORS` — the dead-partial
+  detector: a page can 200 with a dead HTMX section and no console error).
+- **document-level horizontal overflow** at desktop width, and **Tab from the
+  body not reaching a focusable control** (focus-trap guard).
 
 After the page loop it also opens the **file-detail drawer** on a transcoded
 movie (axe re-runs against the open state; `movies_drawer.png` is captured)
-and sweeps **`/login` in a fresh unauthenticated context**. `/setup` cannot be
-swept — the session fixture creates the admin before any test runs, so the
-route 302s; verify it by eyeball on a fresh live instance instead.
+and sweeps **`/login` in a fresh unauthenticated context**.
+
+**`test_dialogs.py`** re-runs axe + error capture against every dialog in its
+OPEN state: the add-library modal in both storage modes (the backend select
+must swap Path for Bucket/Prefix), the edit-library modal, and the Workers
+"Add a worker" panel — and asserts `Escape` closes the real `<dialog>`s.
+
+**`test_mobile.py`** re-sweeps every page at 390×844: the page body must not
+scroll horizontally (wide tables scroll inside their own `forge-scroll`
+container), nav must be present, error capture stays on. Screenshots land in
+`tests/qa/shots/mobile/`.
+
+**`test_setup_flow.py`** boots its own fresh instance (no admin) and sweeps
+the one page the main sweep can never reach: `/setup` — axe, the
+mismatched-confirm error path, and the real create-admin → dashboard flow.
 
 Full-page screenshots of each page land in `tests/qa/shots/` (gitignored) for
 visual review / diffing.
 
 This layer alone has already caught: the broken Schedules partial, every input
 rendering white (Tailwind forms-plugin cascade), unlabeled bulk-select
-checkboxes, a demo-mode Redis startup crash, and a misleading health 503.
+checkboxes, a demo-mode Redis startup crash, a misleading health 503, and —
+on the mobile pass's first ever run — horizontal overflow on four pages
+(queue, both Activity facets, stats: tables missing their `forge-scroll`
+wrapper).
 
 ## L3 — AI exploratory sweep (`qa/ux-sweep.workflow.js`)
 

@@ -1,101 +1,84 @@
-"""Deterministic UX/QA sweep — the free, repeatable backbone (runs every CI run
-once wired). Drives every page of the seeded demo instance and fails on:
+"""Deterministic UX/QA sweep — the free, repeatable backbone (runs every CI
+run). Drives every page of the seeded demo instance and fails on:
 
-  * axe-core serious/critical violations (contrast, missing labels)
+  * axe-core blocking violations (contrast, labels, interactive names)
   * any error toast present (errors are persistent by design — see base.html)
   * console errors / uncaught page errors
   * failed /api/ responses (>=400) during normal browsing
+  * a load-bearing element missing from a page (dead partial detector)
+  * Tab from the page body not reaching a focusable control
 
 Findings are printed as JSON so a failure is self-explanatory, and a full-page
 screenshot of each page is captured under tests/qa/shots/ for visual review.
+Dialog states live in test_dialogs.py, the 390px pass in test_mobile.py, and
+first-run /setup in test_setup_flow.py.
 """
 
 import json
-import pathlib
 
 import pytest
 from playwright.sync_api import Page
 
-PAGES = [
-    "/",
-    "/movies",
-    "/tv",
-    "/queue",
-    "/activity",
-    "/activity?view=skips",
-    "/workers",
-    "/stats",
-    "/settings",
-]
-AXE = pathlib.Path(__file__).parent / "vendor" / "axe.min.js"
-SHOTS = pathlib.Path(__file__).parent / "shots"
+from tests.qa.sweep_lib import (
+    PAGES,
+    SHOTS,
+    attach_error_capture,
+    blocking_violations,
+    error_toasts,
+    horizontal_overflow,
+    login,
+    page_shot_name,
+    tab_reaches_a_control,
+)
 
-# axe rule ids we treat as blocking (the classes that have actually shipped bugs)
-BLOCKING_RULES = {
-    "color-contrast",
-    "label",
-    "label-title-only",
-    "select-name",
-    "form-field-multiple-labels",
+# Load-bearing elements per page: if one is missing the partial died, even
+# when nothing errored. Selectors are stable ids from the templates.
+STRUCTURAL_ANCHORS: dict[str, list[str]] = {
+    "/": ["#dashboard-stats", "#active-transcodes", "#recent-activity", "#scan-history"],
+    "/movies": ["#mv-status", "tr[data-file-id]"],
+    "/tv": ["#tab-shows", "#tab-files"],
+    "/queue": ["#queue-sort"],
+    "/activity": ["#tab-outcomes", "#tab-skips"],
+    "/activity?view=skips": ["#tab-skips.is-active"],
+    "/workers": ["#add-worker-toggle"],
+    "/stats": ["#stats-container"],
+    "/settings": ["#tab-libraries", "#tab-quality", "#tab-schedules", "#tab-general"],
 }
-
-
-def _run_axe(page: Page) -> list[dict]:
-    page.add_script_tag(path=str(AXE))
-    page.wait_for_timeout(300)
-    return page.evaluate(
-        "async () => (await axe.run()).violations.map(v => "
-        "({id: v.id, impact: v.impact, count: v.nodes.length, "
-        "targets: v.nodes.map(n => n.target).slice(0, 4)}))"
-    )
 
 
 @pytest.mark.qa
 def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
-    console_errors: list[str] = []
-    bad_api: list[str] = []
-    page.on(
-        "console",
-        lambda m: console_errors.append(f"{m.type}: {m.text}") if m.type == "error" else None,
-    )
-    page.on("pageerror", lambda e: console_errors.append(f"pageerror: {e}"))
-    page.on(
-        "response",
-        lambda r: (
-            bad_api.append(f"{r.status} {r.request.method} {r.url}")
-            if r.status >= 400 and "/api/" in r.url
-            else None
-        ),
-    )
-
-    # Log in through the UI (the fixture already created the admin).
-    page.goto(f"{qa_base_url}/login", wait_until="domcontentloaded")
-    page.fill("input[type=password]", admin_pw)
-    page.click("button[type=submit]")
-    page.wait_for_timeout(1500)
-    assert "/login" not in page.url, "login did not succeed"
+    console_errors, bad_api = attach_error_capture(page)
+    login(page, qa_base_url, admin_pw)
 
     SHOTS.mkdir(exist_ok=True)
     axe_blocking: dict[str, list] = {}
-    error_toasts: dict[str, list] = {}
+    toast_hits: dict[str, list] = {}
+    missing_anchors: dict[str, list[str]] = {}
+    overflow_pages: dict[str, int] = {}
+    focus_failures: list[str] = []
 
     for path in PAGES:
         page.goto(f"{qa_base_url}{path}", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
-        name = path.strip("/").replace("/", "_").replace("?", "_").replace("=", "_") or "dashboard"
-        page.screenshot(path=str(SHOTS / f"{name}.png"), full_page=True)
+        page.screenshot(path=str(SHOTS / f"{page_shot_name(path)}.png"), full_page=True)
 
-        violations = _run_axe(page)
-        blocking = [v for v in violations if v["id"] in BLOCKING_RULES]
-        if blocking:
+        if blocking := blocking_violations(page):
             axe_blocking[path] = blocking
+        if toasts := error_toasts(page):
+            toast_hits[path] = toasts
 
-        toasts = page.evaluate(
-            "Array.from(document.querySelectorAll('[data-toast-type=\"error\"]'))"
-            ".map(e => e.innerText)"
-        )
-        if toasts:
-            error_toasts[path] = toasts
+        missing = [
+            sel for sel in STRUCTURAL_ANCHORS.get(path, []) if page.locator(sel).count() == 0
+        ]
+        if missing:
+            missing_anchors[path] = missing
+
+        if (overflow := horizontal_overflow(page)) > 1:
+            overflow_pages[path] = overflow
+
+        if not tab_reaches_a_control(page):
+            focus_failures.append(path)
 
     # File-detail drawer: open a transcoded movie (complete + h264 source =
     # a seeded encode with VMAF + timeline), re-run axe on the open state,
@@ -108,41 +91,41 @@ def test_ux_qa_sweep(qa_base_url: str, admin_pw: str, page: Page) -> None:
     page.wait_for_selector("#file-drawer.is-open", timeout=5_000)
     page.wait_for_timeout(600)
     page.screenshot(path=str(SHOTS / "movies_drawer.png"))
-    drawer_violations = [v for v in _run_axe(page) if v["id"] in BLOCKING_RULES]
-    if drawer_violations:
+    if drawer_violations := blocking_violations(page):
         axe_blocking["/movies#drawer"] = drawer_violations
-    drawer_toasts = page.evaluate(
-        "Array.from(document.querySelectorAll('[data-toast-type=\"error\"]')).map(e => e.innerText)"
-    )
-    if drawer_toasts:
-        error_toasts["/movies#drawer"] = drawer_toasts
+    if drawer_toasts := error_toasts(page):
+        toast_hits["/movies#drawer"] = drawer_toasts
 
     # /login renders for anonymous visitors — sweep it in a FRESH context
-    # (the main page object carries the admin session). /setup cannot be
-    # swept: this fixture creates the admin before any test runs, so the
-    # route 302s — it's verified by eyeball on a live instance instead.
+    # (the main page object carries the admin session). First-run /setup is
+    # covered by test_setup_flow.py against its own fresh instance.
     anon_ctx = page.context.browser.new_context(viewport=page.viewport_size)
     anon = anon_ctx.new_page()
     anon.goto(f"{qa_base_url}/login", wait_until="domcontentloaded")
     anon.wait_for_timeout(600)
     anon.screenshot(path=str(SHOTS / "login.png"), full_page=True)
-    login_violations = [v for v in _run_axe(anon) if v["id"] in BLOCKING_RULES]
-    if login_violations:
+    if login_violations := blocking_violations(anon):
         axe_blocking["/login"] = login_violations
     anon_ctx.close()
 
     report = json.dumps(
         {
             "axe_blocking": axe_blocking,
-            "error_toasts": error_toasts,
+            "error_toasts": toast_hits,
             "console_errors": console_errors[:25],
             "bad_api_responses": bad_api[:25],
+            "missing_anchors": missing_anchors,
+            "horizontal_overflow_px": overflow_pages,
+            "tab_focus_failures": focus_failures,
         },
         indent=2,
     )
     print("\n=== QA SWEEP REPORT ===\n" + report)
 
-    assert not axe_blocking, f"axe contrast/label violations:\n{report}"
-    assert not error_toasts, f"error toast(s) present on a page:\n{report}"
+    assert not axe_blocking, f"axe blocking violations:\n{report}"
+    assert not toast_hits, f"error toast(s) present on a page:\n{report}"
     assert not console_errors, f"console / page errors:\n{report}"
     assert not bad_api, f"failed /api/ responses during browsing:\n{report}"
+    assert not missing_anchors, f"load-bearing element missing (dead partial?):\n{report}"
+    assert not overflow_pages, f"page body scrolls horizontally at desktop width:\n{report}"
+    assert not focus_failures, f"Tab does not reach a control:\n{report}"

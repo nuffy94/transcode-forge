@@ -3,9 +3,13 @@ deterministic, no Redis/ffmpeg) as a subprocess and completes first-run setup,
 so the deterministic sweep and the AI exploratory sweep share one consistent,
 populated target with no live box required.
 
+`launch_qa_app` is the reusable launcher: test_setup_flow.py uses it with
+`create_admin=False` on its own port to exercise the real first-run /setup.
+
 Run with:  uv run pytest tests/qa/        (excluded from the default suite)
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -13,6 +17,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -32,9 +38,15 @@ def _post_json(url: str, payload: bytes) -> int:
         return e.code
 
 
-@pytest.fixture(scope="session")
-def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    qa_dir = tmp_path_factory.mktemp("qa")
+@contextmanager
+def launch_qa_app(qa_dir: Path, port: int, *, create_admin: bool) -> Iterator[str]:
+    """Boot a demo-static app instance on `port`; yield its base URL.
+
+    create_admin=True completes first-run setup with ADMIN_PW (the normal
+    sweep target). create_admin=False leaves the instance fresh so /setup
+    itself can be exercised.
+    """
+    base_url = f"http://127.0.0.1:{port}"
     db = qa_dir / "qa_demo.db"
     log_path = qa_dir / "server.log"
     env = {
@@ -54,7 +66,7 @@ def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             "--host",
             "127.0.0.1",
             "--port",
-            str(QA_PORT),
+            str(port),
             "--log-level",
             "warning",
         ],
@@ -76,7 +88,7 @@ def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
                     f"QA server exited early (code {proc.returncode}):\n{_server_log()}"
                 )
             try:
-                with urllib.request.urlopen(f"{BASE_URL}/api/health/live", timeout=1) as r:
+                with urllib.request.urlopen(f"{base_url}/api/health/live", timeout=1) as r:
                     if r.status == 200:
                         break
             except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
@@ -84,15 +96,14 @@ def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         else:
             raise RuntimeError(f"QA demo server failed to become ready:\n{_server_log()}")
 
-        # First-run setup creates the admin so authenticated pages are reachable.
-        import json
+        if create_admin:
+            # First-run setup creates the admin so authenticated pages are reachable.
+            status = _post_json(
+                f"{base_url}/api/auth/setup", json.dumps({"password": ADMIN_PW}).encode()
+            )
+            assert status in (200, 409), f"setup failed: HTTP {status}"
 
-        status = _post_json(
-            f"{BASE_URL}/api/auth/setup", json.dumps({"password": ADMIN_PW}).encode()
-        )
-        assert status in (200, 409), f"setup failed: HTTP {status}"
-
-        yield BASE_URL
+        yield base_url
     finally:
         proc.terminate()
         try:
@@ -100,6 +111,13 @@ def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
         logf.close()
+
+
+@pytest.fixture(scope="session")
+def qa_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    qa_dir = tmp_path_factory.mktemp("qa")
+    with launch_qa_app(qa_dir, QA_PORT, create_admin=True) as base_url:
+        yield base_url
 
 
 @pytest.fixture(scope="session")

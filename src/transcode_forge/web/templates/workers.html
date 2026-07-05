@@ -84,13 +84,6 @@
                 </div>
 
                 <div id="cmd-docker">
-                    <div class="forge-panel p-3 mb-3">
-                        <p class="font-mono text-2xs text-forge-mute mb-2">Private image — first time only (needs a read:packages PAT from <a href="https://github.com/settings/tokens" target="_blank" class="text-forge-ember hover:text-forge-ember-hot underline">GitHub settings</a>):</p>
-                        <div class="flex items-center gap-2">
-                            <code id="docker-login-cmd" class="font-mono text-xs text-forge-ink bg-forge-well px-3 py-2 flex-1 break-all">echo &lt;ghcr-read-pat&gt; | docker login ghcr.io -u &lt;your-github-user&gt; --password-stdin</code>
-                            <button class="forge-btn" data-copy="docker-login-cmd">Copy</button>
-                        </div>
-                    </div>
                     <div class="flex items-stretch gap-2">
                         <pre id="cmd-docker-run" class="font-mono text-2xs text-forge-ink bg-forge-well px-3 py-2 flex-1 overflow-x-auto leading-relaxed">docker run -d ...</pre>
                         <button class="forge-btn" data-copy="cmd-docker-run">Copy</button>
