@@ -69,17 +69,21 @@ dashboard.
 
 ### Pre-built image (skip the build)
 
-Tagged releases publish an image to GHCR. To run without building from
-source, authenticate to the registry (the package is private), then use the
-production compose file:
+Tagged releases publish a public image to GHCR — no registry login needed.
+Use the production compose file:
 
 ```bash
-echo <github-PAT-with-read:packages> | docker login ghcr.io -u <your-user> --password-stdin
 ./bootstrap.sh
 docker compose -f docker-compose.prod.yml up -d   # pulls ghcr.io/nuffy94/transcode-forge
 ```
 
 Pin a version with `TF_VERSION=0.7.0` in `.env` (defaults to `:latest`).
+
+### Deploying on Linode
+
+Two StackScripts deploy the full stack on Linode Compute — Caddy TLS edge,
+Object Storage media plane, optional Managed Database, and token-joined
+CPU workers. See [deploy/linode/README.md](deploy/linode/README.md).
 
 ## Adding workers
 

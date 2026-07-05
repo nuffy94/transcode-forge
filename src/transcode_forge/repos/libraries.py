@@ -17,14 +17,18 @@ async def create_library(
     enabled: bool = True,
     auto_scan: bool = False,
     scan_interval_hours: int = 24,
+    backend: str = "filesystem",
+    s3_bucket: str | None = None,
+    s3_prefix: str | None = None,
 ) -> str:
     """Create a new library. Returns library ID."""
     lib_id = str(uuid4())
     now = datetime.now(UTC).isoformat()
     await db.execute(
         """INSERT INTO libraries (id, name, media_type, path, quality_preset,
-            enabled, auto_scan, scan_interval_hours, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            enabled, auto_scan, scan_interval_hours, backend, s3_bucket,
+            s3_prefix, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             lib_id,
             name,
@@ -34,6 +38,9 @@ async def create_library(
             int(enabled),
             int(auto_scan),
             scan_interval_hours,
+            backend,
+            s3_bucket,
+            s3_prefix,
             now,
             now,
         ),

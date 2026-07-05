@@ -42,8 +42,26 @@
                 </select>
             </div>
             <div>
+                <label for="lib-backend" class="forge-stat-label block mb-1.5">Storage</label>
+                <select id="lib-backend" aria-label="Library storage backend" class="forge-select w-full">
+                    <option value="filesystem">Filesystem</option>
+                    <option value="s3">S3 Object Storage</option>
+                </select>
+            </div>
+            <div id="lib-path-field">
                 <label for="lib-path" class="forge-stat-label block mb-1.5">Path</label>
                 <input id="lib-path" type="text" placeholder="/media/movies" class="forge-input w-full">
+            </div>
+            <div id="lib-s3-fields" class="hidden flex-col gap-3">
+                <div>
+                    <label for="lib-s3-bucket" class="forge-stat-label block mb-1.5">Bucket</label>
+                    <input id="lib-s3-bucket" type="text" placeholder="forge-media" class="forge-input w-full">
+                </div>
+                <div>
+                    <label for="lib-s3-prefix" class="forge-stat-label block mb-1.5">Prefix (optional)</label>
+                    <input id="lib-s3-prefix" type="text" placeholder="masters/movies/" class="forge-input w-full">
+                </div>
+                <p class="forge-empty-hint">Endpoint and keys come from the scheduler's TF_S3_* environment.</p>
             </div>
             <div class="flex gap-3">
                 <div class="flex-1">

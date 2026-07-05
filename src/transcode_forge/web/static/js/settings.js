@@ -56,14 +56,29 @@ async function loadLibraries() {
     qual.innerHTML = qualHtml + '</tbody></table>';
 }
 
+function toggleBackendFields() {
+    const isS3 = document.getElementById('lib-backend').value === 's3';
+    document.getElementById('lib-path-field').classList.toggle('hidden', isS3);
+    const s3Fields = document.getElementById('lib-s3-fields');
+    s3Fields.classList.toggle('hidden', !isS3);
+    s3Fields.classList.toggle('flex', isS3);
+}
+
 async function addLibrary() {
+    const backend = document.getElementById('lib-backend').value;
     const body = {
         name: document.getElementById('lib-name').value,
         media_type: document.getElementById('lib-type').value,
-        path: document.getElementById('lib-path').value,
+        backend,
         quality_preset: parseInt(document.getElementById('lib-quality').value, 10),
         scan_interval_hours: parseInt(document.getElementById('lib-scan-interval').value, 10) || 24,
     };
+    if (backend === 's3') {
+        body.s3_bucket = document.getElementById('lib-s3-bucket').value;
+        body.s3_prefix = document.getElementById('lib-s3-prefix').value;
+    } else {
+        body.path = document.getElementById('lib-path').value;
+    }
     const resp = await fetch('/api/libraries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -343,6 +358,7 @@ const on = (id, evt, fn) => document.getElementById(id)?.addEventListener(evt, f
 
 on('add-lib-btn', 'click', () => document.getElementById('add-lib-modal').showModal());
 on('add-lib-save', 'click', addLibrary);
+on('lib-backend', 'change', toggleBackendFields);
 on('edit-lib-save', 'click', saveLibrary);
 on('save-tuning-btn', 'click', saveTuning);
 on('tune-default-codec', 'change', toggleAv1Warning);

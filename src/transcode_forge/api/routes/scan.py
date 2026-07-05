@@ -83,7 +83,7 @@ async def trigger_scan(
             )
         else:
             background_tasks.add_task(
-                _run_scan,
+                run_scan,
                 lib["id"],
                 lib["name"],
                 lib["path"],
@@ -99,7 +99,7 @@ async def trigger_scan(
     return ScanResponse(scan_ids=scan_ids)
 
 
-async def _run_scan(
+async def run_scan(
     library_id: str,
     library_name: str,
     library_path: str,
