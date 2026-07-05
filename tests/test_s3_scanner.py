@@ -679,3 +679,76 @@ class TestS3LibraryScan:
         # Only 1 file should be found (2 directories skipped)
         assert stats["files_found"] == 1
         assert stats["files_new"] == 1
+
+
+class TestS3ScanRecords:
+    """S3 scans must be visible in scan history — success AND failure.
+
+    Found live 2026-07-05: an S3 scan that failed on bad credentials left
+    NO scan record at all (the FS scanner owns its record; the S3 scanner
+    never did) — the UI showed a success toast and then nothing, anywhere.
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_writes_complete_scan_record(self, s3_config: Settings, db) -> None:
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+
+        mock_client = AsyncMock()
+        mock_paginator = AsyncMock()
+
+        async def mock_paginate(*args, **kwargs):
+            yield {}
+
+        mock_paginator.paginate = mock_paginate
+        mock_client.get_paginator = MagicMock(return_value=mock_paginator)
+        mock_session = MagicMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_client
+        mock_context.__aexit__.return_value = None
+        mock_session.client = MagicMock(return_value=mock_context)
+
+        with patch("transcode_forge.scanner.s3_scanner.Session", return_value=mock_session):
+            await scan_s3_library(
+                library_id="test-lib",
+                library_name="Cloud Movies",
+                bucket="test-bucket",
+                prefix="masters/",
+                config=s3_config,
+                db=db,
+            )
+
+        scans, total = await scan_repo.list_scans(db)
+        assert total == 1
+        assert scans[0].library == "Cloud Movies"
+        assert scans[0].status == ScanStatus.COMPLETE
+        assert scans[0].completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_failure_writes_failed_scan_record(self, s3_config: Settings, db) -> None:
+        """Any failure — including non-boto ones like the live endpoint
+        ValueError — must leave a FAILED scan record, then re-raise."""
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+
+        mock_session = MagicMock()
+        mock_session.client = MagicMock(
+            side_effect=ValueError("Invalid endpoint: https://s3..amazonaws.com")
+        )
+
+        with patch("transcode_forge.scanner.s3_scanner.Session", return_value=mock_session):
+            with pytest.raises(ValueError):
+                await scan_s3_library(
+                    library_id="test-lib",
+                    library_name="Cloud Movies",
+                    bucket="test-bucket",
+                    prefix="masters/",
+                    config=s3_config,
+                    db=db,
+                )
+
+        scans, total = await scan_repo.list_scans(db)
+        assert total == 1
+        assert scans[0].library == "Cloud Movies"
+        assert scans[0].status == ScanStatus.FAILED
+        assert scans[0].completed_at is not None

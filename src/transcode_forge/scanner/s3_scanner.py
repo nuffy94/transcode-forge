@@ -18,7 +18,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
+from transcode_forge.models.scan import Scan, ScanStatus
 from transcode_forge.repos import media as media_repo
+from transcode_forge.repos import scans as scan_repo
 from transcode_forge.s3compat import s3_client_config
 from transcode_forge.scanner.probe import ProbeError, ffprobe, is_video_file
 
@@ -61,6 +63,12 @@ async def scan_s3_library(
         Exception: On unrecoverable errors (logged and re-raised).
     """
     logger.info("Scanning S3 library '%s': bucket=%s, prefix=%s", library_name, bucket, prefix)
+
+    # The scanner owns its scan record (same contract as the filesystem
+    # scanner) so an S3 scan is never invisible — a failure before this
+    # point in older versions left NO record: success toast, then nothing.
+    scan = Scan(library=library_name)
+    await scan_repo.create_scan(db, scan)
 
     files_found = 0
     files_new = 0
@@ -173,12 +181,26 @@ async def scan_s3_library(
                         )
                         await db.commit()
 
-    except (ClientError, BotoCoreError) as e:
-        logger.exception("S3 scan failed (S3 error): %s", e)
+    except Exception as e:
+        # Not just boto errors — endpoint/credential parsing can raise
+        # ValueError before any S3 call. Whatever it was, the record must
+        # say FAILED before the exception continues up.
+        logger.exception("S3 scan failed for '%s': %s", library_name, e)
+        await scan_repo.update_scan(db, scan.id, status=ScanStatus.FAILED)
         raise
 
     # Commit final changes
     await db.commit()
+
+    await scan_repo.update_scan(
+        db,
+        scan.id,
+        files_found=files_found,
+        files_new=files_new,
+        files_updated=files_updated,
+        files_skipped=files_skipped,
+        status=ScanStatus.COMPLETE,
+    )
 
     logger.info(
         "S3 scan complete: found=%d new=%d updated=%d skipped=%d failed=%d",
