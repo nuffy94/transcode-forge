@@ -211,6 +211,7 @@ class HttpWorkerAgent:
                 error_message=f"Failed to fetch source: {e}",
                 retry_count=job.retry_count + 1,
             )
+            self._current_job_id = None
             return
 
         # Check for dedup/reuse opportunity (S3-only for now).
@@ -232,6 +233,7 @@ class HttpWorkerAgent:
                     dedup_result.get("derivative_key", "unknown"),
                 )
                 await storage.cleanup(job)
+                self._current_job_id = None
                 return
 
         async def on_progress(progress: float, speed: float | None) -> None:

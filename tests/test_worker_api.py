@@ -533,6 +533,226 @@ class TestJobOwnership:
         assert final.worker_id == worker_b
 
 
+class TestWorkerCrashRecovery:
+    """A worker restart (re-register with the same token) must release the
+    jobs it owned back to the queue (review item 12) — a crashed worker
+    has no in-memory pipeline state, so its jobs would otherwise sit in
+    an active status forever."""
+
+    async def test_reregister_requeues_assigned_job(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "crashy")
+
+            # Claim at the repo level so the job stays ASSIGNED — the HTTP
+            # claim endpoint immediately bumps to TRANSCODING.
+            claimed = await job_repo.claim_next_job(app.state.db, worker_id, ["hevc"])
+            assert claimed is not None and claimed.id == job.id
+            assert claimed.status == JobStatus.ASSIGNED
+
+            # Worker "crashes" and comes back: re-register with the same token.
+            rereg = await c.post(
+                "/api/worker/register",
+                json={"name": "crashy", "host": "h", "capabilities": ["cpu"]},
+                headers=headers,
+            )
+            assert rereg.status_code == 200
+            assert rereg.json()["worker_id"] == worker_id
+
+        requeued = await job_repo.get_job(app.state.db, job.id)
+        assert requeued is not None
+        assert requeued.status == JobStatus.QUEUED
+        assert requeued.worker_id is None
+        assert requeued.started_at is None
+        assert requeued.progress == 0.0
+
+    async def test_reregister_requeues_transcoding_job(self, client: AsyncClient, app):
+        """Late orphan: the job was already mid-encode (TRANSCODING, progress
+        reported) when the worker died."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "crashy2")
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.42},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+            rereg = await c.post(
+                "/api/worker/register",
+                json={"name": "crashy2", "host": "h", "capabilities": ["cpu"]},
+                headers=headers,
+            )
+            assert rereg.json()["worker_id"] == worker_id
+
+        requeued = await job_repo.get_job(app.state.db, job.id)
+        assert requeued is not None
+        assert requeued.status == JobStatus.QUEUED
+        assert requeued.worker_id is None
+        assert requeued.started_at is None
+        assert requeued.progress == 0.0
+
+    async def test_reregister_only_releases_own_active_jobs(self, client: AsyncClient, app):
+        """The release must be scoped: another worker's in-flight job and the
+        restarting worker's own finished jobs stay untouched."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job_a = await _seed_pending_job(app, "/m/a.mkv")
+        job_b = await _seed_pending_job(app, "/m/b.mkv")
+        job_done = await _seed_pending_job(app, "/m/done.mkv")
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers_a, worker_a = await _register_worker(client, c, "restarts")
+            headers_b, worker_b = await _register_worker(client, c, "steady")
+
+            # A finished job owned by the restarting worker.
+            await job_repo.update_job(
+                app.state.db, job_done.id, status=JobStatus.COMPLETE, worker_id=worker_a
+            )
+
+            claim_a = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_a}, headers=headers_a
+            )
+            assert claim_a.json()["job"]["id"] == job_a.id
+            claim_b = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_b}, headers=headers_b
+            )
+            assert claim_b.json()["job"]["id"] == job_b.id
+
+            await c.post(
+                "/api/worker/register",
+                json={"name": "restarts", "host": "h", "capabilities": ["cpu"]},
+                headers=headers_a,
+            )
+
+        released = await job_repo.get_job(app.state.db, job_a.id)
+        assert released.status == JobStatus.QUEUED
+        assert released.worker_id is None
+
+        untouched = await job_repo.get_job(app.state.db, job_b.id)
+        assert untouched.status == JobStatus.TRANSCODING
+        assert untouched.worker_id == worker_b
+
+        finished = await job_repo.get_job(app.state.db, job_done.id)
+        assert finished.status == JobStatus.COMPLETE
+        assert finished.worker_id == worker_a
+
+
+class TestJobFailureLifecycle:
+    """POST /api/worker/job/{id}/failed (review item 13)."""
+
+    async def test_failed_persists_error_and_ends_job(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "ffmpeg exited with code 1", "retry_count": 1},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+            # No longer active: nothing left for a worker to claim.
+            reclaim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert reclaim.json()["job"] is None
+
+        failed = await job_repo.get_job(app.state.db, job.id)
+        assert failed is not None
+        assert failed.status == JobStatus.FAILED
+        assert failed.retry_count == 1
+        assert failed.error_message == "ffmpeg exited with code 1"
+        assert failed.completed_at is not None
+        # FAILED is terminal — the path no longer has an active job.
+        assert await job_repo.job_exists_for_path(app.state.db, job.source_path) is False
+
+    async def test_retry_count_increments_across_failures(self, client: AsyncClient, app):
+        """Full fail → admin retry → fail-again loop: retry_count only grows
+        and the last error message wins."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+
+            # Attempt 1: claim and fail (the worker sends retry_count + 1).
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            first_retry = claim.json()["job"]["retry_count"] + 1
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "attempt 1 boom", "retry_count": first_retry},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+            # Admin retries via the real retry endpoint (re-queues + increments).
+            retry = await client.post(f"/api/jobs/{job.id}/retry")
+            assert retry.status_code == 200
+            requeued = await job_repo.get_job(app.state.db, job.id)
+            assert requeued.status == JobStatus.PENDING
+            assert requeued.retry_count > first_retry
+            assert requeued.error_message is None
+
+            # Attempt 2: claim and fail again.
+            claim2 = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim2.json()["job"]["id"] == job.id
+            second_retry = claim2.json()["job"]["retry_count"] + 1
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "attempt 2 boom", "retry_count": second_retry},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        final = await job_repo.get_job(app.state.db, job.id)
+        assert final.status == JobStatus.FAILED
+        assert final.retry_count == second_retry
+        assert final.retry_count > first_retry
+        assert final.error_message == "attempt 2 boom"
+
+
 class TestProgressChannelPrefix:
     """The progress publish channel must derive from the configurable
     redis_prefix — hardcoding it silently breaks live updates for any
