@@ -603,15 +603,13 @@ class TestWorkerInputBounds:
             )
             assert r.status_code == 422
 
-    async def test_error_message_over_limit_rejected(self, client: AsyncClient, app):
-        """FailedRequest.error_message is bounded at the boundary — an
-        oversized message is a 422, and the job's state is untouched. Real
-        workers never trip this: http_client.failed() truncates before
-        sending (see test_http_agent)."""
+    async def test_error_message_truncated_not_rejected(self, client: AsyncClient, app):
+        """A worker carrying a huge ffmpeg stderr dump must still be able to
+        mark its job failed — the message is truncated server-side, never
+        422'd (a lagging v0.9.x worker has no client-side truncation)."""
         from httpx import ASGITransport
         from httpx import AsyncClient as RawClient
 
-        from transcode_forge.models.job import JobStatus
         from transcode_forge.repos import jobs as job_repo
 
         job = await _seed_pending_job(app)
@@ -621,13 +619,13 @@ class TestWorkerInputBounds:
             await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
             r = await c.post(
                 f"/api/worker/job/{job.id}/failed",
-                json={"error_message": "x" * 10_001, "retry_count": 1},
+                json={"error_message": "x" * 50_000, "retry_count": 1},
                 headers=headers,
             )
-            assert r.status_code == 422
+            assert r.status_code == 204
 
-        current = await job_repo.get_job(app.state.db, job.id)
-        assert current.status == JobStatus.TRANSCODING
+        failed = await job_repo.get_job(app.state.db, job.id)
+        assert len(failed.error_message) == 10_000
 
     async def test_error_message_at_limit_accepted(self, client: AsyncClient, app):
         """A message exactly at the bound (what a truncating worker sends)

@@ -153,15 +153,16 @@ class CompleteRequest(BaseModel):
 
 
 # Worker-reported error messages can embed ffmpeg stderr; cap what we
-# accept and persist. The /failed DTO enforces the bound at the boundary
-# (422 on oversize) — the worker's http_client truncates before sending,
-# so a legitimate worker carrying a huge stderr dump never trips it. Keep
-# this constant in sync with worker/http_client.py.
+# persist. Truncated server-side (NOT rejected with 422) so any worker —
+# including a lagging v0.9.x one without client-side truncation — can
+# always mark its job failed; the error path must be maximally accepting.
+# The worker's http_client also truncates before sending (defense in
+# depth). Keep this constant in sync with worker/http_client.py.
 MAX_ERROR_MESSAGE_LEN = 10_000
 
 
 class FailedRequest(BaseModel):
-    error_message: str = Field(max_length=MAX_ERROR_MESSAGE_LEN)
+    error_message: str
     retry_count: int = Field(default=0, ge=0)
 
 
