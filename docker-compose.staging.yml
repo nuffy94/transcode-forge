@@ -1,0 +1,99 @@
+# Transcode Forge — throwaway STAGING stack for pre-release smoke tests.
+#
+# Purpose: bring the real code up end-to-end (scheduler + a software worker),
+# push ONE real file through the pipeline, confirm it encodes, then tear it
+# down. This is the manual release gate — "one real encode before you tag."
+# (CI already runs a synthetic real-ffmpeg encode on every push; see
+# tests/test_pipeline_integration.py. This is the with-real-media version.)
+#
+# Minimal on purpose: SQLite instead of Postgres, a scratch library instead
+# of your real media, one CPU (software) worker. Isolated from your dev/prod
+# stacks by the project name below — its own containers and volumes.
+#
+# Full walkthrough: docs/STAGING.md
+#
+# Quick start:
+#     docker compose -f docker-compose.staging.yml up -d --build
+#     # open http://localhost:8001 → set admin password
+#     # Settings → Workers → issue a token, put it in .env.staging:
+#     #     echo "TF_WORKER_TOKEN=<token>" > .env.staging
+#     docker compose -f docker-compose.staging.yml --profile worker \
+#         --env-file .env.staging up -d --build
+#     # drop a test file in ./staging-media/movies, scan + queue it, watch it encode
+#     docker compose -f docker-compose.staging.yml --profile worker down -v   # tear down
+
+name: transcode-forge-staging
+
+services:
+  redis:
+    image: redis:7-alpine
+    # No host port — internal network only. Required: outside demo mode the
+    # scheduler fails to start if Redis is unreachable.
+    command: redis-server --save "" --loglevel warning  # ephemeral, no persistence
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    ports:
+      # Defaults to 8001 so it never collides with a dev instance on 8000.
+      - "${TF_STAGING_BIND:-127.0.0.1}:${TF_STAGING_PORT:-8001}:8000"
+    environment:
+      # SQLite on a named volume — single writer (workers are HTTP-only and
+      # never touch the DB), so no multi-writer/NFS concerns here.
+      TF_DB_URL: "sqlite:////data/staging.db"
+      TF_REDIS_URL: "redis://redis:6379/0"
+      TF_REDIS_PREFIX: "tfstaging"
+      TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
+      # Pinned so worker tokens + admin sessions survive restarts. Unpinned
+      # (random per boot) silently revokes every worker token on restart.
+      # Staging-only throwaway value — never reuse in prod.
+      TF_AUTH_SECRET: "${TF_AUTH_SECRET:-staging-insecure-do-not-use-in-prod}"
+      TF_LIBRARY_MOVIES: "/media/movies"
+      TF_LIBRARY_TV: "/media/tv"
+    volumes:
+      - staging-db:/data
+      # Scratch library — throwaway test media, NOT your real drives.
+      - "${TF_STAGING_MEDIA:-./staging-media}/movies:/media/movies:ro"
+      - "${TF_STAGING_MEDIA:-./staging-media}/tv:/media/tv:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    # Behind the 'worker' profile so `up` starts only scheduler + redis first
+    # (you can't have a token before the scheduler exists). Issue a token in
+    # the UI, then bring the worker up with `--profile worker`.
+    profiles: ["worker"]
+    build: .
+    command: ["python", "-m", "transcode_forge.worker"]
+    environment:
+      TF_SERVER_URL: "http://scheduler:8000"
+      TF_WORKER_TOKEN: "${TF_WORKER_TOKEN:?issue a token in Settings -> Workers and put it in .env.staging}"
+      TF_WORKER_NAME: "staging-cpu"
+      # Software only — no /dev/dri passthrough, so it advertises the CPU
+      # backend (libx265 / libsvtav1). VMAF ffmpeg is baked into the image
+      # (TF_VMAF_FFMPEG=/opt/ffmpeg-vmaf/ffmpeg), so the quality gate runs.
+      TF_PREFERRED_BACKEND: "cpu"
+    volumes:
+      # Workers do the writes — RW mount of the same scratch library.
+      - "${TF_STAGING_MEDIA:-./staging-media}/movies:/media/movies:rw"
+      - "${TF_STAGING_MEDIA:-./staging-media}/tv:/media/tv:rw"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  staging-db:
