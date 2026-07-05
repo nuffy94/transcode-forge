@@ -603,9 +603,35 @@ class TestWorkerInputBounds:
             )
             assert r.status_code == 422
 
-    async def test_error_message_truncated_not_rejected(self, client: AsyncClient, app):
-        """A worker carrying a huge ffmpeg stderr dump must still be able to
-        mark its job failed — the message is truncated server-side."""
+    async def test_error_message_over_limit_rejected(self, client: AsyncClient, app):
+        """FailedRequest.error_message is bounded at the boundary — an
+        oversized message is a 422, and the job's state is untouched. Real
+        workers never trip this: http_client.failed() truncates before
+        sending (see test_http_agent)."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "w")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "x" * 10_001, "retry_count": 1},
+                headers=headers,
+            )
+            assert r.status_code == 422
+
+        current = await job_repo.get_job(app.state.db, job.id)
+        assert current.status == JobStatus.TRANSCODING
+
+    async def test_error_message_at_limit_accepted(self, client: AsyncClient, app):
+        """A message exactly at the bound (what a truncating worker sends)
+        still marks the job failed."""
         from httpx import ASGITransport
         from httpx import AsyncClient as RawClient
 
@@ -618,10 +644,88 @@ class TestWorkerInputBounds:
             await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
             r = await c.post(
                 f"/api/worker/job/{job.id}/failed",
-                json={"error_message": "x" * 50_000, "retry_count": 1},
+                json={"error_message": "x" * 10_000, "retry_count": 1},
                 headers=headers,
             )
             assert r.status_code == 204
 
         failed = await job_repo.get_job(app.state.db, job.id)
         assert len(failed.error_message) == 10_000
+
+
+class TestTokenRebindGuard:
+    """A leaked token can't silently rebind to a second machine (review
+    item 16) — while the bound worker is live, a different machine identity
+    is rejected with 409. Crash recovery (same identity) and legitimate
+    re-provisioning (bound worker gone silent) still work."""
+
+    async def test_second_machine_gets_409_while_worker_live(self, client: AsyncClient, app):
+        from transcode_forge.repos import workers as worker_repo
+
+        issue = await client.post("/api/worker-tokens", json={"label": "shared"})
+        token = issue.json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        reg = await client.post(
+            "/api/worker/register",
+            json={"name": "legit", "host": "host-a", "capabilities": ["cpu"]},
+            headers=headers,
+        )
+        assert reg.status_code == 200
+        worker_id = reg.json()["worker_id"]
+
+        # A different machine presents the same token while 'legit' is live.
+        hijack = await client.post(
+            "/api/worker/register",
+            json={"name": "evil", "host": "host-b", "capabilities": ["cpu"]},
+            headers=headers,
+        )
+        assert hijack.status_code == 409
+
+        # The legitimate worker's row and the token binding are untouched.
+        worker = await worker_repo.get_worker(app.state.db, worker_id)
+        assert (worker.name, worker.host) == ("legit", "host-a")
+        row = await token_repo.find_active(app.state.db, token)
+        assert row["worker_id"] == worker_id
+
+    async def test_same_machine_re_register_still_works(self, client: AsyncClient):
+        """Crash recovery: the same identity re-registers and keeps its
+        worker_id (the existing orphan-job release semantics depend on it)."""
+        issue = await client.post("/api/worker-tokens", json={"label": "cr"})
+        headers = {"Authorization": f"Bearer {issue.json()['token']}"}
+        body = {"name": "node", "host": "host-a", "capabilities": ["cpu"]}
+        first = await client.post("/api/worker/register", json=body, headers=headers)
+        second = await client.post("/api/worker/register", json=body, headers=headers)
+        assert second.status_code == 200
+        assert second.json()["worker_id"] == first.json()["worker_id"]
+
+    async def test_rebind_allowed_once_bound_worker_goes_silent(self, client: AsyncClient, app):
+        """A re-provisioned machine (new name/host, same token) may take
+        over the binding once the previous worker's heartbeat is stale —
+        otherwise recreating a Docker worker would brick its token."""
+        from transcode_forge.repos import workers as worker_repo
+
+        issue = await client.post("/api/worker-tokens", json={"label": "mv"})
+        headers = {"Authorization": f"Bearer {issue.json()['token']}"}
+        reg = await client.post(
+            "/api/worker/register",
+            json={"name": "old-box", "host": "host-a", "capabilities": ["cpu"]},
+            headers=headers,
+        )
+        worker_id = reg.json()["worker_id"]
+
+        # The old worker goes silent (stale heartbeat).
+        old_iso = "2020-01-01T00:00:00+00:00"
+        await app.state.db.execute(
+            "UPDATE workers SET last_heartbeat = ? WHERE id = ?", (old_iso, worker_id)
+        )
+        await app.state.db.commit()
+
+        takeover = await client.post(
+            "/api/worker/register",
+            json={"name": "new-box", "host": "host-b", "capabilities": ["cpu"]},
+            headers=headers,
+        )
+        assert takeover.status_code == 200
+        assert takeover.json()["worker_id"] == worker_id  # binding continuity
+        worker = await worker_repo.get_worker(app.state.db, worker_id)
+        assert (worker.name, worker.host) == ("new-box", "host-b")

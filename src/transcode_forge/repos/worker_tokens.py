@@ -84,13 +84,33 @@ async def find_active(db: DBConnection, token: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-async def link_worker(db: DBConnection, token_hash: str, worker_id: str) -> None:
-    """Bind a worker_id to a token (called on first /register)."""
-    await db.execute(
-        "UPDATE worker_tokens SET worker_id = ? WHERE token_hash = ?",
-        (worker_id, token_hash),
-    )
+async def link_worker(
+    db: DBConnection,
+    token_hash: str,
+    worker_id: str,
+    *,
+    expected_worker_id: str | None = None,
+) -> bool:
+    """Bind a worker_id to a token (called on first /register).
+
+    Compare-and-set: the UPDATE only fires if the token's current binding
+    still matches ``expected_worker_id`` (None = not yet bound). Two
+    machines racing to register with the same leaked token can't both win —
+    the loser's conditional UPDATE matches zero rows and this returns False,
+    which the registration endpoint turns into a 409.
+    """
+    if expected_worker_id is None:
+        cur = await db.execute(
+            "UPDATE worker_tokens SET worker_id = ? WHERE token_hash = ? AND worker_id IS NULL",
+            (worker_id, token_hash),
+        )
+    else:
+        cur = await db.execute(
+            "UPDATE worker_tokens SET worker_id = ? WHERE token_hash = ? AND worker_id = ?",
+            (worker_id, token_hash, expected_worker_id),
+        )
     await db.commit()
+    return bool(cur.rowcount)
 
 
 async def touch(db: DBConnection, token: str) -> None:
