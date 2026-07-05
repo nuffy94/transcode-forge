@@ -115,7 +115,7 @@
         <input type="hidden" id="queue-sort" name="sort" value="created_at">
         <input type="hidden" id="queue-dir" name="dir" value="desc">
 
-        <div id="job-table-container"
+        <div id="job-table-container" class="forge-scroll"
              hx-get="/partials/jobs"
              hx-trigger="load, refresh, every 5s"
              hx-swap="innerHTML"

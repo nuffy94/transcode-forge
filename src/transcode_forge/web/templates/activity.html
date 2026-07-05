@@ -76,7 +76,7 @@
             <input type="hidden" id="outcomes-sort" name="sort" value="created_at">
             <input type="hidden" id="outcomes-dir" name="dir" value="desc">
 
-            <div id="outcomes-container"
+            <div id="outcomes-container" class="forge-scroll"
                  hx-get="/partials/activity-outcomes"
                  hx-trigger="load, refresh, every 15s"
                  hx-swap="innerHTML"
@@ -121,7 +121,7 @@
             <input type="hidden" id="skip-sort" name="sort" value="updated_at">
             <input type="hidden" id="skip-dir" name="dir" value="desc">
 
-            <div id="skipped-container"
+            <div id="skipped-container" class="forge-scroll"
                  hx-get="/partials/activity-skips"
                  hx-trigger="load, refresh"
                  hx-swap="innerHTML"
