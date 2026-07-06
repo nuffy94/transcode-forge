@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tests.helpers import make_probe, register_worker
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import libraries as lib_repo
@@ -132,16 +133,8 @@ async def _seed_h264_file(db, path: str = "/media/movies/film.mkv") -> str:
     )
 
 
-async def _register_worker(client, worker_client, label: str, supported_codecs=None):
-    """Issue a token and register a worker; returns (headers, worker_id)."""
-    issue = await client.post("/api/worker-tokens", json={"label": label})
-    headers = {"Authorization": f"Bearer {issue.json()['token']}"}
-    body = {"name": label, "host": "h", "capabilities": ["cpu"]}
-    if supported_codecs is not None:
-        body["supported_codecs"] = supported_codecs
-    reg = await worker_client.post("/api/worker/register", json=body, headers=headers)
-    assert reg.status_code == 200
-    return headers, reg.json()["worker_id"]
+# Shared across test modules — one home in tests/helpers.py.
+_register_worker = register_worker
 
 
 # ── D1 — per-job codec selection at queue time ──────────────────────────────────────
@@ -340,17 +333,7 @@ async def test_worker_without_supported_codecs_defaults_to_hevc(client: AsyncCli
 # ── D5 — VMAF quality gate (the never-degrade guarantee) ─────────────────────────────
 
 
-def _mock_probe(codec: str = "hevc"):
-    from transcode_forge.scanner.probe import ProbeResult
-
-    return ProbeResult(
-        video_codec=codec,
-        width=1920,
-        height=1080,
-        bitrate=5_000_000,
-        duration=3600.0,
-        file_size=5000,
-    )
+_mock_probe = make_probe  # shared in tests/helpers.py
 
 
 async def _mock_encode_ok(cmd, total_duration, progress_callback=None):

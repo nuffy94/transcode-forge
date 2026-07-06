@@ -48,7 +48,11 @@ async def update_tuning(
     Validation happens per key in the settings repo; the first invalid
     entry rejects the whole request so partial writes don't happen silently.
 
-    Cross-field rules for the VMAF knobs (vmaf-decoupling spec §4.6):
+    Cross-field rules for the VMAF knobs (vmaf-decoupling spec §4.6),
+    enforced ONLY when the request touches the involved keys — a save
+    that edits an unrelated setting must never be blocked by floor state
+    it didn't change (pre-existing incoherence is a boot/env problem,
+    caught by config.py's validator):
     - HARD: safety perc5 > safety mean is rejected — per-frame perc5 can
       never exceed the mean, so that gate would be incoherent.
     - SOFT: target below the safety mean is allowed but flagged in the
@@ -80,25 +84,29 @@ async def update_tuning(
             return float(getattr(settings or get_settings(), key))
         return float(await settings_repo.effective(db, key, settings))
 
-    safety_mean = await prospective("vmaf_safety_mean")
-    safety_perc5 = await prospective("vmaf_safety_perc5")
-    if safety_perc5 > safety_mean:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"VMAF safety perc5 floor ({safety_perc5:g}) cannot exceed the "
-                f"safety mean floor ({safety_mean:g}) — worst-scenes scores are "
-                "always at or below the mean."
-            ),
-        )
+    touched = body.values.keys()
+    if {"vmaf_safety_mean", "vmaf_safety_perc5"} & touched:
+        safety_mean = await prospective("vmaf_safety_mean")
+        safety_perc5 = await prospective("vmaf_safety_perc5")
+        if safety_perc5 > safety_mean:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"VMAF safety perc5 floor ({safety_perc5:g}) cannot exceed the "
+                    f"safety mean floor ({safety_mean:g}) — worst-scenes scores are "
+                    "always at or below the mean."
+                ),
+            )
     warning: str | None = None
-    target = await prospective("target_vmaf")
-    if target < safety_mean:
-        warning = (
-            f"Target VMAF ({target:g}) is below the safety mean floor "
-            f"({safety_mean:g}) — the CRF search will aim below the gate's "
-            "refuse bar and most encodes will be skipped."
-        )
+    if {"target_vmaf", "vmaf_safety_mean"} & touched:
+        safety_mean = await prospective("vmaf_safety_mean")
+        target = await prospective("target_vmaf")
+        if target < safety_mean:
+            warning = (
+                f"Target VMAF ({target:g}) is below the safety mean floor "
+                f"({safety_mean:g}) — the CRF search will aim below the gate's "
+                "refuse bar and most encodes will be skipped."
+            )
 
     for key, value in body.values.items():
         if value is None or value == "":
