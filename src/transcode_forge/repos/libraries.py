@@ -115,6 +115,10 @@ async def update_library(db: DBConnection, lib_id: str, **fields: object) -> dic
 
 
 async def delete_library(db: DBConnection, lib_id: str) -> bool:
+    # media_files.library_id (migration 0001) has no ON DELETE CASCADE, so
+    # cataloged rows must go first or the FK turns every delete of a scanned
+    # library into a 500. One commit covers both statements.
+    await db.execute("DELETE FROM media_files WHERE library_id = ?", (lib_id,))
     cur = await db.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     await db.commit()
     result: bool = cur.rowcount > 0

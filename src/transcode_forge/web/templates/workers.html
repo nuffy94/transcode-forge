@@ -135,7 +135,7 @@
             <!-- Live token status -->
             <div id="add-worker-live-status" class="hidden">
                 <p class="forge-stat-label mb-3">Step 3 — waiting for the worker to connect…</p>
-                <div id="add-worker-tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+                <div id="add-worker-tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, refresh, every 5s" hx-swap="innerHTML"></div>
             </div>
         </div>
     </section>
@@ -146,7 +146,7 @@
             <h2 class="forge-panel-title">Worker tokens</h2>
             <span class="ml-auto font-mono text-2xs text-forge-mute">revoking cuts the worker off at its next request</span>
         </div>
-        <div id="tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        <div id="tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, refresh, every 10s" hx-swap="innerHTML">
             <div class="forge-empty py-6">{{ icon('loader', 'forge-icon--spin') }}</div>
         </div>
     </section>
