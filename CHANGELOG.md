@@ -4,6 +4,42 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-07-06
+
+### Changed
+- **VMAF gate decoupled from the CRF-search target.** The full-file gate
+  is now two absolute safety floors — mean ≥ `TF_VMAF_SAFETY_MEAN` (90)
+  AND worst-scenes perc5 ≥ `TF_VMAF_SAFETY_PERC5` (85) — instead of
+  bars derived from `target_vmaf`. Sample-based CRF searches
+  systematically overestimate full-file scores (+3 mean / +7 perc5
+  measured on real content), so the old target-derived gate rejected
+  good encodes wholesale (93% skip on a live batch). The search itself
+  is unchanged; a job with no target VMAF still runs no search and no
+  gate.
+- **`TF_VMAF_MIN_FLOOR` is retired and no longer read.** If you had
+  tightened it, set the new absolute floors instead — note they are
+  "refuse to keep" bars, not quality goals, so port intent, not the
+  number. An incoherent pair (perc5 floor above mean floor) now fails
+  fast at boot, and the Settings page cross-validates (hard-rejects an
+  impossible pair, warns when the target aims below the mean floor).
+
+### Added
+- Sample-vs-full-file measurement loop persisted on every terminal
+  path (migration 0009, additive): the search's winning predictions
+  (`predicted_vmaf_mean/perc5`) and the full-file `achieved_vmaf_perc5`
+  are stored on completes AND skips; skips now also carry
+  `resolved_crf`/`backend_used`. The file drawer shows predicted vs
+  achieved so a skip explains itself.
+- QA L3 exploratory sweep v2 (isolated instances, durable results) and
+  six UX fixes it caught, locked into the L2 suite.
+
+### Compatibility
+- Additive worker API only: v0.9.x workers keep working against this
+  scheduler (their jobs simply lack the new diagnostics, and their gate
+  stays target-coupled until upgraded — upgrade workers promptly to get
+  the fixed gate). Rollback-safe: v0.9.x binaries run against the
+  migrated schema.
+
 ## [0.9.2] - 2026-07-05
 
 ### Fixed
