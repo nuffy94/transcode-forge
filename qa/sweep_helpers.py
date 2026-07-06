@@ -22,12 +22,16 @@ Usage from an agent's scenario script (run from the repo root):
 from __future__ import annotations
 
 import contextlib
+import os
 import pathlib
 from collections.abc import Iterator
 
 from playwright.sync_api import Page, sync_playwright
 
-SHOTS = pathlib.Path(__file__).parent / "shots"
+# Screenshots land in the current run's directory when the sweep sets
+# QA_RUN_DIR (qa/runs/<run>/shots); bare qa/shots otherwise (back-compat).
+_run_dir = os.environ.get("QA_RUN_DIR")
+SHOTS = pathlib.Path(_run_dir) / "shots" if _run_dir else pathlib.Path(__file__).parent / "shots"
 
 
 @contextlib.contextmanager
