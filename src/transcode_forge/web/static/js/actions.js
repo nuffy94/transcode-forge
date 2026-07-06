@@ -45,7 +45,7 @@ export async function unskipFile(path, refreshTargetId) {
         }
         showToast('Removed from skip list — will retry on next scan', 'success');
         if (refreshTargetId && window.htmx) {
-            htmx.trigger('#' + refreshTargetId, 'load');
+            htmx.trigger('#' + refreshTargetId, 'refresh');
         }
     } catch (e) {
         showToast('Unskip failed: ' + e.message, 'error');

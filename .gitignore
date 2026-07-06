@@ -63,6 +63,7 @@ htmlcov/
 !/qa/sweep_helpers.py
 !/qa/scenarios.md
 !/qa/ux-sweep.workflow.js
+!/qa/launch_demo.py
 /qa_sweep_live.db*
 /dashboard.png
 /movies.png

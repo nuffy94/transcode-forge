@@ -85,6 +85,44 @@ class TestLibrariesEndpoint:
         assert lib["s3_prefix"] == "masters/movies/"
         assert lib["path"] == "s3://forge-media/masters/movies/"
 
+    async def test_delete_scanned_library_succeeds(self, client: AsyncClient, app):
+        """QA sweep H1: deleting a library that has cataloged files 500'd —
+        media_files.library_id has no ON DELETE CASCADE (migration 0001), so
+        the bare library delete hit the FK. Once scanned, a library was
+        un-removable from the UI. The repo must remove cataloged rows with
+        the library."""
+        from transcode_forge.repos import media as media_repo
+
+        created = await client.post(
+            "/api/libraries",
+            json={"name": "Scanned Lib", "media_type": "movies", "path": "/tmp/scanned-lib"},
+        )
+        lib_id = created.json()["data"]["id"]
+        await media_repo.upsert_media_file(
+            app.state.db,
+            library_id=lib_id,
+            file_path="/tmp/scanned-lib/movie.mkv",
+            filename="movie.mkv",
+            video_codec="h264",
+            audio_codec="aac",
+            resolution="1920x1080",
+            width=1920,
+            height=1080,
+            bitrate=5_000_000,
+            duration=3600.0,
+            file_size=2_000_000_000,
+            file_modified_at="2026-07-01T00:00:00+00:00",
+        )
+
+        resp = await client.delete(f"/api/libraries/{lib_id}")
+        assert resp.status_code == 200
+
+        async with app.state.db.execute(
+            "SELECT COUNT(*) FROM media_files WHERE library_id = ?", (lib_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        assert row[0] == 0, "cataloged rows must be removed with their library"
+
     async def test_library_scan_dispatches_s3_scanner(self, client: AsyncClient, monkeypatch):
         """The per-library Scan button must route S3 libraries to the S3
         scanner, not the filesystem scanner (which would FAIL on s3:// paths)."""
