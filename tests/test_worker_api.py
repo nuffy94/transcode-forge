@@ -2,6 +2,7 @@
 
 from httpx import AsyncClient
 
+from tests.helpers import register_worker
 from transcode_forge.repos import worker_tokens as token_repo
 
 
@@ -299,17 +300,8 @@ async def _seed_pending_job(app, source_path: str = "/m/own.mkv"):
     return job
 
 
-async def _register_worker(client, worker_client, label: str):
-    """Issue a token and register a worker with it; returns (headers, worker_id)."""
-    issue = await client.post("/api/worker-tokens", json={"label": label})
-    headers = {"Authorization": f"Bearer {issue.json()['token']}"}
-    reg = await worker_client.post(
-        "/api/worker/register",
-        json={"name": label, "host": "h", "capabilities": ["cpu"]},
-        headers=headers,
-    )
-    assert reg.status_code == 200
-    return headers, reg.json()["worker_id"]
+# Shared across test modules — one home in tests/helpers.py.
+_register_worker = register_worker
 
 
 class TestWorkerIdentityEnforcement:

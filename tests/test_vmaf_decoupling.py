@@ -10,12 +10,14 @@ don't shift. Predictions + full-file perc5 are persisted on every
 terminal path so the sample-vs-full-file gap stays measurable.
 """
 
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tests.helpers import make_probe, register_worker
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.worker.pipeline import (
@@ -24,19 +26,6 @@ from transcode_forge.worker.pipeline import (
     run_pipeline,
 )
 from transcode_forge.worker.vmaf import QualitySearchResult, VmafScore
-
-
-def _mock_probe(codec: str = "hevc"):
-    from transcode_forge.scanner.probe import ProbeResult
-
-    return ProbeResult(
-        video_codec=codec,
-        width=1920,
-        height=1080,
-        bitrate=5_000_000,
-        duration=3600.0,
-        file_size=5000,
-    )
 
 
 def _mock_encode(output_bytes: int):
@@ -59,18 +48,37 @@ def _vmaf(mean: float, perc5: float):
     return measure
 
 
-def _pipeline_patches(*, encode_bytes: int = 5000, measured: tuple[float, float] | None = None):
-    patches = [
-        patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode(encode_bytes)),
-        patch("transcode_forge.worker.pipeline.ffprobe", return_value=_mock_probe()),
-        patch("transcode_forge.worker.pipeline._decode_check"),
-        patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
-    ]
-    if measured is not None:
-        patches.append(
-            patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=_vmaf(*measured))
+@contextmanager
+def _pipeline_patches(
+    *,
+    encode_bytes: int = 5000,
+    measured: tuple[float, float] | None = None,
+    search: AsyncMock | None = None,
+):
+    """Patch the pipeline's externals (encode, probe, decode check, libvmaf,
+    optionally measurement + CRF search) for the duration of a test."""
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode(encode_bytes)
+            )
         )
-    return patches
+        stack.enter_context(
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=make_probe())
+        )
+        stack.enter_context(patch("transcode_forge.worker.pipeline._decode_check"))
+        stack.enter_context(
+            patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True))
+        )
+        if measured is not None:
+            stack.enter_context(
+                patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=_vmaf(*measured))
+            )
+        if search is not None:
+            stack.enter_context(
+                patch("transcode_forge.worker.pipeline.find_quality_for_target", search)
+            )
+        yield stack
 
 
 async def _run(source: Path, **kwargs):
@@ -87,6 +95,12 @@ async def _run(source: Path, **kwargs):
     return await run_pipeline(**defaults)
 
 
+def _search_mock() -> AsyncMock:
+    return AsyncMock(
+        return_value=QualitySearchResult(quality=18, predicted_mean=97.1, predicted_perc5=95.3)
+    )
+
+
 # ── The gate is decoupled from the target ────────────────────────────────
 
 
@@ -99,11 +113,7 @@ class TestFloorsOnlyGate:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(measured=(93.3, 88.1)):
-                stack.enter_context(p)
+        with _pipeline_patches(measured=(93.3, 88.1)):
             result = await _run(source, target_vmaf=97.0)
 
         assert result["vmaf_mean"] == 93.3
@@ -115,11 +125,7 @@ class TestFloorsOnlyGate:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(measured=(89.0, 88.0)):
-                stack.enter_context(p)
+        with _pipeline_patches(measured=(89.0, 88.0)):
             with pytest.raises(VmafGateError) as exc_info:
                 await _run(source, target_vmaf=97.0)
 
@@ -131,11 +137,7 @@ class TestFloorsOnlyGate:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(measured=(96.0, 84.0)):
-                stack.enter_context(p)
+        with _pipeline_patches(measured=(96.0, 84.0)):
             with pytest.raises(VmafGateError) as exc_info:
                 await _run(source, target_vmaf=97.0)
 
@@ -147,11 +149,7 @@ class TestFloorsOnlyGate:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches():
-                stack.enter_context(p)
+        with _pipeline_patches() as stack:
             measure = stack.enter_context(
                 patch("transcode_forge.worker.pipeline.measure_vmaf", AsyncMock())
             )
@@ -172,22 +170,12 @@ class TestSearchUnchangedAndPredictionsPersist:
         the pipeline result for persistence."""
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
+        search = _search_mock()
 
-        search_mock = AsyncMock(
-            return_value=QualitySearchResult(quality=18, predicted_mean=97.1, predicted_perc5=95.3)
-        )
-
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(measured=(93.3, 88.1)):
-                stack.enter_context(p)
-            stack.enter_context(
-                patch("transcode_forge.worker.pipeline.find_quality_for_target", search_mock)
-            )
+        with _pipeline_patches(measured=(93.3, 88.1), search=search):
             result = await _run(source, target_vmaf=97.0, crf_search=True)
 
-        kwargs = search_mock.await_args.kwargs
+        kwargs = search.await_args.kwargs
         assert kwargs["target_vmaf"] == 97.0
         assert kwargs["perc5_floor"] == 95.0  # target - 2, the historical search bar
         assert result["predicted_vmaf_mean"] == 97.1
@@ -200,18 +188,7 @@ class TestSearchUnchangedAndPredictionsPersist:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        search_mock = AsyncMock(
-            return_value=QualitySearchResult(quality=18, predicted_mean=97.1, predicted_perc5=95.3)
-        )
-
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(measured=(88.0, 80.0)):
-                stack.enter_context(p)
-            stack.enter_context(
-                patch("transcode_forge.worker.pipeline.find_quality_for_target", search_mock)
-            )
+        with _pipeline_patches(measured=(88.0, 80.0), search=_search_mock()):
             with pytest.raises(VmafGateError) as exc_info:
                 await _run(source, target_vmaf=97.0, crf_search=True)
 
@@ -228,18 +205,7 @@ class TestSearchUnchangedAndPredictionsPersist:
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
-        search_mock = AsyncMock(
-            return_value=QualitySearchResult(quality=18, predicted_mean=97.1, predicted_perc5=95.3)
-        )
-
-        from contextlib import ExitStack
-
-        with ExitStack() as stack:
-            for p in _pipeline_patches(encode_bytes=20000):  # bigger than source
-                stack.enter_context(p)
-            stack.enter_context(
-                patch("transcode_forge.worker.pipeline.find_quality_for_target", search_mock)
-            )
+        with _pipeline_patches(encode_bytes=20000, search=_search_mock()):  # bigger than source
             with pytest.raises(SizeRegressionError) as exc_info:
                 await _run(source, target_vmaf=97.0, crf_search=True)
 
@@ -265,24 +231,12 @@ async def _seed_pending_job(app, source_path: str = "/m/loop.mkv") -> Job:
     return job
 
 
-async def _register_worker(client, worker_client, label: str):
-    issue = await client.post("/api/worker-tokens", json={"label": label})
-    headers = {"Authorization": f"Bearer {issue.json()['token']}"}
-    reg = await worker_client.post(
-        "/api/worker/register",
-        json={"name": label, "host": "h", "capabilities": ["cpu"]},
-        headers=headers,
-    )
-    assert reg.status_code == 200
-    return headers, reg.json()["worker_id"]
-
-
 class TestMeasurementLoopPersistence:
     async def test_complete_persists_predictions_and_perc5(self, client: AsyncClient, app):
         job = await _seed_pending_job(app)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            headers, worker_id = await _register_worker(client, c, "loop-w")
+            headers, worker_id = await register_worker(client, c, "loop-w")
             r = await c.post(
                 "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
             )
@@ -317,7 +271,7 @@ class TestMeasurementLoopPersistence:
         job = await _seed_pending_job(app, "/m/skip.mkv")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            headers, worker_id = await _register_worker(client, c, "skip-w")
+            headers, worker_id = await register_worker(client, c, "skip-w")
             await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
 
             r = await c.post(
@@ -349,7 +303,7 @@ class TestMeasurementLoopPersistence:
         job = await _seed_pending_job(app, "/m/old.mkv")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            headers, worker_id = await _register_worker(client, c, "old-w")
+            headers, worker_id = await register_worker(client, c, "old-w")
             await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
 
             r = await c.post(
@@ -374,7 +328,7 @@ class TestMeasurementLoopPersistence:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
-            headers, worker_id = await _register_worker(client, c, "stamp-w")
+            headers, worker_id = await register_worker(client, c, "stamp-w")
             r = await c.post(
                 "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
             )
@@ -404,6 +358,23 @@ class TestSettingsValidation:
         r = await client.put("/api/settings/tuning", json={"values": {"vmaf_safety_perc5": "88"}})
         assert r.status_code == 400
 
+    async def test_unrelated_save_not_blocked_by_preexisting_floor_state(
+        self, client: AsyncClient, app
+    ):
+        """Review finding: the cross-check must only gate saves that touch
+        the floor keys — a codec-only save must succeed even if stored
+        floor state is incoherent (that's a boot/env problem, not this
+        request's)."""
+        from transcode_forge.repos import settings as settings_repo
+
+        # Force incoherent stored state via the repo (per-key validation
+        # alone can't see the pair).
+        await settings_repo.set_override(app.state.db, "vmaf_safety_perc5", "95")
+
+        r = await client.put("/api/settings/tuning", json={"values": {"default_codec": "av1"}})
+        assert r.status_code == 200
+        assert r.json()["overrides"]["default_codec"] == "av1"
+
     async def test_target_below_safety_mean_warns_but_saves(self, client: AsyncClient):
         r = await client.put("/api/settings/tuning", json={"values": {"target_vmaf": "85"}})
         assert r.status_code == 200
@@ -419,3 +390,23 @@ class TestSettingsValidation:
     async def test_retired_min_floor_knob_not_editable(self, client: AsyncClient):
         r = await client.put("/api/settings/tuning", json={"values": {"vmaf_min_floor": "95"}})
         assert r.status_code == 400
+
+
+class TestConfigPairValidation:
+    def test_incoherent_env_floor_pair_fails_at_boot(self):
+        """Review finding: TF_VMAF_SAFETY_PERC5 > TF_VMAF_SAFETY_MEAN must
+        fail fast at boot — the likeliest source is porting the retired
+        TF_VMAF_MIN_FLOOR=95 onto the new perc5 knob, which would silently
+        re-create the mass-skip storm the decoupling fixed."""
+        from pydantic import ValidationError
+
+        from transcode_forge.config import Settings
+
+        with pytest.raises(ValidationError, match="cannot exceed"):
+            Settings(vmaf_safety_perc5=95.0)  # mean stays at the 90 default
+
+    def test_coherent_pair_boots(self):
+        from transcode_forge.config import Settings
+
+        s = Settings(vmaf_safety_mean=95.0, vmaf_safety_perc5=95.0)
+        assert s.vmaf_safety_perc5 == 95.0
