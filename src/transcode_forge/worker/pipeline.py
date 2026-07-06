@@ -266,6 +266,10 @@ async def run_pipeline(
             except VmafError as e:
                 logger.warning("CRF search failed (%s) — using the fixed preset", e)
 
+        # quality and backend are final past this point (search resolved,
+        # 10-bit QSV downgrade applied) — map once, report everywhere.
+        resolved_crf = map_quality(codec, backend, quality)
+
         # Step 2: TRANSCODE
         cmd = build_encode_command(
             codec, backend, str(src), str(tmp_path), quality, content=content
@@ -289,7 +293,7 @@ async def run_pipeline(
             raise SizeRegressionError(
                 source_size,
                 output_size,
-                resolved_crf=map_quality(codec, backend, quality),
+                resolved_crf=resolved_crf,
                 backend=backend,
                 predicted_vmaf_mean=predicted_vmaf_mean,
                 predicted_vmaf_perc5=predicted_vmaf_perc5,
@@ -323,7 +327,7 @@ async def run_pipeline(
                         vmaf_perc5=vmaf_perc5,
                         mean_floor=vmaf_safety_mean,
                         perc5_floor=vmaf_safety_perc5,
-                        resolved_crf=map_quality(codec, backend, quality),
+                        resolved_crf=resolved_crf,
                         backend=backend,
                         predicted_vmaf_mean=predicted_vmaf_mean,
                         predicted_vmaf_perc5=predicted_vmaf_perc5,
@@ -364,7 +368,7 @@ async def run_pipeline(
             "output_size": output_size,
             "space_saved": space_saved,
             "backend": backend,
-            "resolved_crf": map_quality(codec, backend, quality),
+            "resolved_crf": resolved_crf,
             "vmaf_mean": vmaf_mean,
             "vmaf_perc5": vmaf_perc5,
             "predicted_vmaf_mean": predicted_vmaf_mean,

@@ -108,6 +108,23 @@ class Settings(BaseSettings):
     scratch_dir: str = ""
 
     @model_validator(mode="after")
+    def _validate_vmaf_floor_pair(self) -> "Settings":
+        """Fail fast on an impossible gate: per-frame perc5 can never exceed
+        the mean, so a perc5 floor above the mean floor would skip encodes
+        the mean floor accepts — the mass-skip storm the decoupling fixed.
+        Likeliest cause: porting the retired TF_VMAF_MIN_FLOOR value (95)
+        onto TF_VMAF_SAFETY_PERC5 without also raising TF_VMAF_SAFETY_MEAN."""
+        if self.vmaf_safety_perc5 > self.vmaf_safety_mean:
+            raise ValueError(
+                f"TF_VMAF_SAFETY_PERC5 ({self.vmaf_safety_perc5:g}) cannot exceed "
+                f"TF_VMAF_SAFETY_MEAN ({self.vmaf_safety_mean:g}). If you are "
+                "porting the retired TF_VMAF_MIN_FLOOR, note the new floors are "
+                'absolute "refuse to keep" bars (defaults 90/85), not the old '
+                "target-coupled floor."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _resolve_db_url(self) -> "Settings":
         """If db_path is set (from --db-path CLI), promote it to db_url."""
         if self.db_path:
