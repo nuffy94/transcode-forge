@@ -63,8 +63,8 @@ async function issueWorkerToken() {
         document.getElementById('scheduler-url-display').textContent = window.location.origin;
         document.getElementById('add-worker-label').value = '';
         showToast('Token issued', 'success');
-        htmx.trigger('#add-worker-tokens-list', 'load');
-        htmx.trigger('#tokens-list', 'load');
+        htmx.trigger('#add-worker-tokens-list', 'refresh');
+        htmx.trigger('#tokens-list', 'refresh');
     } catch (e) {
         showToast('Issue failed: ' + e.message, 'error');
     }
@@ -100,8 +100,8 @@ async function revokeToken(fingerprint) {
             return;
         }
         showToast('Token revoked', 'warning');
-        htmx.trigger('#tokens-list', 'load');
-        htmx.trigger('#add-worker-tokens-list', 'load');
+        htmx.trigger('#tokens-list', 'refresh');
+        htmx.trigger('#add-worker-tokens-list', 'refresh');
     } catch (e) {
         showToast('Revoke failed: ' + e.message, 'error');
     }

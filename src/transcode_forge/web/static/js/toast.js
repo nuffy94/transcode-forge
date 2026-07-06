@@ -20,6 +20,19 @@ export function esc(text) {
     return div.innerHTML;
 }
 
+/* Turn a parsed JSON error body into a readable string. FastAPI 422s put an
+ * ARRAY of {loc, msg, type} objects in `detail`; passing that straight to a
+ * toast renders "[object Object]". Fall back to the caller's default. */
+export function detailText(body, fallback = 'Something went wrong') {
+    const d = body && body.detail;
+    if (typeof d === 'string') return d;
+    if (Array.isArray(d)) {
+        const msgs = d.map((e) => (e && e.msg ? e.msg : null)).filter(Boolean);
+        if (msgs.length) return msgs.join('; ');
+    }
+    return fallback;
+}
+
 export function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) return;

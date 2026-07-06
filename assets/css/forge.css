@@ -661,12 +661,13 @@ select.forge-select {
    utility class — this matching-specificity rule restores the icon clearance. */
 input.forge-input.pl-8 { padding-left: 2rem; }
 
-/* Checkbox */
+/* Checkbox. appearance:auto undoes the Tailwind forms-plugin's global
+   appearance:none — without it accent-color is inert and the box paints
+   identically checked or unchecked (you can't read a library's state). */
 .forge-check {
     width: 14px;
     height: 14px;
-    background: var(--forge-well);
-    border: 1px solid var(--forge-rule-bright);
+    appearance: auto;
     accent-color: var(--forge-ember);
     cursor: pointer;
 }
@@ -747,6 +748,10 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     border: none;
     color: var(--forge-paper);
     max-width: none;
+    /* Tailwind preflight sets *{margin:0}, zeroing the UA dialog{margin:auto}
+       that centers a modal <dialog> — restore it or the box collapses to
+       fit-content in the top-left corner. */
+    margin: auto;
 }
 .forge-dialog::backdrop {
     background: rgba(13, 11, 8, 0.78);

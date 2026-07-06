@@ -3,7 +3,7 @@
  * Worker tokens live on the Workers page (workers.js).
  */
 
-import { esc, showToast } from './toast.js';
+import { esc, showToast, detailText } from './toast.js';
 
 /* ---- Libraries ---- */
 
@@ -90,7 +90,7 @@ async function addLibrary() {
         loadLibraries();
     } else {
         const err = await resp.json();
-        showToast(err.detail || 'Failed to add library', 'error');
+        showToast(detailText(err, 'Failed to add library'), 'error');
     }
 }
 
@@ -126,7 +126,7 @@ async function saveLibrary() {
         loadLibraries();
     } else {
         const err = await resp.json();
-        showToast(err.detail || 'Failed to update library', 'error');
+        showToast(detailText(err, 'Failed to update library'), 'error');
     }
 }
 
@@ -137,7 +137,7 @@ async function scanLibrary(id, name) {
             showToast(`Scanning ${name}…`, 'info');
         } else {
             const err = await resp.json().catch(() => ({}));
-            showToast(err.detail || `Scan failed for ${name}`, 'error');
+            showToast(detailText(err, `Scan failed for ${name}`), 'error');
         }
     } catch (e) {
         showToast(`Scan failed: ${e.message}`, 'error');
@@ -152,7 +152,7 @@ async function deleteLibrary(id) {
             loadLibraries();
         } else {
             const err = await resp.json().catch(() => ({}));
-            showToast(err.detail || 'Failed to delete library', 'error');
+            showToast(detailText(err, 'Failed to delete library'), 'error');
         }
     } catch (e) {
         showToast(`Delete failed: ${e.message}`, 'error');
@@ -194,7 +194,7 @@ async function saveTuning() {
         });
         if (!r.ok) {
             const err = await r.json().catch(() => ({}));
-            showToast(err.detail || 'Save failed', 'error');
+            showToast(detailText(err, 'Save failed'), 'error');
             return;
         }
         showToast('Transcoding defaults saved', 'success');
@@ -246,7 +246,7 @@ async function maintenanceAction({ url, method = 'POST', confirmMsg, successMsg 
             showToast(successMsg, 'warning');
         } else {
             const err = await resp.json().catch(() => ({}));
-            showToast(err.detail || `Action failed (HTTP ${resp.status})`, 'error');
+            showToast(detailText(err, `Action failed (HTTP ${resp.status})`), 'error');
         }
     } catch (e) {
         showToast(`Action failed: ${e.message}`, 'error');
@@ -309,7 +309,7 @@ async function addSchedule() {
         }
         showToast('Schedule added', 'success');
         document.getElementById('sched-name').value = '';
-        htmx.trigger('#schedules-list', 'load');
+        htmx.trigger('#schedules-list', 'refresh');
         refreshScheduleStatus();
     } catch (e) {
         showToast('Add failed: ' + e.message, 'error');
@@ -329,7 +329,7 @@ window.toggleSchedule = async function toggleSchedule(id, enabled) {
             return;
         }
         showToast(enabled ? 'Enabled' : 'Disabled', enabled ? 'success' : 'warning');
-        htmx.trigger('#schedules-list', 'load');
+        htmx.trigger('#schedules-list', 'refresh');
         refreshScheduleStatus();
     } catch (e) {
         showToast('Toggle failed: ' + e.message, 'error');
@@ -345,7 +345,7 @@ window.deleteSchedule = async function deleteSchedule(id) {
             return;
         }
         showToast('Schedule removed', 'warning');
-        htmx.trigger('#schedules-list', 'load');
+        htmx.trigger('#schedules-list', 'refresh');
         refreshScheduleStatus();
     } catch (e) {
         showToast('Delete failed: ' + e.message, 'error');
