@@ -120,6 +120,9 @@ class WorkerHttpClient:
         space_saved: int,
         source_size: int,
         achieved_vmaf: float | None = None,
+        achieved_vmaf_perc5: float | None = None,
+        predicted_vmaf_mean: float | None = None,
+        predicted_vmaf_perc5: float | None = None,
         resolved_crf: int | None = None,
         backend_used: str | None = None,
     ) -> None:
@@ -130,6 +133,9 @@ class WorkerHttpClient:
                 "space_saved": space_saved,
                 "source_size": source_size,
                 "achieved_vmaf": achieved_vmaf,
+                "achieved_vmaf_perc5": achieved_vmaf_perc5,
+                "predicted_vmaf_mean": predicted_vmaf_mean,
+                "predicted_vmaf_perc5": predicted_vmaf_perc5,
                 "resolved_crf": resolved_crf,
                 "backend_used": backend_used,
             },
@@ -153,15 +159,27 @@ class WorkerHttpClient:
         reason: str,
         error_message: str = "",
         achieved_vmaf: float | None = None,
+        achieved_vmaf_perc5: float | None = None,
+        predicted_vmaf_mean: float | None = None,
+        predicted_vmaf_perc5: float | None = None,
+        resolved_crf: int | None = None,
+        backend_used: str | None = None,
     ) -> None:
         """Report a skip outcome (VMAF gate / size regression) — the
-        original was kept and the job should end SKIPPED, not FAILED."""
+        original was kept and the job should end SKIPPED, not FAILED.
+        Diagnostics (scores, CRF, backend, search predictions) ride along
+        so skips stay analyzable (vmaf-decoupling spec §4.1)."""
         r = await self._client.post(
             f"/api/worker/job/{job_id}/skipped",
             json={
                 "reason": reason,
                 "error_message": error_message,
                 "achieved_vmaf": achieved_vmaf,
+                "achieved_vmaf_perc5": achieved_vmaf_perc5,
+                "predicted_vmaf_mean": predicted_vmaf_mean,
+                "predicted_vmaf_perc5": predicted_vmaf_perc5,
+                "resolved_crf": resolved_crf,
+                "backend_used": backend_used,
             },
         )
         _raise_for_status(r)

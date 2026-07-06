@@ -153,7 +153,7 @@ class TestWorkerAgentS3Failures:
 
         with patch("aioboto3.Session", return_value=_MockSession(scripted)):
             # Must not raise — an escaping exception kills the job loop.
-            await agent._process_job(job, vmaf_floor=None)
+            await agent._process_job(job)
 
         agent._client.failed.assert_awaited_once()
         kwargs = agent._client.failed.await_args.kwargs
@@ -175,7 +175,7 @@ class TestWorkerAgentS3Failures:
                 new=AsyncMock(return_value=dict(PIPELINE_RESULT)),
             ),
         ):
-            await agent._process_job(job, vmaf_floor=None)
+            await agent._process_job(job)
 
         agent._client.failed.assert_awaited_once()
         kwargs = agent._client.failed.await_args.kwargs
@@ -198,7 +198,7 @@ class TestWorkerAgentS3Failures:
                 new=AsyncMock(return_value=dict(PIPELINE_RESULT)),
             ),
         ):
-            await agent._process_job(job, vmaf_floor=None)
+            await agent._process_job(job)
 
         # The upload succeeded but registration failed — the job ends FAILED
         # (the S3 object may be orphaned; the job stays retryable), and
@@ -223,7 +223,7 @@ class TestWorkerAgentS3Failures:
             patch("aioboto3.Session", return_value=_MockSession(scripted)),
             patch("transcode_forge.worker.http_agent.run_pipeline", new=pipeline),
         ):
-            await agent._process_job(job, vmaf_floor=None)
+            await agent._process_job(job)
 
         pipeline.assert_not_awaited()
         agent._client.complete.assert_awaited_once()

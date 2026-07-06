@@ -13,12 +13,16 @@
             AV1 as the global default applies to every queue action — older devices/clients may not decode AV1.
         </p>
         <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
-            <label for="tune-target-vmaf" class="forge-stat-label" title="New jobs target this mean VMAF; the gate skips encodes landing below it.">Target VMAF</label>
+            <label for="tune-target-vmaf" class="forge-stat-label" title="The CRF search aims sample encodes at this mean VMAF — a quality goal, not the gate. Samples score higher than full files; expect full-file results a few points below.">Target VMAF</label>
             <input id="tune-target-vmaf" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
         </div>
         <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
-            <label for="tune-vmaf-floor" class="forge-stat-label" title="Worst-scenes (5th percentile) floor — encodes below it are discarded, originals kept.">VMAF floor (perc5)</label>
-            <input id="tune-vmaf-floor" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
+            <label for="tune-vmaf-safety-mean" class="forge-stat-label" title="Absolute refuse-to-keep floor: encodes whose full-file mean VMAF lands below this are discarded, originals kept.">Safety floor (mean)</label>
+            <input id="tune-vmaf-safety-mean" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
+        </div>
+        <div class="flex justify-between items-center border-b border-forge-rule/60 pb-2">
+            <label for="tune-vmaf-safety-perc5" class="forge-stat-label" title="Worst-scenes (5th percentile) refuse-to-keep floor. Must not exceed the mean floor.">Safety floor (perc5)</label>
+            <input id="tune-vmaf-safety-perc5" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
         </div>
         <div class="flex justify-between border-b border-forge-rule/60 pb-2">
             <span class="forge-stat-label">Encoder priority</span>

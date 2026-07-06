@@ -74,10 +74,17 @@ VERIFY does an ffprobe AND a real decode of frames at three offsets — files
 ffprobe accepts but that won't decode are caught here. COMPARE checks size
 (larger than source → `SizeRegressionError`) and, when the job carries a
 target VMAF, the quality gate: full-file VMAF (resolution-matched model,
-worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the floor or the
-encode is discarded (`VmafGateError`) — both are skip outcomes (job ends
-SKIPPED, original kept), not failures. TRANSCODE is optionally preceded by
-an ab-av1-style CRF search on short samples. If post-swap verification
+worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the **absolute
+safety floors** (mean ≥ 90, perc5 ≥ 85 by default) or the encode is
+discarded (`VmafGateError`) — both are skip outcomes (job ends SKIPPED,
+original kept), not failures. The floors are deliberately NOT derived from
+the target: the target is what the CRF search aims for on samples, the
+floors are what the gate refuses to keep — samples overestimate the full
+file, so a target-derived gate rejected good encodes wholesale.
+TRANSCODE is optionally preceded by an ab-av1-style CRF search on short
+samples; its winning sample predictions are persisted alongside the
+full-file scores (predicted_* / achieved_* job columns) on completes AND
+skips, keeping the sample-vs-full-file gap measurable. If post-swap verification
 fails, the original is restored from `.tf_bak`. The lock file (`.tf_lock`)
 prevents concurrent transcodes of the same path.
 
@@ -178,11 +185,13 @@ Common knobs:
 - `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
   file); mapped per encoder in `worker/encoder.py`.
 - `TF_DEFAULT_CODEC` — pre-fills the queue-time codec selector (hevc).
-- `TF_TARGET_VMAF` / `TF_VMAF_MIN_FLOOR` — quality goal + worst-scenes
-  floor for the VMAF gate; `TF_CRF_SEARCH_ENABLED` toggles the per-file
-  CRF search. These three plus the quality presets are DB-overridable
-  from the Settings page (`repos/settings.py`, `effective(key)` = DB
-  override else env).
+- `TF_TARGET_VMAF` — the quality goal the CRF search aims for on samples
+  (not a gate). `TF_VMAF_SAFETY_MEAN` / `TF_VMAF_SAFETY_PERC5` — absolute
+  "refuse to keep" floors for the full-file gate (90/85 defaults), never
+  derived from the target. `TF_CRF_SEARCH_ENABLED` toggles the per-file
+  CRF search. These plus the quality presets are DB-overridable from the
+  Settings page (`repos/settings.py`, `effective(key)` = DB override
+  else env). The old `TF_VMAF_MIN_FLOOR` knob is retired and ignored.
 
 Worker-side:
 - `TF_SERVER_URL` — scheduler URL (presence selects HTTP mode).

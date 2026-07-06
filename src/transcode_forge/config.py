@@ -43,13 +43,17 @@ class Settings(BaseSettings):
     quality_anime: int = Field(default=19, ge=1, le=51)
 
     # Codec + quality-goal defaults. default_codec pre-fills the queue-time
-    # selector (per-job job.target_codec stays the source of truth). The
-    # VMAF gate skips (never replaces) any encode whose full-file score
-    # lands below mean ≥ target_vmaf AND worst-scenes perc5 ≥ vmaf_min_floor.
-    # All three are DB-overridable via the settings page (repos/settings.py).
+    # selector (per-job job.target_codec stays the source of truth).
+    # target_vmaf is what the CRF search AIMS for on samples; the safety
+    # floors are what the full-file gate REFUSES to keep — deliberately
+    # decoupled (plans/vmaf-decoupling-spec.md): samples overestimate the
+    # full file, so gating at the target rejected good encodes wholesale.
+    # The old TF_VMAF_MIN_FLOOR knob is retired and no longer read.
+    # All four are DB-overridable via the settings page (repos/settings.py).
     default_codec: str = Field(default="hevc", pattern=r"^(hevc|av1)$")
     target_vmaf: float = Field(default=97.0, ge=0.0, le=100.0)
-    vmaf_min_floor: float = Field(default=95.0, ge=0.0, le=100.0)
+    vmaf_safety_mean: float = Field(default=90.0, ge=0.0, le=100.0)
+    vmaf_safety_perc5: float = Field(default=85.0, ge=0.0, le=100.0)
 
     # Per-file target-VMAF CRF search (ab-av1 style, worker-side). Disable
     # to always encode at the fixed quality preset; the VMAF gate still runs.

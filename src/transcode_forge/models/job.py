@@ -42,9 +42,15 @@ class Job(BaseModel):
     quality_value: int
     # Quality goal (snapshot at queue time) + encode outcome. NULL
     # target_vmaf = no VMAF gate/search — pre-feature jobs behave as before.
+    # predicted_* = the CRF search's winning sample scores; achieved_* = the
+    # full-file measurement. Persisting both sides makes the sample-vs-full
+    # gap a measured quantity (plans/vmaf-decoupling-spec.md §4.1).
     target_vmaf: float | None = None
     resolved_crf: int | None = None
     achieved_vmaf: float | None = None
+    achieved_vmaf_perc5: float | None = None
+    predicted_vmaf_mean: float | None = None
+    predicted_vmaf_perc5: float | None = None
     backend_used: str | None = None
     status: JobStatus = JobStatus.PENDING
     worker_id: str | None = None

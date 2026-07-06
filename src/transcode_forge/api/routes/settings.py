@@ -47,6 +47,14 @@ async def update_tuning(
 
     Validation happens per key in the settings repo; the first invalid
     entry rejects the whole request so partial writes don't happen silently.
+
+    Cross-field rules for the VMAF knobs (vmaf-decoupling spec §4.6):
+    - HARD: safety perc5 > safety mean is rejected — per-frame perc5 can
+      never exceed the mean, so that gate would be incoherent.
+    - SOFT: target below the safety mean is allowed but flagged in the
+      response ("warning") — the search would aim below the refuse bar.
+    Never silently clamped: silent mutation is how the incoherent 91.5/95
+    combo shipped unnoticed pre-redesign.
     """
     # Validate everything first, then write — no partial application.
     for key, value in body.values.items():
@@ -58,14 +66,50 @@ async def update_tuning(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    settings = getattr(request.app.state, "settings", None)
+
+    async def prospective(key: str) -> float:
+        """The value a key WOULD have after this update lands."""
+        if key in body.values:
+            value = body.values[key]
+            if value is not None and value != "":
+                return float(value)
+            # Clearing the override → the env default applies.
+            from transcode_forge.config import get_settings
+
+            return float(getattr(settings or get_settings(), key))
+        return float(await settings_repo.effective(db, key, settings))
+
+    safety_mean = await prospective("vmaf_safety_mean")
+    safety_perc5 = await prospective("vmaf_safety_perc5")
+    if safety_perc5 > safety_mean:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"VMAF safety perc5 floor ({safety_perc5:g}) cannot exceed the "
+                f"safety mean floor ({safety_mean:g}) — worst-scenes scores are "
+                "always at or below the mean."
+            ),
+        )
+    warning: str | None = None
+    target = await prospective("target_vmaf")
+    if target < safety_mean:
+        warning = (
+            f"Target VMAF ({target:g}) is below the safety mean floor "
+            f"({safety_mean:g}) — the CRF search will aim below the gate's "
+            "refuse bar and most encodes will be skipped."
+        )
+
     for key, value in body.values.items():
         if value is None or value == "":
             await settings_repo.clear_override(db, key)
         else:
             await settings_repo.set_override(db, key, value)
 
-    settings = getattr(request.app.state, "settings", None)
-    return {
+    response: dict[str, Any] = {
         "data": await settings_repo.all_effective(db, settings),
         "overrides": await settings_repo.all_overrides(db),
     }
+    if warning:
+        response["warning"] = warning
+    return response
