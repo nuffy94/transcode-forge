@@ -173,7 +173,8 @@ async function loadTuning() {
         const body = await r.json();
         document.getElementById('tune-default-codec').value = body.data.default_codec || 'hevc';
         document.getElementById('tune-target-vmaf').value = body.data.target_vmaf || '';
-        document.getElementById('tune-vmaf-floor').value = body.data.vmaf_min_floor || '';
+        document.getElementById('tune-vmaf-safety-mean').value = body.data.vmaf_safety_mean || '';
+        document.getElementById('tune-vmaf-safety-perc5').value = body.data.vmaf_safety_perc5 || '';
         toggleAv1Warning();
     } catch {
         /* panel stays at defaults */
@@ -184,7 +185,8 @@ async function saveTuning() {
     const values = {
         default_codec: document.getElementById('tune-default-codec').value,
         target_vmaf: document.getElementById('tune-target-vmaf').value,
-        vmaf_min_floor: document.getElementById('tune-vmaf-floor').value,
+        vmaf_safety_mean: document.getElementById('tune-vmaf-safety-mean').value,
+        vmaf_safety_perc5: document.getElementById('tune-vmaf-safety-perc5').value,
     };
     try {
         const r = await fetch('/api/settings/tuning', {
@@ -196,6 +198,10 @@ async function saveTuning() {
             const err = await r.json().catch(() => ({}));
             showToast(err.detail || 'Save failed', 'error');
             return;
+        }
+        const body = await r.json().catch(() => ({}));
+        if (body.warning) {
+            showToast(body.warning, 'warning');
         }
         showToast('Transcoding defaults saved', 'success');
     } catch (e) {

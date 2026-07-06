@@ -283,14 +283,15 @@ class TestProcessJobFilesystemHappyPath:
         with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
             mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
             with patch.object(agent, "_get_backend_for_job", return_value=mock_storage):
-                await agent._process_job(job, vmaf_floor=95.0)
+                await agent._process_job(job, safety_mean=90.0, safety_perc5=85.0)
 
         kwargs = mock_pipeline.call_args.kwargs
         assert kwargs["codec"] == "av1"
         assert kwargs["backend"] == "cpu"  # a string, never the storage object
         assert isinstance(kwargs["backend"], str)
         assert kwargs["target_vmaf"] == 97.0
-        assert kwargs["vmaf_perc5_floor"] == 95.0
+        assert kwargs["vmaf_safety_mean"] == 90.0
+        assert kwargs["vmaf_safety_perc5"] == 85.0
 
     @pytest.mark.asyncio
     async def test_process_job_unexpected_error_fails_job_not_worker(self, test_settings, tmp_path):

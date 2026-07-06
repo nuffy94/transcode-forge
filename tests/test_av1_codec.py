@@ -362,23 +362,24 @@ async def _mock_encode_ok(cmd, total_duration, progress_callback=None):
 
 
 async def test_vmaf_below_floor_skips_and_keeps_original(tmp_path):
-    """D5: if measured VMAF perc5 < floor, the pipeline raises VmafGateError —
-    original file untouched, no swap, nothing left behind."""
+    """D5: if measured VMAF lands below the safety floors, the pipeline
+    raises VmafGateError — original file untouched, no swap, nothing left
+    behind. Floors are absolute (90/85 defaults), not derived from target."""
     from transcode_forge.worker.pipeline import VmafGateError, run_pipeline
     from transcode_forge.worker.vmaf import VmafScore
 
     source = tmp_path / "test.mkv"
     source.write_bytes(b"x" * 10000)
 
-    async def low_vmaf(*args, **kwargs):
-        return VmafScore(mean=94.0, perc5=90.0, min=85.0)
+    async def damaged_vmaf(*args, **kwargs):
+        return VmafScore(mean=88.0, perc5=80.0, min=70.0)
 
     with (
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
         patch("transcode_forge.worker.pipeline.ffprobe", return_value=_mock_probe()),
         patch("transcode_forge.worker.pipeline._decode_check"),
         patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
-        patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=low_vmaf),
+        patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=damaged_vmaf),
     ):
         with pytest.raises(VmafGateError) as exc_info:
             await run_pipeline(
@@ -390,9 +391,10 @@ async def test_vmaf_below_floor_skips_and_keeps_original(tmp_path):
                 job_id="j1",
                 worker_id="w1",
                 target_vmaf=97.0,
-                vmaf_perc5_floor=95.0,
+                vmaf_safety_mean=90.0,
+                vmaf_safety_perc5=85.0,
             )
-    assert exc_info.value.vmaf_perc5 == 90.0
+    assert exc_info.value.vmaf_perc5 == 80.0
     # Original untouched, no droppings.
     assert source.read_bytes() == b"x" * 10000
     assert not (tmp_path / "test.tf_tmp.mkv").exists()
@@ -427,7 +429,8 @@ async def test_vmaf_at_or_above_floor_completes_and_swaps(tmp_path):
             job_id="j1",
             worker_id="w1",
             target_vmaf=97.0,
-            vmaf_perc5_floor=95.0,
+            vmaf_safety_mean=90.0,
+            vmaf_safety_perc5=85.0,
         )
     assert result["vmaf_mean"] == 98.0
     assert result["vmaf_perc5"] == 97.0

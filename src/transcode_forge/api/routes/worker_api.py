@@ -148,6 +148,12 @@ class CompleteRequest(BaseModel):
     source_size: int = Field(ge=0)
     # Encode outcome (None for workers predating the VMAF gate).
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
+    # Full-file perc5 + the CRF search's sample predictions (None for
+    # workers predating the gate decoupling) — the measurement loop that
+    # makes the sample-vs-full-file gap analyzable (spec §4.1).
+    achieved_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
+    predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
+    predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
     backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
 
@@ -173,6 +179,14 @@ class SkippedRequest(BaseModel):
     reason: str = Field(pattern=r"^(below_vmaf_floor|size_regression)$")
     error_message: str = ""
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
+    # Skip diagnostics (None for pre-decoupling workers): gate-skips are
+    # the most informative measurements we pay for — losing them made the
+    # 2026-07-04 flaw analysis needlessly blind (spec §4.1).
+    achieved_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
+    predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
+    predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
+    resolved_crf: int | None = Field(default=None, ge=0, le=63)
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
 
 
 class CheckDerivativeRequest(BaseModel):
@@ -365,12 +379,20 @@ async def claim_job(
             job_dict["_s3_bucket"] = library.get("s3_bucket", "")
             job_dict["_s3_prefix"] = library.get("s3_prefix", "")
             job_dict["_media_type"] = library.get("media_type", "")
-        # The VMAF floor is scheduler-owned config (DB override else env) —
-        # workers get it with the job so there's one source of truth.
+        # The VMAF safety floors are scheduler-owned config (DB override
+        # else env) — workers get them with the job so there's one source
+        # of truth. Absolute "refuse to keep" bars, NOT derived from the
+        # job's target (plans/vmaf-decoupling-spec.md §4.2).
         settings = getattr(request.app.state, "settings", None)
-        job_dict["_vmaf_min_floor"] = float(
-            await settings_repo.effective(db, "vmaf_min_floor", settings)
+        safety_perc5 = float(await settings_repo.effective(db, "vmaf_safety_perc5", settings))
+        job_dict["_vmaf_safety_mean"] = float(
+            await settings_repo.effective(db, "vmaf_safety_mean", settings)
         )
+        job_dict["_vmaf_safety_perc5"] = safety_perc5
+        # Legacy stamp for one release: a pre-decoupling worker gates
+        # perc5 at this value (its mean bar stays target-coupled until
+        # it's upgraded — acceptable mid-deploy, spec §6).
+        job_dict["_vmaf_min_floor"] = safety_perc5
         return {"job": job_dict}
 
     return {"job": None}
@@ -480,6 +502,9 @@ async def complete_job(
         space_saved=body.space_saved,
         source_size=body.source_size,
         achieved_vmaf=body.achieved_vmaf,
+        achieved_vmaf_perc5=body.achieved_vmaf_perc5,
+        predicted_vmaf_mean=body.predicted_vmaf_mean,
+        predicted_vmaf_perc5=body.predicted_vmaf_perc5,
         resolved_crf=body.resolved_crf,
         backend_used=body.backend_used,
         progress=1.0,
@@ -509,6 +534,11 @@ async def skip_job(
         status=JobStatus.SKIPPED,
         error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
         achieved_vmaf=body.achieved_vmaf,
+        achieved_vmaf_perc5=body.achieved_vmaf_perc5,
+        predicted_vmaf_mean=body.predicted_vmaf_mean,
+        predicted_vmaf_perc5=body.predicted_vmaf_perc5,
+        resolved_crf=body.resolved_crf,
+        backend_used=body.backend_used,
         completed_at=datetime.now(UTC).isoformat(),
     )
     await skip_repo.record_skip(

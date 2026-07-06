@@ -7,11 +7,16 @@ Steps:
 3. VERIFY    — ffprobe output: duration match, codec correct, file > 0
 4. COMPARE   — output_size < source_size (skip if bigger) AND, when a
                target VMAF is set, the quality gate: full-file VMAF with
-               the resolution-matched model must clear mean ≥ target and
-               worst-scenes perc5 ≥ floor — below either, the encode is
-               discarded and the original kept (VmafGateError → SKIPPED,
-               never FAILED). A degraded or bloated result is caught here,
-               not shipped.
+               the resolution-matched model must clear the absolute safety
+               floors (mean ≥ vmaf_safety_mean AND worst-scenes perc5 ≥
+               vmaf_safety_perc5) — below either, the encode is discarded
+               and the original kept (VmafGateError → SKIPPED, never
+               FAILED). The floors are deliberately NOT derived from
+               target_vmaf: the target is what the CRF search aims for on
+               samples, the floors are what we refuse to keep. Samples
+               systematically overestimate the full file, so gating at the
+               target rejected good encodes wholesale
+               (plans/vmaf-decoupling-spec.md).
 5. SWAP      — Atomic: original → .tf_bak, tmp → original
 6. CONFIRM   — ffprobe the final file one more time
 7. CLEANUP   — Delete .tf_bak
@@ -72,11 +77,28 @@ class PipelineError(Exception):
 
 
 class SizeRegressionError(PipelineError):
-    """Raised when transcoded file is larger than original."""
+    """Raised when transcoded file is larger than original.
 
-    def __init__(self, source_size: int, output_size: int):
+    Carries the encode diagnostics (resolved CRF, backend, search
+    predictions) so the skip report persists them — a skip that loses its
+    diagnostics can't be analyzed later (spec §4.1)."""
+
+    def __init__(
+        self,
+        source_size: int,
+        output_size: int,
+        *,
+        resolved_crf: int | None = None,
+        backend: str | None = None,
+        predicted_vmaf_mean: float | None = None,
+        predicted_vmaf_perc5: float | None = None,
+    ):
         self.source_size = source_size
         self.output_size = output_size
+        self.resolved_crf = resolved_crf
+        self.backend = backend
+        self.predicted_vmaf_mean = predicted_vmaf_mean
+        self.predicted_vmaf_perc5 = predicted_vmaf_perc5
         super().__init__(
             "COMPARE",
             f"Output ({output_size:,} bytes) larger than source ({source_size:,} bytes)",
@@ -84,10 +106,12 @@ class SizeRegressionError(PipelineError):
 
 
 class VmafGateError(PipelineError):
-    """Raised when the encode's measured VMAF lands below the quality floor.
+    """Raised when the encode's measured VMAF lands below the safety floors.
 
     The outcome is SKIP (keep the original, never replace) — the same
-    discipline as SizeRegressionError, not a retryable failure."""
+    discipline as SizeRegressionError, not a retryable failure. Carries the
+    full measurement (achieved mean/perc5, the floors applied, resolved CRF,
+    backend, search predictions) so the skip is self-explaining."""
 
     def __init__(
         self,
@@ -96,11 +120,19 @@ class VmafGateError(PipelineError):
         vmaf_perc5: float,
         mean_floor: float,
         perc5_floor: float,
+        resolved_crf: int | None = None,
+        backend: str | None = None,
+        predicted_vmaf_mean: float | None = None,
+        predicted_vmaf_perc5: float | None = None,
     ):
         self.vmaf_mean = vmaf_mean
         self.vmaf_perc5 = vmaf_perc5
         self.mean_floor = mean_floor
         self.perc5_floor = perc5_floor
+        self.resolved_crf = resolved_crf
+        self.backend = backend
+        self.predicted_vmaf_mean = predicted_vmaf_mean
+        self.predicted_vmaf_perc5 = predicted_vmaf_perc5
         super().__init__(
             "COMPARE",
             f"VMAF below floor: mean {vmaf_mean:.2f} (floor {mean_floor:.1f}),"
@@ -118,7 +150,8 @@ async def run_pipeline(
     job_id: str,
     worker_id: str,
     target_vmaf: float | None = None,
-    vmaf_perc5_floor: float | None = None,
+    vmaf_safety_mean: float = 90.0,
+    vmaf_safety_perc5: float = 85.0,
     crf_search: bool = False,
     content: str | None = None,
     progress_callback: Callable[[float, float | None], Any] | None = None,
@@ -134,11 +167,12 @@ async def run_pipeline(
         source_duration: Duration of source file in seconds.
         job_id: Transcode job ID (for lock file metadata).
         worker_id: Worker ID (for lock file metadata).
-        target_vmaf: Quality goal — enables the VMAF gate (mean floor) and,
-            with crf_search, the per-file quality search. None = no gate
-            (pre-feature behavior).
-        vmaf_perc5_floor: Worst-scenes floor for the gate (defaults to
-            target_vmaf - 2 when unset).
+        target_vmaf: Quality goal the CRF search aims for on samples; also
+            the switch for VMAF measurement + gate. None = no search, no
+            measurement, no gate (pre-feature behavior, byte-identical).
+        vmaf_safety_mean: Absolute full-file mean floor for the gate —
+            "refuse to keep", NOT derived from target_vmaf.
+        vmaf_safety_perc5: Absolute worst-scenes (perc5) floor for the gate.
         crf_search: Search samples for the largest quality value that
             meets target_vmaf before the full encode.
         content: Optional content hint forwarded to the builder ('anime').
@@ -147,7 +181,8 @@ async def run_pipeline(
     Returns:
         Dict with source_size, output_size, space_saved, backend,
         resolved_crf (native-scale value actually used), and — when the
-        gate ran — vmaf_mean / vmaf_perc5.
+        gate ran — vmaf_mean / vmaf_perc5, plus predicted_vmaf_mean /
+        predicted_vmaf_perc5 when the CRF search produced a winner.
 
     Raises:
         PipelineError: If any step fails (original file is always safe).
@@ -184,8 +219,13 @@ async def run_pipeline(
         except ProbeError as e:
             logger.warning("Could not probe source: %s", e)
 
-    if target_vmaf is not None and vmaf_perc5_floor is None:
-        vmaf_perc5_floor = target_vmaf - 2.0
+    # The SEARCH keeps its historical sample bars (target mean, target-2
+    # perc5) so its CRF picks don't shift; only the GATE moved to the
+    # absolute safety floors.
+    search_perc5_floor = (target_vmaf - 2.0) if target_vmaf is not None else None
+
+    predicted_vmaf_mean: float | None = None
+    predicted_vmaf_perc5: float | None = None
 
     try:
         # Step 1: LOCK
@@ -205,19 +245,21 @@ async def run_pipeline(
                     "Update the worker image to restore the quality guarantee."
                 )
         if crf_search and target_vmaf is not None and vmaf_available:
-            assert vmaf_perc5_floor is not None
+            assert search_perc5_floor is not None
             try:
                 search = await find_quality_for_target(
                     src,
                     codec,
                     backend,
                     target_vmaf=target_vmaf,
-                    perc5_floor=vmaf_perc5_floor,
+                    perc5_floor=search_perc5_floor,
                     duration=source_duration,
                     height=source_height,
                 )
                 if search is not None:
                     quality = search.quality
+                    predicted_vmaf_mean = search.predicted_mean
+                    predicted_vmaf_perc5 = search.predicted_perc5
             except VmafUnavailableError:
                 vmaf_available = False
                 logger.warning("libvmaf unavailable mid-search — using the fixed preset")
@@ -244,7 +286,14 @@ async def run_pipeline(
         # Step 4: COMPARE — size first, then the quality gate.
         output_size = (await asyncio.to_thread(tmp_path.stat)).st_size
         if output_size >= source_size:
-            raise SizeRegressionError(source_size, output_size)
+            raise SizeRegressionError(
+                source_size,
+                output_size,
+                resolved_crf=map_quality(codec, backend, quality),
+                backend=backend,
+                predicted_vmaf_mean=predicted_vmaf_mean,
+                predicted_vmaf_perc5=predicted_vmaf_perc5,
+            )
         space_saved = source_size - output_size
         logger.info(
             "[COMPARE] Savings: %d bytes (%.1f%%)",
@@ -255,7 +304,6 @@ async def run_pipeline(
         vmaf_mean: float | None = None
         vmaf_perc5: float | None = None
         if target_vmaf is not None and vmaf_available:
-            assert vmaf_perc5_floor is not None
             try:
                 score = await measure_vmaf(src, tmp_path, height=source_height)
                 vmaf_mean, vmaf_perc5 = score.mean, score.perc5
@@ -269,19 +317,23 @@ async def run_pipeline(
                 # failure — do not silently ship an unverified replacement.
                 raise PipelineError("COMPARE", f"VMAF measurement failed: {e}") from e
             if vmaf_mean is not None and vmaf_perc5 is not None:
-                if vmaf_mean < target_vmaf or vmaf_perc5 < vmaf_perc5_floor:
+                if vmaf_mean < vmaf_safety_mean or vmaf_perc5 < vmaf_safety_perc5:
                     raise VmafGateError(
                         vmaf_mean=vmaf_mean,
                         vmaf_perc5=vmaf_perc5,
-                        mean_floor=target_vmaf,
-                        perc5_floor=vmaf_perc5_floor,
+                        mean_floor=vmaf_safety_mean,
+                        perc5_floor=vmaf_safety_perc5,
+                        resolved_crf=map_quality(codec, backend, quality),
+                        backend=backend,
+                        predicted_vmaf_mean=predicted_vmaf_mean,
+                        predicted_vmaf_perc5=predicted_vmaf_perc5,
                     )
                 logger.info(
                     "[COMPARE] VMAF gate passed: mean=%.2f (≥%.1f) perc5=%.2f (≥%.1f)",
                     vmaf_mean,
-                    target_vmaf,
+                    vmaf_safety_mean,
                     vmaf_perc5,
-                    vmaf_perc5_floor,
+                    vmaf_safety_perc5,
                 )
 
         # Step 5: SWAP
@@ -315,6 +367,8 @@ async def run_pipeline(
             "resolved_crf": map_quality(codec, backend, quality),
             "vmaf_mean": vmaf_mean,
             "vmaf_perc5": vmaf_perc5,
+            "predicted_vmaf_mean": predicted_vmaf_mean,
+            "predicted_vmaf_perc5": predicted_vmaf_perc5,
         }
 
     finally:

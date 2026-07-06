@@ -183,12 +183,20 @@ class HttpWorkerAgent:
                 await asyncio.sleep(2)
                 continue
             job = Job.model_validate(job_dict)
-            # Claim-time extras (library backend, media type, VMAF floor)
+            # Claim-time extras (library backend, media type, VMAF floors)
             # ride on private attrs outside the validated model.
             for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
                 if extra in job_dict:
                     object.__setattr__(job, extra, job_dict[extra])
-            await self._process_job(job, vmaf_floor=job_dict.get("_vmaf_min_floor"))
+            # Scheduler-stamped safety floors; a pre-decoupling scheduler
+            # doesn't send them, so fall back to this worker's env defaults.
+            # The legacy _vmaf_min_floor stamp is deliberately ignored — it
+            # carries the old target-coupled bar this design retired.
+            await self._process_job(
+                job,
+                safety_mean=job_dict.get("_vmaf_safety_mean", self.settings.vmaf_safety_mean),
+                safety_perc5=job_dict.get("_vmaf_safety_perc5", self.settings.vmaf_safety_perc5),
+            )
 
     def _resolve_backend(self, codec: str) -> str | None:
         """Best backend for the job's codec — preferred if capable, else
@@ -197,7 +205,12 @@ class HttpWorkerAgent:
             return None
         return self.capabilities.best_backend_for(codec, self.settings.preferred_backend)
 
-    async def _process_job(self, job: Job, vmaf_floor: float | None = None) -> None:
+    async def _process_job(
+        self,
+        job: Job,
+        safety_mean: float | None = None,
+        safety_perc5: float | None = None,
+    ) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
         self._current_job_id = job.id
@@ -290,7 +303,12 @@ class HttpWorkerAgent:
                 job_id=job.id,
                 worker_id=self.worker_id,
                 target_vmaf=job.target_vmaf,
-                vmaf_perc5_floor=vmaf_floor,
+                vmaf_safety_mean=(
+                    safety_mean if safety_mean is not None else self.settings.vmaf_safety_mean
+                ),
+                vmaf_safety_perc5=(
+                    safety_perc5 if safety_perc5 is not None else self.settings.vmaf_safety_perc5
+                ),
                 crf_search=self.settings.crf_search_enabled,
                 content="anime" if media_type == "anime" else None,
                 progress_callback=on_progress,
@@ -335,6 +353,9 @@ class HttpWorkerAgent:
                 space_saved=int(commit_result.space_saved),
                 source_size=int(result["source_size"]),
                 achieved_vmaf=result.get("vmaf_mean"),
+                achieved_vmaf_perc5=result.get("vmaf_perc5"),
+                predicted_vmaf_mean=result.get("predicted_vmaf_mean"),
+                predicted_vmaf_perc5=result.get("predicted_vmaf_perc5"),
                 resolved_crf=result.get("resolved_crf"),
                 backend_used=result.get("backend", backend),
             )
@@ -349,6 +370,11 @@ class HttpWorkerAgent:
                 reason="below_vmaf_floor",
                 error_message=str(e),
                 achieved_vmaf=e.vmaf_mean,
+                achieved_vmaf_perc5=e.vmaf_perc5,
+                predicted_vmaf_mean=e.predicted_vmaf_mean,
+                predicted_vmaf_perc5=e.predicted_vmaf_perc5,
+                resolved_crf=e.resolved_crf,
+                backend_used=e.backend,
             )
             logger.info("Job %s skipped (below VMAF floor): %s", job.id, e)
         except SizeRegressionError as e:
@@ -356,6 +382,10 @@ class HttpWorkerAgent:
                 job_id=job.id,
                 reason="size_regression",
                 error_message=str(e),
+                predicted_vmaf_mean=e.predicted_vmaf_mean,
+                predicted_vmaf_perc5=e.predicted_vmaf_perc5,
+                resolved_crf=e.resolved_crf,
+                backend_used=e.backend,
             )
             logger.info("Job %s skipped (size regression)", job.id)
         except PipelineError as e:

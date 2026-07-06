@@ -47,11 +47,16 @@ def _validate_quality(value: str) -> str:
 TUNABLE_KEYS: dict[str, Callable[[str], str]] = {
     "default_codec": _validate_codec,
     "target_vmaf": _validate_vmaf,
-    "vmaf_min_floor": _validate_vmaf,
+    "vmaf_safety_mean": _validate_vmaf,
+    "vmaf_safety_perc5": _validate_vmaf,
     "quality_movies": _validate_quality,
     "quality_tv": _validate_quality,
     "quality_anime": _validate_quality,
 }
+# vmaf_min_floor was retired by the gate decoupling (2026-07-05): the gate
+# no longer derives from the target, so the old coupled floor is neither
+# read nor editable. A stale app_settings row for it is ignored on purpose
+# — deleting it would break rollback to a v0.9.x binary.
 
 
 async def get_override(db: DBConnection, key: str) -> str | None:
