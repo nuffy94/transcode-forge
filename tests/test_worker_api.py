@@ -248,6 +248,206 @@ class TestJobLifecycleViaHttp:
         assert final.status == JobStatus.COMPLETE
         assert final.space_saved == 500_000_000
 
+    async def test_claim_carries_s3_backend_fields(self, client: AsyncClient, app):
+        """Jobs store the library NAME (since migration 0008), so the claim
+        endpoint must resolve the library row by name to attach the S3
+        coordinates. Regression (found live 2026-07-06): resolving by id
+        returned None for name-keyed jobs, the backend fields were dropped,
+        and workers processed S3 jobs as filesystem — every S3 job failed
+        with 'Source file not found'."""
+        from transcode_forge.models.job import Job, JobStatus
+        from transcode_forge.models.library import StorageBackendType
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import libraries as lib_repo
+
+        await lib_repo.create_library(
+            app.state.db,
+            name="Movies (S3)",
+            media_type="movies",
+            path="s3://forge-media/masters/movies/",
+            backend=StorageBackendType.S3,
+            s3_bucket="forge-media",
+            s3_prefix="masters/movies/",
+        )
+        job = Job(
+            source_path="masters/movies/film.mov",
+            library="Movies (S3)",  # the NAME, exactly as /api/media/queue stamps it
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+
+        issue = await client.post("/api/worker-tokens", json={"label": "s3-w"})
+        token = issue.json()["token"]
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers = {"Authorization": f"Bearer {token}"}
+            reg = await c.post(
+                "/api/worker/register",
+                json={
+                    "name": "s3-w",
+                    "host": "h",
+                    "capabilities": ["cpu"],
+                    "ffmpeg_version": "x",
+                    "max_concurrent": 1,
+                },
+                headers=headers,
+            )
+            worker_id = reg.json()["worker_id"]
+
+            r = await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": worker_id},
+                headers=headers,
+            )
+            claimed = r.json()["job"]
+            assert claimed is not None
+            assert claimed["id"] == job.id
+            assert claimed["_backend_type"] == "s3"
+            assert claimed["_s3_bucket"] == "forge-media"
+            assert claimed["_s3_prefix"] == "masters/movies/"
+
+    async def test_claim_resolves_stray_id_keyed_job(self, client: AsyncClient, app):
+        """A stray pre-0008 job may still carry the library UUID — the
+        claim endpoint's id fallback must resolve it."""
+        from transcode_forge.models.job import Job, JobStatus
+        from transcode_forge.models.library import StorageBackendType
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import libraries as lib_repo
+
+        lib_id = await lib_repo.create_library(
+            app.state.db,
+            name="Movies (S3)",
+            media_type="movies",
+            path="s3://forge-media/masters/movies/",
+            backend=StorageBackendType.S3,
+            s3_bucket="forge-media",
+            s3_prefix="masters/movies/",
+        )
+        job = Job(
+            source_path="masters/movies/old.mkv",
+            library=lib_id,  # pre-backfill style: the UUID
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+
+        issue = await client.post("/api/worker-tokens", json={"label": "s3-w2"})
+        token = issue.json()["token"]
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers = {"Authorization": f"Bearer {token}"}
+            reg = await c.post(
+                "/api/worker/register",
+                json={
+                    "name": "s3-w2",
+                    "host": "h",
+                    "capabilities": ["cpu"],
+                    "ffmpeg_version": "x",
+                    "max_concurrent": 1,
+                },
+                headers=headers,
+            )
+            r = await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": reg.json()["worker_id"]},
+                headers=headers,
+            )
+            claimed = r.json()["job"]
+            assert claimed is not None
+            assert claimed["_backend_type"] == "s3"
+            assert claimed["_s3_bucket"] == "forge-media"
+
+    async def test_register_derivative_persists_with_real_library_id(
+        self, client: AsyncClient, app
+    ):
+        """Regression (review of PR #34): register-derivative passed
+        job.library (the NAME) into derivatives.library_id — a real FK to
+        libraries(id) with PRAGMA foreign_keys=ON. The FK violation message
+        contains 'constraint', which the broad dedup-race handler swallowed,
+        so the endpoint returned 204 while persisting nothing: the entire
+        derivative cache silently never populated. The row must exist after
+        the call, keyed by the library's actual UUID."""
+        from transcode_forge.models.job import Job, JobStatus
+        from transcode_forge.models.library import StorageBackendType
+        from transcode_forge.repos import derivatives as deriv_repo
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import libraries as lib_repo
+
+        lib_id = await lib_repo.create_library(
+            app.state.db,
+            name="Movies (S3)",
+            media_type="movies",
+            path="s3://forge-media/masters/movies/",
+            backend=StorageBackendType.S3,
+            s3_bucket="forge-media",
+            s3_prefix="masters/movies/",
+        )
+        job = Job(
+            source_path="masters/movies/film.mov",
+            library="Movies (S3)",  # the NAME, as /api/media/queue stamps it
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+
+        issue = await client.post("/api/worker-tokens", json={"label": "s3-w3"})
+        token = issue.json()["token"]
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers = {"Authorization": f"Bearer {token}"}
+            reg = await c.post(
+                "/api/worker/register",
+                json={
+                    "name": "s3-w3",
+                    "host": "h",
+                    "capabilities": ["cpu"],
+                    "ffmpeg_version": "x",
+                    "max_concurrent": 1,
+                },
+                headers=headers,
+            )
+            await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": reg.json()["worker_id"]},
+                headers=headers,
+            )
+
+            r = await c.post(
+                f"/api/worker/job/{job.id}/register-derivative",
+                json={"derivative_key": "derivatives/abc123.mkv", "output_size": 1000},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+            # Registering the same key again is a benign dedup no-op.
+            r2 = await c.post(
+                f"/api/worker/job/{job.id}/register-derivative",
+                json={"derivative_key": "derivatives/abc123.mkv", "output_size": 1000},
+                headers=headers,
+            )
+            assert r2.status_code == 204
+
+        row = await deriv_repo.lookup_by_key(app.state.db, "derivatives/abc123.mkv")
+        assert row is not None, "derivative row was silently dropped (FK violation swallowed)"
+        assert row["library_id"] == lib_id
+        assert row["output_size"] == 1000
+
     async def test_claim_returns_null_when_paused(self, client: AsyncClient, app):
         from transcode_forge.repos import system as system_repo
 

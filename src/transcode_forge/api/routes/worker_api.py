@@ -372,7 +372,13 @@ async def claim_job(
         job = job.model_copy(update={"status": JobStatus.TRANSCODING})
 
         # Fetch the library to include backend + content info in the response.
-        library = await library_repo.get_library(db, job.library)
+        # Jobs carry the library NAME (migration 0008); fall back to an id
+        # lookup for any stray pre-backfill row. Resolving by id alone
+        # silently dropped the S3 fields and every S3 job failed with
+        # 'Source file not found' (found live 2026-07-06).
+        library = await library_repo.get_library_by_name(db, job.library)
+        if library is None:
+            library = await library_repo.get_library(db, job.library)
         job_dict = job.model_dump(mode="json")
         if library:
             job_dict["_backend_type"] = library.get("backend", "filesystem")
@@ -590,9 +596,23 @@ async def register_derivative(
         body.output_size: Size of the derivative in bytes.
     """
     from transcode_forge.repos import derivatives as deriv_repo
+    from transcode_forge.repos import libraries as library_repo
 
     # Fetch the job (verifying ownership) to get library_id and source metadata.
     job = await _require_owned_job(db, job_id, token_row)
+
+    # derivatives.library_id is a real FK to libraries(id); jobs carry the
+    # library NAME (migration 0008), so resolve it — passing the name
+    # straight through raised an FK violation that the dedup-race handler
+    # silently ate, and the derivative cache never populated.
+    library = await library_repo.get_library_by_name(db, job.library)
+    if library is None:
+        library = await library_repo.get_library(db, job.library)
+    if library is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot register derivative: library '{job.library}' not found",
+        )
 
     # Check if the derivative already exists (dedup race).
     existing = await deriv_repo.lookup_by_key(db, body.derivative_key)
@@ -618,7 +638,7 @@ async def register_derivative(
     try:
         await deriv_repo.create_derivative(
             db,
-            library_id=job.library,
+            library_id=library["id"],
             source_key=job.source_path,  # For S3 backend, source_path is the S3 key
             source_path=job.source_path,
             source_resolution=source_resolution,
@@ -636,10 +656,11 @@ async def register_derivative(
         )
         logger.info("Derivative registered: %s (job %s)", body.derivative_key, job_id)
     except Exception as e:
-        # If it's a UNIQUE constraint violation, treat as benign dedup.
-        # Otherwise, log and re-raise.
+        # Only a UNIQUE violation is a benign dedup race. Matching the bare
+        # word 'constraint' also swallowed FOREIGN KEY failures as fake
+        # successes — anything else must surface.
         error_msg = str(e).lower()
-        if "unique" in error_msg or "constraint" in error_msg:
+        if "unique" in error_msg:
             logger.info("Derivative already registered (concurrent dedup): %s", body.derivative_key)
         else:
             logger.error("Failed to register derivative for job %s: %s", job_id, e)

@@ -70,10 +70,11 @@ async def create_derivative(
         await db.commit()
         return deriv_id
     except Exception as e:
-        # If it's a UNIQUE constraint violation on derivative_key,
-        # return the existing ID (dedup race is benign).
+        # Only a UNIQUE violation on derivative_key is a benign dedup race
+        # (SQLite: 'UNIQUE constraint failed', asyncpg: 'unique constraint').
+        # The bare word 'constraint' would also match FOREIGN KEY failures.
         error_msg = str(e).lower()
-        if "unique" in error_msg or "constraint" in error_msg:
+        if "unique" in error_msg:
             # Look up the existing row to get its ID.
             existing = await lookup_by_key(db, derivative_key)
             if existing is not None:
