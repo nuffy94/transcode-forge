@@ -9,6 +9,7 @@ This module handles scanning S3-backed libraries:
 3. Catalog results into media_files with the S3 key as source_path
 """
 
+import dataclasses
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -253,7 +254,9 @@ async def _probe_s3_object(
         )
         logger.debug("Probing via presigned URL: %s", key)
         probe = await ffprobe(presigned_url)
-        return probe
+        # The listing's object size is authoritative — a URL probe has no
+        # stat() and may report no format size.
+        return dataclasses.replace(probe, file_size=obj_size)
 
     except (ProbeError, Exception) as presigned_error:
         logger.debug(
@@ -294,7 +297,8 @@ async def _probe_s3_object(
 
         try:
             probe = await ffprobe(tmp_path)
-            return probe
+            # Not the temp file's ~64 KB — the real object size.
+            return dataclasses.replace(probe, file_size=obj_size)
         finally:
             # Clean up temp file
             async def _unlink_temp() -> None:

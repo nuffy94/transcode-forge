@@ -109,6 +109,27 @@ class TestFfprobe:
         with pytest.raises(FileNotFoundError):
             await ffprobe("/nonexistent/path.mkv")
 
+    async def test_probe_accepts_https_url(self):
+        """Presigned S3 probes pass URLs. Regression (found live
+        2026-07-06): Path()-ifying a URL mangled '//' and failed the
+        exists() check, so every presigned probe raised FileNotFoundError
+        before ffprobe ever ran — the URL must reach ffprobe's argv
+        untouched, and file_size must come from ffprobe's format block
+        (there is no stat() for a URL)."""
+        url = "https://forge-media.us-ord-1.linodeobjects.com/masters/f.mov?X-Amz-Signature=abc"
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(SAMPLE_FFPROBE_OUTPUT.encode(), b""))
+        mock_proc.returncode = 0
+
+        with patch(
+            "transcode_forge.scanner.probe.asyncio.create_subprocess_exec", return_value=mock_proc
+        ) as mock_exec:
+            result = await ffprobe(url)
+
+        assert mock_exec.call_args[0][-1] == url
+        assert result.video_codec == "h264"
+        assert result.file_size == 2250000000
+
     async def test_probe_ffprobe_fails(self, tmp_path):
         test_file = tmp_path / "test.mkv"
         test_file.write_bytes(b"fake")
