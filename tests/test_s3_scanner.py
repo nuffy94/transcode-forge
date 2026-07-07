@@ -195,7 +195,9 @@ class TestS3LibraryScan:
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
 
         # Mock presigned URL generation
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock session
         mock_session = MagicMock()
@@ -232,6 +234,12 @@ class TestS3LibraryScan:
         assert stats["files_new"] == 1
         assert stats["files_skipped"] == 0
         assert stats["files_failed"] == 0
+
+        # Regression (found live 2026-07-06): ffprobe must receive the
+        # resolved URL string. Without the await, it got a coroutine, the
+        # presigned path failed for every object, and tail-moov .mov/.mp4
+        # files silently vanished from S3 scans.
+        mock_ffprobe.assert_called_once_with("https://s3.mock/signed")
 
         # Verify file was cataloged
         async with db.execute(
@@ -289,7 +297,9 @@ class TestS3LibraryScan:
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
 
         # Mock presigned URL generation (will fail)
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock get_object for head-bytes fallback
         mock_body = AsyncMock()
@@ -396,7 +406,9 @@ class TestS3LibraryScan:
 
         mock_paginator.paginate = mock_paginate
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock get_object to fail
         mock_client.get_object = AsyncMock(side_effect=Exception("Download failed"))
@@ -485,7 +497,9 @@ class TestS3LibraryScan:
 
         mock_paginator.paginate = mock_paginate
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock session
         mock_session = MagicMock()
@@ -564,7 +578,9 @@ class TestS3LibraryScan:
 
         mock_paginator.paginate = mock_paginate
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock session
         mock_session = MagicMock()
@@ -645,7 +661,9 @@ class TestS3LibraryScan:
 
         mock_paginator.paginate = mock_paginate
         mock_client.get_paginator = MagicMock(return_value=mock_paginator)
-        mock_client.generate_presigned_url = MagicMock(return_value="https://s3.mock/signed")
+        # aioboto3 clients expose generate_presigned_url as a coroutine —
+        # mocking it sync masked a missing await for three releases.
+        mock_client.generate_presigned_url = AsyncMock(return_value="https://s3.mock/signed")
 
         # Mock session
         mock_session = MagicMock()

@@ -35,7 +35,7 @@ PREFIX="masters/movies"
 
 # name|url — CC-BY 3.0 Blender Foundation open movies, h264.
 SOURCES=(
-    "Big Buck Bunny (2008).mp4|https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4"
+    "Big Buck Bunny (2008).mov|https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_1080p_h264.mov"
     "Sintel (2010).mkv|https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv"
     "Tears of Steel (2012).mov|https://download.blender.org/demo/movies/ToS/tears_of_steel_1080p.mov"
 )

@@ -55,6 +55,18 @@ async def get_library(db: DBConnection, lib_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+async def get_library_by_name(db: DBConnection, name: str) -> dict[str, Any] | None:
+    """Resolve a library by its display name.
+
+    Jobs carry the library NAME (migration 0008) — this is the lookup the
+    worker-claim path uses. Names aren't schema-unique; first match wins,
+    same as every other name-keyed view (queue filters, stats group-bys).
+    """
+    async with db.execute("SELECT * FROM libraries WHERE name = ? LIMIT 1", (name,)) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 async def path_in_use(db: DBConnection, path: str) -> bool:
     """True if a library already exists for this path (unique constraint)."""
     async with db.execute("SELECT 1 FROM libraries WHERE path = ? LIMIT 1", (path,)) as cur:

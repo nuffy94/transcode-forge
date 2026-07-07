@@ -248,6 +248,70 @@ class TestJobLifecycleViaHttp:
         assert final.status == JobStatus.COMPLETE
         assert final.space_saved == 500_000_000
 
+    async def test_claim_carries_s3_backend_fields(self, client: AsyncClient, app):
+        """Jobs store the library NAME (since migration 0008), so the claim
+        endpoint must resolve the library row by name to attach the S3
+        coordinates. Regression (found live 2026-07-06): resolving by id
+        returned None for name-keyed jobs, the backend fields were dropped,
+        and workers processed S3 jobs as filesystem — every S3 job failed
+        with 'Source file not found'."""
+        from transcode_forge.models.job import Job, JobStatus
+        from transcode_forge.models.library import StorageBackendType
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import libraries as lib_repo
+
+        await lib_repo.create_library(
+            app.state.db,
+            name="Movies (S3)",
+            media_type="movies",
+            path="s3://forge-media/masters/movies/",
+            backend=StorageBackendType.S3,
+            s3_bucket="forge-media",
+            s3_prefix="masters/movies/",
+        )
+        job = Job(
+            source_path="masters/movies/film.mov",
+            library="Movies (S3)",  # the NAME, exactly as /api/media/queue stamps it
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+
+        issue = await client.post("/api/worker-tokens", json={"label": "s3-w"})
+        token = issue.json()["token"]
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers = {"Authorization": f"Bearer {token}"}
+            reg = await c.post(
+                "/api/worker/register",
+                json={
+                    "name": "s3-w",
+                    "host": "h",
+                    "capabilities": ["cpu"],
+                    "ffmpeg_version": "x",
+                    "max_concurrent": 1,
+                },
+                headers=headers,
+            )
+            worker_id = reg.json()["worker_id"]
+
+            r = await c.post(
+                "/api/worker/claim-job",
+                json={"worker_id": worker_id},
+                headers=headers,
+            )
+            claimed = r.json()["job"]
+            assert claimed is not None
+            assert claimed["id"] == job.id
+            assert claimed["_backend_type"] == "s3"
+            assert claimed["_s3_bucket"] == "forge-media"
+            assert claimed["_s3_prefix"] == "masters/movies/"
+
     async def test_claim_returns_null_when_paused(self, client: AsyncClient, app):
         from transcode_forge.repos import system as system_repo
 

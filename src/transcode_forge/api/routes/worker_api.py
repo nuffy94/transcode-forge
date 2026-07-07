@@ -372,7 +372,13 @@ async def claim_job(
         job = job.model_copy(update={"status": JobStatus.TRANSCODING})
 
         # Fetch the library to include backend + content info in the response.
-        library = await library_repo.get_library(db, job.library)
+        # Jobs carry the library NAME (migration 0008); fall back to an id
+        # lookup for any stray pre-backfill row. Resolving by id alone
+        # silently dropped the S3 fields and every S3 job failed with
+        # 'Source file not found' (found live 2026-07-06).
+        library = await library_repo.get_library_by_name(db, job.library)
+        if library is None:
+            library = await library_repo.get_library(db, job.library)
         job_dict = job.model_dump(mode="json")
         if library:
             job_dict["_backend_type"] = library.get("backend", "filesystem")

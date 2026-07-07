@@ -242,9 +242,11 @@ async def _probe_s3_object(
     Returns:
         ProbeResult if successful, None if both presigned and fallback fail.
     """
-    # Step 1: Try presigned-URL probe
+    # Step 1: Try presigned-URL probe. aioboto3 clients return a coroutine
+    # here (unlike sync boto3) — it must be awaited or ffprobe receives a
+    # coroutine object and every probe falls through to head-bytes.
     try:
-        presigned_url = client.generate_presigned_url(
+        presigned_url = await client.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket, "Key": key},
             ExpiresIn=PRESIGNED_URL_EXPIRATION,
