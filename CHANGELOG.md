@@ -4,6 +4,37 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-07-06
+
+### Fixed
+- **S3 library scans dropped tail-moov files.** The scanner never awaited
+  aioboto3's `generate_presigned_url` (it returns a coroutine, unlike
+  sync boto3), so ffprobe received a coroutine object and every presigned
+  probe silently fell back to 64 KB head-bytes. Matroska survived that;
+  `.mov`/`.mp4` without faststart failed both paths and vanished from the
+  catalog with no skip record. Found live on the first real S3 deploy.
+- **Every S3 job failed with 'Source file not found'.** Jobs carry the
+  library NAME (migration 0008), but claim-job still resolved the library
+  by id — the lookup missed, the S3 backend fields were dropped, and
+  workers processed S3 jobs as filesystem. Claim now resolves by name
+  (id fallback for stray pre-backfill rows). Filesystem libraries were
+  never affected.
+- **Derivative registration silently failed-as-success.** The third
+  name-as-id call site: register-derivative fed the library name into the
+  `derivatives.library_id` FK, and the resulting FOREIGN KEY violation was
+  swallowed by a dedup-race handler matching the bare word 'constraint' —
+  204, nothing persisted, the dedup cache never populated. The library is
+  now resolved before insert (409 if unresolvable), and both dedup
+  handlers match UNIQUE violations only.
+- `deploy/linode/seed-media.sh`: Big Buck Bunny source moved to the live
+  peach h264 master (upstream turned the demo mp4 into zip-only).
+
+### Compatibility
+- Scheduler-side fixes only; no schema changes, no worker API changes.
+  v0.9.x workers are unaffected. Filesystem-only installs can upgrade at
+  leisure; any install using S3 libraries should upgrade the scheduler
+  immediately.
+
 ## [0.9.3] - 2026-07-06
 
 ### Changed
