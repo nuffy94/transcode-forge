@@ -69,21 +69,28 @@ async def ffprobe(path: str | Path) -> ProbeResult:
         ProbeError: If ffprobe fails or output cannot be parsed.
         FileNotFoundError: If the file does not exist.
     """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+    # Presigned S3 probes pass an http(s) URL — Path()-ifying one mangles
+    # '//' and fails exists(), so only local inputs get the Path treatment.
+    local: Path | None = None
+    if isinstance(path, str) and path.startswith(("http://", "https://")):
+        target = path
+    else:
+        local = Path(path)
+        if not local.exists():
+            raise FileNotFoundError(f"File not found: {local}")
+        target = str(local)
 
     cmd = [
         "ffprobe",
         "-v",
-        "quiet",
+        "error",  # not 'quiet': failures must carry a reason on stderr
         "-print_format",
         "json",
         "-show_format",
         "-show_streams",
         "-select_streams",
         "v:0",
-        str(path),
+        target,
     ]
 
     try:
@@ -100,7 +107,7 @@ async def ffprobe(path: str | Path) -> ProbeResult:
             await proc.wait()
         except Exception:
             pass
-        raise ProbeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s: {path}") from exc
+        raise ProbeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s: {target}") from exc
     except FileNotFoundError as exc:
         raise ProbeError("ffprobe binary not found — is ffmpeg installed?") from exc
 
@@ -110,11 +117,11 @@ async def ffprobe(path: str | Path) -> ProbeResult:
     try:
         data = json.loads(stdout.decode())
     except json.JSONDecodeError as exc:
-        raise ProbeError(f"ffprobe returned invalid JSON: {path}") from exc
+        raise ProbeError(f"ffprobe returned invalid JSON: {target}") from exc
 
     streams = data.get("streams", [])
     if not streams:
-        raise ProbeError(f"No video streams found: {path}")
+        raise ProbeError(f"No video streams found: {target}")
 
     stream = streams[0]
     fmt = data.get("format", {})
@@ -130,10 +137,13 @@ async def ffprobe(path: str | Path) -> ProbeResult:
     # Duration: prefer format-level (more reliable for containers)
     raw_duration = fmt.get("duration") or stream.get("duration")
     if not raw_duration:
-        raise ProbeError(f"Could not determine duration: {path}")
+        raise ProbeError(f"Could not determine duration: {target}")
     duration = float(raw_duration)
 
-    file_size = int(fmt.get("size", 0)) or path.stat().st_size
+    # URLs have no stat(); S3 callers overwrite file_size with the listed
+    # object size anyway (the partial-download fallback would report the
+    # temp file's size otherwise).
+    file_size = int(fmt.get("size", 0)) or (local.stat().st_size if local is not None else 0)
 
     return ProbeResult(
         video_codec=codec,
