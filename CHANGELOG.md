@@ -4,6 +4,29 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-07-08
+
+### Fixed
+- **S3 library scans still dropped tail-moov files** after 0.9.4. With the
+  presigned URL correctly awaited, it reached `ffprobe()` — which `Path()`-ified
+  the input, mangling `https://` to `https:/`, and raised `FileNotFoundError`
+  from its `exists()` check before the binary ever ran. Every presigned probe
+  fell back to 64 KB head-bytes, so `.mov`/`.mp4` objects without faststart
+  kept vanishing from the catalog. `ffprobe()` now passes URL inputs through
+  to argv untouched. This was the third and final layer of the S3 probe
+  failure found on the first live deploy; filesystem libraries were never
+  affected.
+- **Head-bytes fallback cataloged the wrong file size.** `_probe_s3_object`
+  now overwrites `file_size` with the S3 listing size on both probe paths —
+  previously the fallback recorded the 64 KB temp-file size as the media size.
+- Probe failures log real ffmpeg stderr (`-v quiet` → `-v error`); an empty
+  `ffprobe failed (exit 1):` message had slowed diagnosis.
+
+### Compatibility
+- Scheduler-side fixes only; no schema changes, no worker API changes.
+  v0.9.x workers are unaffected. Any install using S3 libraries should
+  upgrade the scheduler.
+
 ## [0.9.4] - 2026-07-06
 
 ### Fixed
