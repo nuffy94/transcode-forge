@@ -7,7 +7,12 @@
    Source: assets/css/forge.css, built by scripts/build_css.py. #}
 <link rel="stylesheet" href="/static/css/app.css">
 
-{# HTMX + WebSocket extension — vendored. Icons are an inline SVG sprite
-   (partials/_icons.html). The app loads nothing from third-party hosts. #}
+{# HTMX + WebSocket extension + idiomorph (0.7.4, 0BSD) — vendored. Icons are
+   an inline SVG sprite (partials/_icons.html). The app loads nothing from
+   third-party hosts. idiomorph powers hx-swap="morph:innerHTML" on polled
+   panels that hold animated/WS-managed elements (progress meters): a plain
+   innerHTML swap recreates those nodes, restarting their CSS animations
+   mid-cycle and stomping WebSocket-set widths. #}
 <script src="/static/vendor/htmx.min.js"></script>
 <script src="/static/vendor/ws.js"></script>
+<script src="/static/vendor/idiomorph-ext.min.js"></script>

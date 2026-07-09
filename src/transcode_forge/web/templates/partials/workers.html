@@ -48,14 +48,17 @@
     <!-- Status body -->
     {% if is_active %}
         {% if worker.current_job_id %}
+        {# Real progress, not a 0% placeholder: the 10s poll morphs this card,
+           so a hardcoded 0 would drag the WS-driven bar back to zero. #}
+        {% set job_pct = ((worker.current_job_progress or 0) * 100)|round|int %}
         <div class="space-y-2.5">
             <div class="flex items-center justify-between font-mono text-2xs">
                 <span class="text-forge-mute uppercase tracking-stamp">Now running</span>
-                <span data-progress-pct class="text-forge-ember-hot font-semibold tabular-nums">0%</span>
+                <span data-progress-pct class="text-forge-ember-hot font-semibold tabular-nums">{{ job_pct }}%</span>
             </div>
             <p class="text-xs text-forge-paper truncate" title="{{ worker.current_job_filename or worker.current_job_id }}">{{ worker.current_job_filename or worker.current_job_id[:24] }}</p>
             <div class="forge-meter">
-                <div data-progress-bar class="forge-meter-fill" style="width: 0%;"></div>
+                <div data-progress-bar class="forge-meter-fill" style="width: {{ job_pct }}%;"></div>
             </div>
             <div class="grid grid-cols-2 gap-3 pt-2 border-t border-forge-rule/60">
                 <div>

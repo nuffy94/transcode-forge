@@ -20,7 +20,8 @@
     </thead>
     <tbody>
         {% for job in jobs %}
-        {% set pct = (job.progress * 100)|int %}
+        {# round to match ops.js Math.round() — see active_transcodes.html #}
+        {% set pct = (job.progress * 100)|round|int %}
         {% set fid = file_ids.get(job.source_path) %}
         <tr data-job-id="{{ job.id }}"
             {% if fid %}data-file-id="{{ fid }}" class="cursor-pointer {% if job.status == 'transcoding' %}is-active{% endif %}"

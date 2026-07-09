@@ -18,7 +18,7 @@ function initCancelDelegation() {
             showToast('Job cancelled', 'warning');
             htmx.ajax('GET', '/partials/active-transcodes', {
                 target: '#active-transcodes',
-                swap: 'innerHTML',
+                swap: 'morph:innerHTML',
             });
         } catch {
             showToast('Failed to cancel job', 'error');

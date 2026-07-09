@@ -163,10 +163,14 @@
                 <span class="font-mono text-2xs uppercase tracking-stamp text-forge-mute">10s poll</span>
             </div>
         </div>
+        {# morph, not innerHTML: cards have animated meters + WS-managed
+           progress (see dashboard.html) — a plain swap reset every bar and
+           restarted the pulse/shimmer on each 10s poll. #}
         <div id="workers-container"
              hx-get="/partials/workers"
              hx-trigger="load, every 10s"
-             hx-swap="innerHTML"
+             hx-ext="morph"
+             hx-swap="morph:innerHTML"
              class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
             <div class="forge-empty col-span-full">{{ icon('loader', 'forge-icon--spin') }}</div>
         </div>

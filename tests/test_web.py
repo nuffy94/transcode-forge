@@ -27,6 +27,88 @@ class TestSchedulesPartial:
         assert "Mon" in resp.text  # day_names(31) -> Mon..Fri
 
 
+class TestProgressPollMorph:
+    """Regression guards for the progress-bar blink (fixed 2026-07-09).
+
+    The polled panels holding animated meters must morph (idiomorph), not
+    innerHTML-swap: a plain swap recreates the fill elements on every poll,
+    restarting the shimmer/pulse CSS animations mid-cycle (the visible blink)
+    and stomping WebSocket-set widths. Jinja must also round pct the same way
+    ops.js does (Math.round) or the two renderers flip-flop the label."""
+
+    PANELS = (
+        ("/", "active-transcodes"),  # dashboard, 3s poll
+        ("/queue", "job-table-container"),  # queue, 5s poll
+        ("/workers", "workers-container"),  # workers, 10s poll
+    )
+
+    async def test_polled_meter_panels_use_morph_swap(self, client: AsyncClient):
+        for page, container_id in self.PANELS:
+            resp = await client.get(page)
+            assert resp.status_code == 200
+            start = resp.text.index(f'id="{container_id}"')
+            tag = resp.text[start : resp.text.index(">", start)]
+            assert 'hx-swap="morph:innerHTML"' in tag, (page, container_id)
+            assert 'hx-ext="morph"' in tag, (page, container_id)
+
+    async def test_idiomorph_is_vendored_and_loaded(self, client: AsyncClient):
+        resp = await client.get("/static/vendor/idiomorph-ext.min.js")
+        assert resp.status_code == 200
+        assert "Idiomorph" in resp.text[:200]
+        page = await client.get("/")
+        assert "/static/vendor/idiomorph-ext.min.js" in page.text
+
+    async def test_transcoding_pct_rounds_like_the_websocket(self, client: AsyncClient, app):
+        """progress=0.478 must render 48% (Math.round), never 47% (|int)."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Rounding.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.478)
+
+        for partial in ("/partials/active-transcodes", "/partials/jobs"):
+            resp = await client.get(partial)
+            assert resp.status_code == 200
+            assert "48%" in resp.text, partial
+            assert "47%" not in resp.text, partial
+
+    async def test_workers_partial_renders_real_job_progress(self, client: AsyncClient, app):
+        """The card must carry the job's actual progress — a hardcoded 0%
+        placeholder dragged the WS-driven bar back to zero on every poll."""
+        from transcode_forge.models.worker import Worker, WorkerStatus
+        from transcode_forge.repos import workers as worker_repo
+
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/OnWorker.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.42)
+
+        worker = Worker(
+            name="w-progress",
+            host="192.0.2.7",
+            capabilities=["cpu"],
+            status=WorkerStatus.BUSY,
+        )
+        await worker_repo.upsert_worker(db, worker)
+        await db.execute("UPDATE workers SET current_job_id = ? WHERE id = ?", (job.id, worker.id))
+        await db.commit()
+
+        resp = await client.get("/partials/workers")
+        assert resp.status_code == 200
+        assert "width: 42%" in resp.text
+        assert ">42%<" in resp.text
+        assert "width: 0%" not in resp.text
+
+
 class TestPageRoutes:
     async def test_dashboard_page(self, client: AsyncClient):
         response = await client.get("/")

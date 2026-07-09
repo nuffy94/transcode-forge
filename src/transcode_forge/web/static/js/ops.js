@@ -62,7 +62,8 @@ export function initLiveProgress() {
             const barEl = row.querySelector('[data-progress-bar]');
             const pctEl = row.querySelector('[data-progress-pct]');
             if (barEl) barEl.style.width = pct + '%';
-            if (pctEl) pctEl.textContent = pct + '%';
+            // At 0% the server renders "starting" — don't fight it with "0%".
+            if (pctEl && pct > 0) pctEl.textContent = pct + '%';
         };
         ws.onclose = () => setTimeout(connect, 5000);
     }

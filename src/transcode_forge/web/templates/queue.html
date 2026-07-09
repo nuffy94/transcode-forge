@@ -115,10 +115,14 @@
         <input type="hidden" id="queue-sort" name="sort" value="created_at">
         <input type="hidden" id="queue-dir" name="dir" value="desc">
 
+        {# morph, not innerHTML: running rows have animated meters + WS widths
+           (see dashboard.html) — and morphing also keeps row nodes stable
+           across the 5s poll instead of rebuilding the whole table. #}
         <div id="job-table-container" class="forge-scroll"
              hx-get="/partials/jobs"
              hx-trigger="load, refresh, every 5s"
-             hx-swap="innerHTML"
+             hx-ext="morph"
+             hx-swap="morph:innerHTML"
              hx-include="#status-filter, #library-filter, #queue-sort, #queue-dir">
             <div class="forge-empty">{{ icon('loader', 'forge-icon--spin') }}</div>
         </div>
