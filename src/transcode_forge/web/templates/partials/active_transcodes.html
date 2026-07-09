@@ -2,7 +2,9 @@
 {% if jobs %}
 <div>
     {% for job in jobs %}
-    {% set pct = (job.progress * 100)|int %}
+    {# round, not int-truncate: ops.js Math.round()s the same value over the
+       WebSocket — disagreeing here made the label/width flip every poll. #}
+    {% set pct = (job.progress * 100)|round|int %}
     <div class="px-4 py-3 flex items-center gap-4 {% if not loop.last %}border-b border-forge-rule/60{% endif %} hover:bg-forge-panel-hi/30 transition-colors {% if file_ids.get(job.source_path) %}cursor-pointer{% endif %}"
          data-job-id="{{ job.id }}"
          {% if file_ids.get(job.source_path) %}data-file-id="{{ file_ids[job.source_path] }}"{% endif %}>

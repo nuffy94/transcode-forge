@@ -368,12 +368,16 @@ async def workers_partial(
             d["heartbeat_relative"] = "never"
             d["heartbeat_tier"] = "dead"
         # Resolve current_job_id to a human-readable filename so the card
-        # shows what's being transcoded, not an opaque UUID.
+        # shows what's being transcoded, not an opaque UUID — and carry the
+        # job's progress so the poll renders the real bar width instead of a
+        # 0% placeholder (the WebSocket keeps it live between polls).
         d["current_job_filename"] = None
+        d["current_job_progress"] = None
         if w.current_job_id:
             job = await job_repo.get_job(db, w.current_job_id)
             if job:
                 d["current_job_filename"] = Path(job.source_path).name
+                d["current_job_progress"] = job.progress
         enriched.append(d)
     return _render(
         request,

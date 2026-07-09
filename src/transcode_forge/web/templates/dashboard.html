@@ -41,10 +41,14 @@
                 live · 3s poll
             </span>
         </div>
+        {# morph, not innerHTML: rows carry infinite CSS animations (shimmer,
+           pulse) and WS-managed widths — replacing nodes every poll restarts
+           the animations mid-cycle (visible blink) and snaps the bars. #}
         <div id="active-transcodes"
              hx-get="/partials/active-transcodes"
              hx-trigger="load, every 3s"
-             hx-swap="innerHTML">
+             hx-ext="morph"
+             hx-swap="morph:innerHTML">
         </div>
     </section>
 
