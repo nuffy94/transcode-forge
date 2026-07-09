@@ -94,6 +94,10 @@ export S3_SECRET_KEY=…
 
 Or upload your own h264 media under `masters/movies/` with rclone/s3cmd.
 
+> For the **reproducible benchmark corpus** (open-licensed, content-class
+> partitioned, versioned with a manifest) used by `scripts/bench/`, use
+> `build_corpus.py` instead — see [CORPUS.md](CORPUS.md).
+
 ### 3. Create a Cloud Firewall
 
 Docker publishes ports past `ufw`, so the **Cloud Firewall is the
