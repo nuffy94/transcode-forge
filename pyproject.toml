@@ -33,9 +33,8 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers -v --ignore=tests/e2e --ignore=tests/qa --ignore=tests/test_s3_integration.py"
+addopts = "--strict-markers -v --ignore=tests/qa --ignore=tests/test_s3_integration.py"
 markers = [
-    "e2e: End-to-end browser tests (run with: pytest tests/e2e/)",
     "qa: UX/QA sweep against a seeded demo instance (run with: pytest tests/qa/)",
     "s3_integration: S3 integration tests with MinIO (run with: pytest tests/test_s3_integration.py)",
 ]

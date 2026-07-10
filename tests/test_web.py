@@ -1,7 +1,9 @@
 """Tests for web UI routes and HTMX partials."""
 
+import re
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import AsyncClient
 
 from transcode_forge.models.job import Job, JobStatus
@@ -149,6 +151,27 @@ class TestPageRoutes:
         response = await client.get("/stats")
         assert response.status_code == 200
         assert "Statistics" in response.text
+
+    @pytest.mark.parametrize(
+        ("path", "title"),
+        [
+            ("/", "Dashboard"),
+            ("/movies", "Movies"),
+            ("/tv", "TV Shows"),
+            ("/queue", "Queue"),
+            ("/activity", "Activity"),
+            ("/workers", "Workers"),
+            ("/stats", "Statistics"),
+            ("/settings", "Settings"),
+        ],
+    )
+    async def test_page_titles(self, client: AsyncClient, path: str, title: str):
+        """Every page sets its section in <title> (absorbed from tests/e2e)."""
+        response = await client.get(path)
+        assert response.status_code == 200
+        match = re.search(r"<title>([^<]*)</title>", response.text)
+        assert match, f"{path} has no <title>"
+        assert title in match.group(1), f"{path} title is {match.group(1)!r}"
 
 
 class TestPartials:

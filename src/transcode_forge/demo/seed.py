@@ -441,9 +441,11 @@ async def seed_demo_data(db: DBConnection) -> None:
                 started_at=_past(hours_ago + 7).isoformat(),
                 completed_at=_past(hours_ago + 6.5).isoformat(),
             )
+            # A real gap before started_at — two _past(hours_ago + 7) calls
+            # evaluate now() microseconds apart, leaving created AFTER started.
             await db.execute(
                 "UPDATE jobs SET created_at = ? WHERE id = ?",
-                (_past(hours_ago + 7).isoformat(), first_try.id),
+                (_past(hours_ago + 7 + _rng.uniform(0.05, 0.5)).isoformat(), first_try.id),
             )
 
         job = Job(
@@ -485,7 +487,10 @@ async def seed_demo_data(db: DBConnection) -> None:
         )
     await db.commit()
 
-    # 8 failed jobs
+    # 8 failed jobs. Like every terminal status below, created_at is
+    # backdated to sit before started_at — create_job stamps now(), which
+    # left these lifecycles incoherent (created hours AFTER completed) and
+    # made time-ordered views unassertable.
     for _i in range(min(8, len(job_candidates) - idx)):
         fid, fpath = job_candidates[idx]
         idx += 1
@@ -511,13 +516,18 @@ async def seed_demo_data(db: DBConnection) -> None:
             started_at=_past(hours_ago + 0.5).isoformat(),
             completed_at=_past(hours_ago).isoformat(),
         )
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(hours_ago + 0.5 + _rng.uniform(0.05, 0.5)).isoformat(), job.id),
+        )
         await media_repo.update_media_status(
             db,
             fid,
             transcode_status="needs_transcode",
         )
 
-    # 12 pending jobs
+    # 12 pending jobs — queued at distinct past moments (identical now()
+    # stamps made every sort order legal, so "the queue reads shuffled").
     for _i in range(min(12, len(job_candidates) - idx)):
         fid, fpath = job_candidates[idx]
         idx += 1
@@ -534,6 +544,10 @@ async def seed_demo_data(db: DBConnection) -> None:
             status=JobStatus.PENDING,
         )
         await job_repo.create_job(db, job)
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(_rng.uniform(0.5, 24)).isoformat(), job.id),
+        )
         await media_repo.update_media_status(
             db,
             fid,
@@ -541,7 +555,7 @@ async def seed_demo_data(db: DBConnection) -> None:
             job_id=job.id,
         )
 
-    # 8 queued jobs
+    # 8 queued jobs — same distinct-past treatment as pending.
     for _i in range(min(8, len(job_candidates) - idx)):
         fid, fpath = job_candidates[idx]
         idx += 1
@@ -558,6 +572,10 @@ async def seed_demo_data(db: DBConnection) -> None:
             status=JobStatus.QUEUED,
         )
         await job_repo.create_job(db, job)
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(_rng.uniform(0.5, 24)).isoformat(), job.id),
+        )
         await media_repo.update_media_status(
             db,
             fid,
@@ -576,6 +594,8 @@ async def seed_demo_data(db: DBConnection) -> None:
         quality = 21 if lib == "movies" else 24
         wid = busy_workers[i % len(busy_workers)] if busy_workers else online_worker_ids[0]
 
+        started_hours_ago = _rng.uniform(0.1, 2)
+
         job = Job(
             source_path=fpath,
             library=lib,
@@ -593,7 +613,11 @@ async def seed_demo_data(db: DBConnection) -> None:
             job.id,
             worker_id=wid,
             progress=round(_rng.uniform(0.05, 0.75), 3),
-            started_at=_past(_rng.uniform(0.1, 2)).isoformat(),
+            started_at=_past(started_hours_ago).isoformat(),
+        )
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(started_hours_ago + _rng.uniform(0.05, 0.5)).isoformat(), job.id),
         )
         await media_repo.update_media_status(
             db,
@@ -635,6 +659,10 @@ async def seed_demo_data(db: DBConnection) -> None:
             error_message="Output file is larger than source (size regression)",
             started_at=_past(24).isoformat(),
             completed_at=_past(23.5).isoformat(),
+        )
+        await db.execute(
+            "UPDATE jobs SET created_at = ? WHERE id = ?",
+            (_past(24 + _rng.uniform(0.05, 0.5)).isoformat(), job.id),
         )
         await media_repo.update_media_status(
             db,
