@@ -6,8 +6,8 @@ registers with that token -> it appears under Workers and the token links
 to it. Registering with the issued token also exercises the hash-at-rest
 auth round-trip (Step 13) through the real request path.
 
-This lives in the main suite (not tests/e2e/) on purpose: it needs no
-browser or real server, so CI enforces it on every push as a true gate.
+This lives in the main suite (not the browser sweep) on purpose: it needs
+no browser or real server, so CI enforces it on every push as a true gate.
 """
 
 from typing import Any

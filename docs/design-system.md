@@ -65,7 +65,7 @@ uses the matching `--forge-*` vars.
 
 | Token | Value | Use |
 |---|---|---|
-| `forge-bg` | `#0d0b08` | page field (locked — E2E asserts it) |
+| `forge-bg` | `#0d0b08` | page field (locked — the QA sweep asserts it) |
 | `forge-well` | `#0a0806` | recessed slots: table heads, meter troughs, inputs |
 | `forge-surface` | `#15120e` | sidebar, drawers |
 | `forge-panel` | `#1c1813` | panels, cards |
