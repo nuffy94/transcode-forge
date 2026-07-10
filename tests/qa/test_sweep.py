@@ -33,13 +33,35 @@ from tests.qa.sweep_lib import (
 
 # Load-bearing elements per page: if one is missing the partial died, even
 # when nothing errored. Selectors are stable ids from the templates.
+# Anchors check DOM PRESENCE only (deliberately — cheap, viewport-agnostic);
+# assertions that need visibility semantics live in test_shell.py.
 STRUCTURAL_ANCHORS: dict[str, list[str]] = {
-    "/": ["#dashboard-stats", "#active-transcodes", "#recent-activity", "#scan-history"],
-    "/movies": ["#mv-status", "tr[data-file-id]"],
+    "/": [
+        "#dashboard-stats",
+        "#active-transcodes",
+        "#recent-activity",
+        "#scan-history",
+        "#pause-btn",
+    ],
+    "/movies": [
+        "#mv-status",
+        "#mv-codec",
+        "#mv-search",
+        "#view-table",
+        "#view-grid",
+        "tr[data-file-id]",
+    ],
     "/tv": ["#tab-shows", "#tab-files"],
-    "/queue": ["#queue-sort"],
-    "/activity": ["#tab-outcomes", "#tab-skips"],
-    "/activity?view=skips": ["#tab-skips.is-active"],
+    "/queue": [
+        "#queue-sort",
+        "#status-filter",
+        "#library-filter",
+        "#scan-library",
+        "#scan-btn",
+        "#pause-btn",
+    ],
+    "/activity": ["#tab-outcomes", "#tab-skips", "#activity-tabs"],
+    "/activity?view=skips": ["#tab-skips.is-active", "#skip-reason-filter", "#skip-library-filter"],
     "/workers": ["#add-worker-toggle"],
     "/stats": ["#stats-container"],
     "/settings": ["#tab-libraries", "#tab-quality", "#tab-schedules", "#tab-general"],
