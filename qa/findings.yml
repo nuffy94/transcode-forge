@@ -67,9 +67,9 @@
   title: Workers page reads ACTIVE NODES 4 while every card shows HEARTBEAT LOST (frozen demo heartbeats)
   first_seen: 2026-07-05 / S9
   severity: medium
-  status: open
+  status: fixed
   refs: {pr: 42}
-  note: Demo artifact, not a product defect — the stored-status/heartbeat-age split is deliberate and test-guarded (red-team F6). Fix (demo-static heartbeat keep-alive) is in PR 42, awaiting merge — flip to fixed when it lands.
+  note: Demo artifact, not a product defect — the stored-status/heartbeat-age split is deliberate and test-guarded (red-team F6). Fixed by PR 42's demo-static heartbeat keep-alive (merged 2026-07-10); tests/test_demo_seed.py guards the touch behavior.
 
 - id: settings-vmaf-floor-above-target-silent
   title: Tuning accepts target VMAF below the perc5 floor with no cross-field warning
