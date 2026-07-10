@@ -11,6 +11,9 @@ build/
 .env
 .env.local
 deploy/worker.env
+# Staging smoke artifacts (worker bearer token + scratch media)
+.env.staging
+/staging-media/
 
 # Default media directory created by bootstrap.sh — only ignored if user
 # happens to point TF_LIBRARY_* at the in-tree default.

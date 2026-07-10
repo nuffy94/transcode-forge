@@ -32,10 +32,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Lint
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ qa/ scripts/
 
       - name: Format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/ qa/ scripts/
 
       - name: Type check
         run: uv run mypy src/

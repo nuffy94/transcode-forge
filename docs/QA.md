@@ -1,33 +1,65 @@
 # UX / QA testing routine
 
-How we catch UX bugs, broken flows, and visual problems **repeatably** without
-paying for an AI on every run. The principle: *explore once with AI, codify the
-findings, replay for free.*
+How we catch UX bugs, broken flows, and visual problems **repeatably**
+without paying for an AI on every run. The doctrine: *explore once with AI,
+codify the findings, replay for free.* Proven in practice — the 2026-07-05
+exploratory run confirmed 6 real product bugs; 5 are now free deterministic
+guards and the 6th is fixed awaiting its guard (`/qa-codify
+workers-token-panels-stale-after-issue-revoke` closes it). Every finding's
+lifecycle is tracked in `qa/findings.yml`.
 
-Everything runs against a **seeded demo instance** — the app in demo-static
-mode (realistic data, no Redis/ffmpeg, no live server). So the whole routine is
-reproducible on any machine with one command, no Linode required.
+**One QA system, four layers, one boot substrate.** Every layer is either
+free-in-CI or explicitly priced and human-triggered. Every finding has a
+lifecycle (found → verified → ledgered → codified/fixed → guarded).
 
-```bash
-# Launch the demo target (seeded, deterministic) on :18799:
-TF_DEMO_STATIC=true TF_DB_URL="sqlite:///qa_sweep_live.db" TF_AUTH_SECRET=qa-sweep \
-  uv run uvicorn transcode_forge.main:app --host 127.0.0.1 --port 18799
-# First time, open http://127.0.0.1:18799 and set the admin password to
-# 'qa-sweep-password-123' (the value the tooling logs in with).
 ```
+L1  unit/integration      pytest             CI      free
+L2  deterministic sweep   pytest tests/qa/   CI      free
+L3  AI exploratory        qa/ workflow       local   priced, release-gated
+L4  codify loop           /qa-codify         local   the L3 → L1/L2 compiler
+──────────────────────────────────────────────────────────────────────────
+substrate: qa/instance.py (one launcher) · deterministic coherent seed ·
+findings ledger (qa/findings.yml) · coverage gate · pixel baselines
+```
+
+## The boot substrate (`qa/instance.py`)
+
+Every QA surface that needs a real HTTP server boots it through **one**
+module, always in demo-static mode (seeded, deterministic, no Redis/ffmpeg
+required):
+
+- `launch()` — attached child process for pytest. `tests/qa/conftest.py`
+  wraps it as `launch_qa_app` (session fixture + the fresh no-admin
+  instance `test_setup_flow.py` uses).
+- `start_detached()` / `stop_detached()` — pidfile-managed instances behind
+  the `qa/launch_demo.py` CLI (the L3 sweep's per-agent instances). Their
+  `READY`/`STOPPED` stdout lines are a contract the workflow's agent
+  prompts parse; `tests/qa/test_instance.py` pins the exact wording.
+- `bootstrap_admin()` — the single first-run auth bootstrap.
+
+The seed itself is deterministic AND coherent: fixed RNG, every job's
+lifecycle ordered (`created ≤ started ≤ completed`), waiting jobs at
+distinct past timestamps, and a demo-static heartbeat keep-alive so worker
+cards never decay into false "HEARTBEAT LOST" states mid-run
+(`tests/test_demo_seed.py` guards all of it).
+
+The old `tests/e2e/` suite is gone — absorbed into L1 + L2 (its threaded
+in-process boot was the 4th boot mechanism and carried an asyncio-pollution
+footgun). Empty-state and redirect assertions live in `tests/test_web.py`;
+brand/computed-style/shell assertions live in `tests/qa/test_shell.py`.
 
 ## The layers (cheapest first)
 
-| Layer | What | Cost | When |
+| Layer | What | Cost (measured) | When |
 |---|---|---|---|
-| **L1 — unit/integration** | `pytest` (excl. e2e/qa) | free | every push (CI) |
-| **L2 — deterministic UX sweep** | `pytest tests/qa/` — axe + error/console capture + screenshots over every page | free | every push (CI) |
-| **L3 — AI exploratory sweep** | `qa/ux-sweep.workflow.js` — agents drive real user scenarios and judge them | tokens | on demand / before a release |
-| **L4 — codify** | turn an L3 finding into an L2 assertion | free thereafter | whenever L3 finds something |
+| **L1 — unit/integration** | `pytest` | free · ~3m CI | every push (CI) |
+| **L2 — deterministic sweep** | `pytest tests/qa/` | free · ~2m25s CI | every push (CI) |
+| **L3 — AI exploratory** | `qa/ux-sweep.workflow.js` | ~18 agents observed last full run; wall time + agent count logged into each run's `report.json` | before every release tag + after UI-heavy merges |
+| **L4 — codify** | `/qa-codify <finding-id>` | free thereafter | whenever the ledger has something to close |
 
-L1+L2 run forever for free and guard against regressions. L3 is the occasional
-discovery pass; anything it finds becomes an L2 assertion (L4), so you never pay
-to re-discover the same bug.
+CI wall-times above are from real runs (2026-07-09: `test` ≈ 2m52–3m03s,
+`qa-sweep` ≈ 1m37s before the visual tier, ≈ 2m24s with it). Re-measure
+when the suite grows; the numbers live here so cost drift is visible.
 
 ## L2 — deterministic sweep (`tests/qa/`)
 
@@ -35,98 +67,173 @@ to re-discover the same bug.
 uv run pytest tests/qa/        # excluded from the default suite
 ```
 
-Four modules share one seeded demo instance (helpers in
-`tests/qa/sweep_lib.py` — the `BLOCKING_RULES` axe set, error capture,
-login, overflow/focus checks live there once):
+Modules share one seeded instance (via the substrate) unless noted.
+Shared helpers live in `tests/qa/sweep_lib.py` (the `BLOCKING_RULES` axe
+set, `PAGES`, error capture, login, overflow/focus checks).
 
-**`test_sweep.py`** visits every page — the `PAGES` list covers dashboard,
-movies, tv, queue, both Activity facets (`/activity` and
-`/activity?view=skips`), workers, stats, and settings — and fails on:
+- **`test_sweep.py`** — visits every page in `PAGES` and fails on: axe
+  blocking violations (vendored `axe.min.js`, offline), console/page
+  errors, failed `/api` responses, error toasts (persistent by design),
+  a missing **structural anchor** (`STRUCTURAL_ANCHORS` — the dead-partial
+  detector; anchors check DOM presence deliberately, visibility semantics
+  live in test_shell/test_visual), document-level horizontal overflow, and
+  Tab-reaches-a-control. Also sweeps the file-detail drawer and `/login`
+  in a fresh anonymous context.
+- **`test_shell.py`** — the shell + brand contract in a real renderer:
+  sidebar lockup/nav/sprite icons, header datum strip, design tokens by
+  computed style (the `#0d0b08` field, `.forge-seam`, Big Shoulders),
+  HTMX shell partials resolving past their placeholders, and Activity's
+  facet exclusivity via BOTH render paths (client click and the
+  server-side `?view=skips` conditional).
+- **`test_dialogs.py`** — axe + error capture against every dialog OPEN
+  (add-library in both storage modes, edit-library, add-worker), Escape
+  closes real `<dialog>`s, the schedule list live-refresh guard, and the
+  human-readable-422-toast guard.
+- **`test_mobile.py`** — every page at 390×844: no horizontal body
+  scroll, nav present, error capture on.
+- **`test_setup_flow.py`** — its own fresh no-admin instance for `/setup`.
+- **`test_visual.py`** — the visual layer (see below).
+- **`test_coverage_gate.py`** — the coverage gap gate (see below).
+- **`test_findings_ledger.py`** — schema guard for `qa/findings.yml`.
+- **`test_instance.py`** — the substrate's detached CLI contract.
 
-- **axe-core** blocking violations — `color-contrast`, the missing-`label`
-  family, and the interactive-name family (`button-name`, `link-name`,
-  `aria-required-attr`, `duplicate-id-aria`, `image-alt`). Vendored
-  `tests/qa/vendor/axe.min.js`, so it works offline.
-- **console / page errors** and **failed `/api` responses** during browsing.
-- **error toasts** present on any page. Error toasts are *persistent* by design
-  (they require a click to dismiss — see `static/js/toast.js`), specifically so
-  a transient error can never slip past a screenshot or an assertion.
-- a **load-bearing element missing** (`STRUCTURAL_ANCHORS` — the dead-partial
-  detector: a page can 200 with a dead HTMX section and no console error).
-- **document-level horizontal overflow** at desktop width, and **Tab from the
-  body not reaching a focusable control** (focus-trap guard).
+## Visual layer (`tests/qa/test_visual.py`)
 
-After the page loop it also opens the **file-detail drawer** on a transcoded
-movie (axe re-runs against the open state; `movies_drawer.png` is captured)
-and sweeps **`/login` in a fresh unauthenticated context**.
+Two tiers (design decision D4):
 
-**`test_dialogs.py`** re-runs axe + error capture against every dialog in its
-OPEN state: the add-library modal in both storage modes (the backend select
-must swap Path for Bucket/Prefix), the edit-library modal, and the Workers
-"Add a worker" panel — and asserts `Escape` closes the real `<dialog>`s.
+1. **Geometry invariants** — run everywhere, flake-proof. Per page:
+   viewport containment (sections/panels/scroll-wrappers; raw tables are
+   exempt — they scroll inside `.forge-scroll` by design), nav rail fixed
+   at 240px, header pinned, meter fills inside their troughs, sibling
+   sections never overlapping. These catch the layout-regression class
+   structurally (a dialog pinned top-left, a panel escaping the grid).
+2. **Pixel baselines** — CI-only. Committed PNGs in `tests/qa/baselines/`
+   (desktop 1440×900, one per swept page) vs a per-channel Pillow diff
+   (fail at >0.5% differing pixels). This is the only tier that sees the
+   color/font/texture class — an ember gradient silently going gray passes
+   every invariant. Local runs **skip**: baselines carry the ubuntu CI
+   font stack; cross-OS pixel comparison is the flake we deliberately
+   avoid. Animations are frozen and wall-clock-anchored text
+   (`#forge-clock`, `[data-visual-volatile]`) is hidden before every shot.
 
-**`test_mobile.py`** re-sweeps every page at 390×844: the page body must not
-scroll horizontally (wide tables scroll inside their own `forge-scroll`
-container), nav must be present, error capture stays on. Screenshots land in
-`tests/qa/shots/mobile/`.
+**When you change the UI intentionally**: push, let qa-sweep run (it
+uploads the current renders in the `qa-screenshots` artifact), then
 
-**`test_setup_flow.py`** boots its own fresh instance (no admin) and sweeps
-the one page the main sweep can never reach: `/setup` — axe, the
-mismatched-confirm error path, and the real create-admin → dashboard flow.
+```bash
+uv run python scripts/update_qa_baselines.py --run <actions-run-id>
+```
 
-Full-page screenshots of each page land in `tests/qa/shots/` (gitignored) for
-visual review / diffing.
+and commit — the PNG diff rides the PR for eyeball review. Never capture
+baselines locally.
 
-This layer alone has already caught: the broken Schedules partial, every input
-rendering white (Tailwind forms-plugin cascade), unlabeled bulk-select
-checkboxes, a demo-mode Redis startup crash, a misleading health 503, and —
-on the mobile pass's first ever run — horizontal overflow on four pages
-(queue, both Activity facets, stats: tables missing their `forge-scroll`
-wrapper).
+## Coverage model (`qa/coverage.py`)
+
+The inventory and gap report are **derived**; intent stays hand-curated in
+`qa/scenarios.md` (each scenario declares a `Routes:` line).
+
+```bash
+uv run python qa/coverage.py           # coverage table (markdown; exit 1 on gaps)
+uv run python qa/coverage.py --json    # machine-readable
+```
+
+**When you add a page route** (the contract): the CI gate
+(`test_coverage_gate.py`) fails qa-sweep for any top-level HTML page route
+with zero QA mapping — register the page by adding it to `PAGES` +
+`STRUCTURAL_ANCHORS` in `tests/qa/`, or waive it with a written reason in
+`qa/coverage.py::COVERED_ELSEWHERE`. The gate is scoped to page routes
+only (partials are covered transitively by their pages; `/api/*`
+correctness is L1's job), which keeps its false-positive rate at ~zero.
+New pages must land on the router in `web/routes.py` — that router is the
+gate's derivation source.
 
 ## L3 — AI exploratory sweep (`qa/ux-sweep.workflow.js`)
 
-The on-demand discovery pass. One agent per scenario (from
-`qa/scenarios.md` — the workflow reads it at run time, so the file is the
-single source of truth) **drives a real app instance** through a user task
-and *judges* what happened (did the right thing happen, was it clear, did
-anything break or go silently missing), not just whether it 200'd.
+The priced discovery pass. One agent per scenario (from `qa/scenarios.md`,
+read at run time) drives a real app instance through a user task and
+*judges* the result; every flagged finding is re-verified by an
+independent agent on another fresh instance — clean-state reproduction or
+it doesn't count.
 
-Built for trustworthy findings and survivable runs (v2, 2026-07-05):
-
-- **Isolation** — every explorer gets its **own fresh instance**
-  (`qa/launch_demo.py` starts a detached demo-static app per agent on its
-  own port + throwaway sqlite; torn down after). Scenarios can't
-  contaminate each other's judgments, and every flagged finding is
-  re-verified by an independent agent **on another fresh instance** from
-  the finding's repro steps — clean-state reproduction or it doesn't count.
-- **Durability** — each scenario writes its findings to
-  `qa/runs/latest/<id>.json` the moment they exist. A run that dies
-  mid-way (rate limits, crash) keeps everything completed; re-running
-  skips scenarios whose results are already on disk.
-- **Bounded waves** — scenarios run `waveSize` at a time (default 3), so
-  a meltdown costs one wave, not the run.
-- **Honest coverage** — the report leads with what ran, what didn't, and
-  any verification overflow. Unswept scenarios are unknowns, not passes.
-- **Run history** — `qa/runs/latest` rotates to `qa/runs/previous`;
-  confirmed issues are tagged **new** vs **known** against the previous
-  report, so repeat runs surface only what changed.
+- **Isolation** — every explorer/verifier gets its own detached instance
+  (own port + throwaway sqlite) via the substrate's CLI.
+- **Durability** — per-scenario JSON hits disk the moment it exists; a run
+  that dies keeps everything completed, and re-running skips finished
+  scenarios.
+- **Bounded** — scenarios run in waves (default 3 at a time), and each
+  scenario gets at most 3 verification agents (overflow is reported, never
+  silently dropped). Observed cost of the last full run: 18 agents
+  (1 prep + 10 explorers + 6 verify + 1 report); each run's actual agent
+  count and wall time land in its `report.json`. `{serial: true}` is the
+  rate-limit fallback (one at a time, one verifier per finding).
+- **Ledgered output** — the synthesize step updates `qa/findings.yml`
+  against the WHOLE ledger (semantic matching): recurrences of fixed
+  entries re-surface as regressions on the same id, never duplicates; new
+  verified findings enter as `new`, judged-but-unreproduced leads as
+  `unverified`.
+- **Cost-logged** — each run records wall time and agent count into
+  `report.json` and states them in the report.
 
 ```bash
-# Fully self-contained — no manual launch step:
-#   invoke the Workflow tool with scriptPath "qa/ux-sweep.workflow.js"
-#   optional args: {waveSize: 3, runDir: "qa/runs/latest"}
+# Invoke the Workflow tool with scriptPath "qa/ux-sweep.workflow.js"
+# optional args: {waveSize: 3, runDir: "qa/runs/latest", serial: false}
 # Artifacts: qa/runs/latest/{report.md, report.json, S*.json, shots/}
 ```
 
-It returns coverage + a prioritized report of verified issues, each with a
-suggested `tests/qa/` assertion to lock it (the L4 loop).
-`qa/sweep_helpers.py` gives agents login + first-run setup + error-capture
-so scenario scripts stay short.
+**Cadence (policy)**: release-gated — run before every tag, plus after any
+UI-heavy merge worth flagging. Not nightly: the drift-diff needs a stable
+base, and unattended runs buy nothing.
 
-## The codify loop (L4)
+## Findings ledger (`qa/findings.yml`) + the codify loop (L4)
 
-When L3 surfaces a real issue: fix it, then add an assertion to `tests/qa/`
-(another page/element check, or extend `BLOCKING_RULES` / the toast/console
-checks). From then on L2 catches any regression for free. That's why the
-deterministic suite keeps growing and the AI cost trends toward zero.
+Every L3 finding lives in the committed ledger with a stable semantic id
+and a lifecycle:
+
+```
+unverified → new → verified → open → fixed → codified   (or wontfix)
+```
+
+`codified` means fixed AND guarded by a free deterministic test — the end
+state everything should reach. The schema guard
+(`test_findings_ledger.py`) enforces well-formed entries in CI: fixed and
+codified entries must cite their PR; codified entries must cite an
+existing guard test.
+
+To close an entry:
+
+```
+/qa-codify <finding-id>
+```
+
+The command reproduces the finding (never guard what you can't observe),
+routes the guard (browser-needing → `tests/qa/`, HTTP/template → L1 next
+to the feature's tests), TDDs the fix, updates the ledger, and ships a PR.
+That loop ran by hand six times in the week of 2026-07-05; the command
+just names it.
+
+## Staging smoke (the pre-release gate)
+
+CI covers a synthetic real-ffmpeg encode on every push
+(`tests/test_pipeline_integration.py`). The with-real-media version is
+scripted but human-triggered (real ffmpeg time, a real file — deliberately
+not CI):
+
+```bash
+./scripts/staging_smoke.sh /path/to/real-clip.mkv [hevc|av1]
+```
+
+It brings up the throwaway staging stack (`docker-compose.staging.yml`),
+creates the admin, issues a worker token, starts the CPU worker, scans and
+queues the file, polls the job to a terminal state, asserts the outcome
+(**complete** = swapped and smaller; **skipped** = the size/VMAF gate kept
+the original — also a PASS, that's the gate working), and tears everything
+down. The manual walkthrough remains in [docs/STAGING.md](STAGING.md).
+Green smoke → tag the release (after the release-gated L3 run).
+
+## Reuse (what's designed to lift)
+
+The kernel is deliberately portable to other projects (Thirsty, the bots):
+the instance-manager pattern (`qa/instance.py`), `sweep_lib`'s gate set,
+the workflow shape (isolate → persist → verify → synthesize), the ledger
+schema, and the coverage-gate concept. **Don't extract yet** — the second
+consumer drives the extraction into a shared template; until then it ships
+in-forge only.
