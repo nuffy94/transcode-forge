@@ -34,6 +34,11 @@ JOB_TIMEOUT_S="${TF_SMOKE_TIMEOUT:-3600}"
 [ -f "$FILE" ] || { echo "FATAL: no such file: $FILE"; exit 1; }
 command -v jq >/dev/null || { echo "FATAL: jq is required"; exit 1; }
 
+# Create the scratch library BEFORE compose ever runs: Docker auto-creates
+# missing bind-mount sources as root, which would make the later cp fail on
+# a fresh checkout with a root-mode dockerd.
+mkdir -p "$MEDIA_DIR/movies" "$MEDIA_DIR/tv"
+
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { echo "SMOKE FAIL: $*"; exit 1; }
 
@@ -86,7 +91,6 @@ wait_for 120 "staging-cpu registration" bash -c \
     "curl -fsS -b '$COOKIES' '$BASE/api/workers' | jq -e '(.data // .)[] | select(.name == \"staging-cpu\")'"
 
 say "5/8 drop the file + scan"
-mkdir -p "$MEDIA_DIR/movies" "$MEDIA_DIR/tv"
 cp "$FILE" "$MEDIA_DIR/movies/"
 BASENAME=$(basename "$FILE")
 api POST /api/scan '{"library": "movies"}' >/dev/null

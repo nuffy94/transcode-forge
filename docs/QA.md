@@ -3,8 +3,10 @@
 How we catch UX bugs, broken flows, and visual problems **repeatably**
 without paying for an AI on every run. The doctrine: *explore once with AI,
 codify the findings, replay for free.* Proven in practice — the 2026-07-05
-exploratory run confirmed 6 real product bugs; all 6 are now free
-deterministic guards, and their lifecycle is tracked in `qa/findings.yml`.
+exploratory run confirmed 6 real product bugs; 5 are now free deterministic
+guards and the 6th is fixed awaiting its guard (`/qa-codify
+workers-token-panels-stale-after-issue-revoke` closes it). Every finding's
+lifecycle is tracked in `qa/findings.yml`.
 
 **One QA system, four layers, one boot substrate.** Every layer is either
 free-in-CI or explicitly priced and human-triggered. Every finding has a
@@ -52,7 +54,7 @@ brand/computed-style/shell assertions live in `tests/qa/test_shell.py`.
 |---|---|---|---|
 | **L1 — unit/integration** | `pytest` | free · ~3m CI | every push (CI) |
 | **L2 — deterministic sweep** | `pytest tests/qa/` | free · ~2m25s CI | every push (CI) |
-| **L3 — AI exploratory** | `qa/ux-sweep.workflow.js` | ≤14 agents/run; wall time + agent count logged into each run's `report.json` | before every release tag + after UI-heavy merges |
+| **L3 — AI exploratory** | `qa/ux-sweep.workflow.js` | ~18 agents observed last full run; wall time + agent count logged into each run's `report.json` | before every release tag + after UI-heavy merges |
 | **L4 — codify** | `/qa-codify <finding-id>` | free thereafter | whenever the ledger has something to close |
 
 CI wall-times above are from real runs (2026-07-09: `test` ≈ 2m52–3m03s,
@@ -157,10 +159,12 @@ it doesn't count.
 - **Durability** — per-scenario JSON hits disk the moment it exists; a run
   that dies keeps everything completed, and re-running skips finished
   scenarios.
-- **Bounded** — scenarios run in waves (default 3); the structural cost
-  ceiling is ≤14 agents/run (10 explorers + ≤4 verification, +prep/report).
-  `{serial: true}` is the rate-limit fallback (one at a time, one verifier
-  per finding).
+- **Bounded** — scenarios run in waves (default 3 at a time), and each
+  scenario gets at most 3 verification agents (overflow is reported, never
+  silently dropped). Observed cost of the last full run: 18 agents
+  (1 prep + 10 explorers + 6 verify + 1 report); each run's actual agent
+  count and wall time land in its `report.json`. `{serial: true}` is the
+  rate-limit fallback (one at a time, one verifier per finding).
 - **Ledgered output** — the synthesize step updates `qa/findings.yml`
   against the WHOLE ledger (semantic matching): recurrences of fixed
   entries re-surface as regressions on the same id, never duplicates; new
