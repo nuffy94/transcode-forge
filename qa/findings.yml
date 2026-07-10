@@ -1,0 +1,170 @@
+# QA findings ledger (qa-redesign spec D7) — committed, append-mostly.
+#
+# Every L3 finding lives here with a lifecycle:
+#   unverified — judged by a sweep agent but never independently reproduced
+#   new        — independently verified this run, not yet triaged
+#   verified   — reproduced and triaged, fix not started
+#   open       — accepted as real, fix pending (tracked elsewhere if ref'd)
+#   fixed      — fix shipped, no deterministic guard yet
+#   codified   — fixed AND guarded by a free deterministic test (the L4 loop)
+#   wontfix    — adjudicated not-a-defect / not worth fixing (say why in note)
+#
+# ids are stable semantic slugs (route + symptom), never run-dated — the L3
+# synthesize step matches new findings against the WHOLE ledger so a
+# recurrence of a fixed/wontfix entry re-surfaces as that entry (status flip
+# + last_seen), never as a fresh duplicate. Humans and /qa-codify advance
+# status; tests/qa/test_findings_ledger.py keeps the file well-formed.
+#
+# Backfill 2026-07-09: the 2026-07-05 sweep (10/10 scenarios, 6/6 confirmed)
+# + its ~18 unverified leads. Three leads carry their honest CURRENT status
+# instead of a blanket "unverified": two were fixed by later PRs, one was
+# verified live in the manual pass and is tracked in the VMAF spec.
+
+- id: libraries-delete-500-with-media
+  title: DELETE /api/libraries/{id} 500s for any scanned library (FK without cascade)
+  first_seen: 2026-07-05 / S2
+  severity: high
+  status: codified
+  refs: {pr: 30, test: "tests/test_api.py::test_delete_scanned_library_succeeds"}
+
+- id: settings-checkbox-checked-invisible
+  title: Checked checkboxes render identical to unchecked in Edit-library (appearance:none clobber)
+  first_seen: 2026-07-05 / S4
+  severity: high
+  status: codified
+  refs: {pr: 30, test: "tests/qa/test_dialogs.py::test_dialog_states"}
+
+- id: settings-dialogs-pinned-top-left
+  title: Settings <dialog>s open pinned to (0,0) at ~236px (preflight zeroes dialog margin:auto)
+  first_seen: 2026-07-05 / S4
+  severity: medium
+  status: codified
+  refs: {pr: 30, test: "tests/qa/test_dialogs.py::test_dialog_states"}
+
+- id: schedules-list-stale-after-add
+  title: Schedule list stale after add/delete/toggle (htmx `load` is a fire-once trigger)
+  first_seen: 2026-07-05 / S6
+  severity: medium
+  status: codified
+  refs: {pr: 30, test: "tests/qa/test_dialogs.py::test_schedule_list_live_refresh"}
+
+- id: settings-error-toast-object-object
+  title: 422 validation errors toast as "[object Object]" behind an inert open modal
+  first_seen: 2026-07-05 / S8
+  severity: medium
+  status: codified
+  refs: {pr: 30, test: "tests/qa/test_dialogs.py::test_validation_toast_is_readable"}
+
+- id: workers-token-panels-stale-after-issue-revoke
+  title: Worker-token panels don't refresh after issue/revoke until the 10s poll (same htmx `load` no-op)
+  first_seen: 2026-07-05 / S5
+  severity: medium
+  status: fixed
+  refs: {pr: 30}
+  note: Fixed by the same custom-refresh-trigger pattern as the schedules entry; no dedicated guard test yet — codify to close.
+
+- id: workers-page-liveness-self-contradiction
+  title: Workers page reads ACTIVE NODES 4 while every card shows HEARTBEAT LOST (frozen demo heartbeats)
+  first_seen: 2026-07-05 / S9
+  severity: medium
+  status: open
+  refs: {pr: 42}
+  note: Demo artifact, not a product defect — the stored-status/heartbeat-age split is deliberate and test-guarded (red-team F6). Fix (demo-static heartbeat keep-alive) is in PR 42, awaiting merge — flip to fixed when it lands.
+
+- id: settings-vmaf-floor-above-target-silent
+  title: Tuning accepts target VMAF below the perc5 floor with no cross-field warning
+  first_seen: 2026-07-05 / S4
+  severity: medium
+  status: open
+  note: Verified live in the 2026-07-05 manual sweep pass. The misconfig class behind the 93% skip batch; fix belongs with the VMAF settings work (plans/vmaf-decoupling-spec.md open questions).
+
+- id: activity-skipped-vs-discarded-label-split
+  title: Same outcome labeled "Skipped" (dashboard/drawer/TV) but "Discarded" (Activity/Stats)
+  first_seen: 2026-07-05 / S1
+  severity: low
+  status: unverified
+
+- id: activity-outcomes-sort-key-vs-displayed-date
+  title: Outcomes ledger sorts by created_at while displaying completed_at, so dates can read shuffled
+  first_seen: 2026-07-05 / S1
+  severity: low
+  status: unverified
+  note: Seed-side incoherence that amplified this was fixed in PR 42; the sort-key/display mismatch itself is product behavior and still unreviewed.
+
+- id: settings-scan-completion-unconfirmed
+  title: Scan completion/failure never confirmed on the Settings page that triggered it
+  first_seen: 2026-07-05 / S2
+  severity: low
+  status: unverified
+
+- id: activity-failed-scans-not-surfaced
+  title: Failed scans appear only in Queue/Dashboard "Recent scans", never on Activity, with no failure toast
+  first_seen: 2026-07-05 / S10
+  severity: low
+  status: unverified
+
+- id: queue-paused-state-indicator-weak
+  title: Paused queue's only persistent cue is the button reading RESUME (no banner/tile)
+  first_seen: 2026-07-05 / S3
+  severity: low
+  status: unverified
+
+- id: settings-tuning-save-pins-env-overrides
+  title: Tuning save silently pins untouched fields as env-shadowing DB overrides (no indicator, no reset)
+  first_seen: 2026-07-05 / S4
+  severity: low
+  status: unverified
+
+- id: settings-crf-input-direction-unhinted
+  title: CRF is a bare 1-51 number input; the lower-is-better hint lives only in the read-only presets panel
+  first_seen: 2026-07-05 / S4
+  severity: low
+  status: unverified
+
+- id: workers-docker-join-command-hardcoded-path
+  title: Generated Docker join command hardcodes -v /mnt/media/movies with no edit-me marker
+  first_seen: 2026-07-05 / S5
+  severity: low
+  status: unverified
+
+- id: activity-excluded-state-not-marked-in-list
+  title: Exclusion state visible only in the drawer; Activity rows still offer Retry + Exclude on excluded files
+  first_seen: 2026-07-05 / S7
+  severity: low
+  status: unverified
+
+- id: settings-duplicate-path-409-behind-modal
+  title: Duplicate-path 409 has a good message but the toast lands dimmed behind the open modal
+  first_seen: 2026-07-05 / S8
+  severity: low
+  status: unverified
+
+- id: settings-schedule-422-reason-discarded
+  title: Schedule end-hour 422 shows generic "Failed to add schedule", discarding the server's precise reason
+  first_seen: 2026-07-05 / S8
+  severity: low
+  status: unverified
+
+- id: shell-status-pills-online-vs-degraded
+  title: Two unlabeled global status pills can read as opposites (header "Online" vs sidebar "Degraded") with no tooltip
+  first_seen: 2026-07-05 / S9
+  severity: low
+  status: unverified
+
+- id: dashboard-error-reasons-truncated-no-title
+  title: Dashboard error reasons truncate with no title attribute (full text unreachable)
+  first_seen: 2026-07-05 / S9
+  severity: low
+  status: unverified
+
+- id: queue-active-filter-count-includes-pending
+  title: Queue "Active (queued + running)" filter footer counts pending rows into its total
+  first_seen: 2026-07-05 / S9
+  severity: low
+  status: unverified
+
+- id: settings-db-path-clipped-no-tooltip
+  title: Settings DB path clips with no tooltip or wrap
+  first_seen: 2026-07-05 / S9
+  severity: low
+  status: unverified

@@ -90,7 +90,7 @@
                 {{ icon('trash', 'forge-icon--sm') }}
             </button>
         </div>
-        <p class="font-mono text-2xs text-forge-ink">Last heartbeat <span class="text-forge-mute">{{ worker.last_heartbeat[:19] if worker.last_heartbeat else 'unknown' }}</span></p>
+        <p class="font-mono text-2xs text-forge-ink">Last heartbeat <span class="text-forge-mute" data-visual-volatile>{{ worker.last_heartbeat[:19] if worker.last_heartbeat else 'unknown' }}</span></p>
     </div>
     {% else %}
     <div class="text-center py-4 border border-dashed border-forge-rule/60">

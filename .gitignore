@@ -49,8 +49,10 @@ htmlcov/
 # Tailwind standalone CLI binary cache (downloaded by scripts/build_css.py)
 /.tailwind/
 
-# Claude Code agent tooling / local settings — not part of the shipped project
-.claude/
+# Claude Code agent tooling / local settings — not part of the shipped
+# project, EXCEPT the committed project commands (e.g. /qa-codify).
+.claude/*
+!.claude/commands/
 
 # Audit / UX testing artifacts (Playwright screenshots, page snapshots, ad-hoc diffs)
 # Audit reports are moved to docs/audits/ when worth keeping.
@@ -63,6 +65,9 @@ htmlcov/
 /tests/qa/shots/
 # qa/: only the committed tooling ships — agent scratch + screenshots are ignored.
 /qa/*
+!/qa/coverage.py
+!/qa/findings.yml
+!/qa/instance.py
 !/qa/sweep_helpers.py
 !/qa/scenarios.md
 !/qa/ux-sweep.workflow.js

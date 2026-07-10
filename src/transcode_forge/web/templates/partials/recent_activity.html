@@ -17,7 +17,7 @@
         <div class="min-w-0">
             <p class="text-[13px] text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</p>
             <p class="font-mono text-2xs text-forge-mute mt-0.5 tabular-nums">
-                {{ job.completed_at[:16]|replace('T', ' ') if job.completed_at else '—' }}
+                <span data-visual-volatile>{{ job.completed_at[:16]|replace('T', ' ') if job.completed_at else '—' }}</span>
                 {% if worker_names.get(job.worker_id) %}<span class="text-forge-steel ml-1.5">{{ worker_names[job.worker_id] }}</span>{% endif %}
             </p>
         </div>
