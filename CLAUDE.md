@@ -23,11 +23,10 @@ uv sync --extra dev --dev                # install
 uv run uvicorn transcode_forge.main:app --reload --port 8000
 uv run python -m transcode_forge.worker  # worker (config via TF_* env vars)
 
-uv run pytest                            # unit + integration (excludes tests/e2e/)
+uv run pytest                            # unit + integration
 uv run pytest tests/test_pipeline.py     # single file
 uv run pytest -k "test_swap"             # by name
 uv run pytest --cov=transcode_forge      # with coverage
-uv run pytest tests/e2e/                 # E2E (Playwright, real server)
 
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/        # CI enforces --check; format before pushing
@@ -212,11 +211,11 @@ Worker-side:
 - `client` fixture: `httpx.AsyncClient` over ASGI transport, **already
   authenticated** as admin. Tests verifying the auth boundary use
   `unauthed_client`.
-- E2E tests are excluded by default (Playwright, real server) — run with
-  `pytest tests/e2e/`. **Do not run E2E + unit together** (threaded
-  uvicorn pollutes the asyncio loop).
-- UX/QA sweep in `tests/qa/` (axe + error capture + screenshots vs. a seeded
-  demo-static instance), also excluded by default — run with `pytest tests/qa/`.
+- UX/QA sweep in `tests/qa/` (axe + error capture + screenshots + shell/brand
+  assertions vs. a seeded demo-static instance), excluded by default — run
+  with `pytest tests/qa/`. The old `tests/e2e/` suite was absorbed here and
+  into `tests/test_web.py` (QA redesign P1b), retiring the threaded-uvicorn
+  boot and its "don't run E2E + unit together" footgun.
   The full layered routine (incl. the on-demand AI exploratory sweep in `qa/`)
   is documented in [docs/QA.md](docs/QA.md).
 - Coverage target: 80%+.
