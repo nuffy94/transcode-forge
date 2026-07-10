@@ -61,6 +61,7 @@ htmlcov/
 # qa/: only the committed tooling ships — agent scratch + screenshots are ignored.
 /qa/*
 !/qa/coverage.py
+!/qa/instance.py
 !/qa/sweep_helpers.py
 !/qa/scenarios.md
 !/qa/ux-sweep.workflow.js
