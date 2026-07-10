@@ -205,7 +205,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(metrics_router)
 
-    # Web UI routes (HTML pages + HTMX partials)
+    # Web UI routes (HTML pages + HTMX partials). New HTML pages must land on
+    # THIS router — qa/coverage.py derives the QA gap gate from it; a page
+    # registered via a separate router would bypass the gate silently.
     from transcode_forge.web.routes import router as web_router
     from transcode_forge.web.websocket import router as ws_router
 
