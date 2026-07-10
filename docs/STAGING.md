@@ -6,6 +6,11 @@ already runs a synthetic real-ffmpeg encode on every push
 (`tests/test_pipeline_integration.py`), and this is the with-real-media
 version you run by hand before cutting a version.
 
+> **Scripted version**: `./scripts/staging_smoke.sh /path/to/clip.mkv [hevc|av1]`
+> runs this whole walkthrough with real assertions (setup → token → worker →
+> scan → queue → poll → assert outcome → tear down). The steps below are the
+> manual equivalent — useful when you want to watch it happen or debug a step.
+
 It's deliberately minimal and isolated from your dev/prod stacks:
 
 - **SQLite**, not Postgres (single scheduler, workers never touch the DB).
