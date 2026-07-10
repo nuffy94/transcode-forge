@@ -1,19 +1,23 @@
 export const meta = {
   name: 'ux-qa-sweep',
-  description: 'AI UX sweep v2: isolated per-scenario demo instances, durable per-scenario results, bounded waves, fresh-instance verification, coverage-honest report',
-  whenToUse: 'On-demand UX/QA discovery. Self-contained — provisions its own demo instances. Optional args: {waveSize, runDir}.',
+  description: 'AI UX sweep v2: isolated per-scenario demo instances, durable per-scenario results, bounded waves, fresh-instance verification, findings-ledger + cost-logged report',
+  whenToUse: 'On-demand UX/QA discovery (release-gated). Self-contained — provisions its own demo instances. Optional args: {waveSize, runDir, serial}. serial:true is the rate-limit fallback (waveSize=1, one verifier per finding).',
   phases: [
     { title: 'Prep', detail: 'rotate run dirs + read scenarios.md (single source of truth)' },
     { title: 'Explore', detail: 'one agent + one FRESH instance per scenario, in bounded waves; findings hit disk per scenario' },
     { title: 'Verify', detail: 'each flagged finding re-checked on its own fresh instance' },
-    { title: 'Synthesize', detail: 'coverage-honest report + diff vs the previous run' },
+    { title: 'Synthesize', detail: 'coverage-honest report + qa/findings.yml ledger update + cost log + diff vs previous run' },
   ],
 }
 
 // --- inputs -----------------------------------------------------------------
 let A = args || {}
 if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }
-const WAVE = Math.max(1, Math.min(5, A.waveSize || 3))
+// serial: the documented rate-limit fallback — one explorer at a time, one
+// verifier per finding (spec D6 degradation mode).
+const SERIAL = !!A.serial
+const WAVE = SERIAL ? 1 : Math.max(1, Math.min(5, A.waveSize || 3))
+const VERIFY_CAP = SERIAL ? 1 : 3 // per scenario; port block allows max 3
 const RUN_DIR = A.runDir || 'qa/runs/latest'
 const PREV_DIR = 'qa/runs/previous'
 const PW = 'qa-sweep-password-123'
@@ -96,8 +100,26 @@ const REPORT = {
         required: ['title', 'severity', 'novelty'],
       },
     },
+    ledger: {
+      type: 'object',
+      properties: {
+        added: { type: 'array', items: { type: 'string' } },
+        updated: { type: 'array', items: { type: 'string' } },
+        regressions: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['added', 'updated', 'regressions'],
+    },
+    cost: {
+      type: 'object',
+      properties: {
+        wall_seconds: { type: 'number' },
+        agents_spawned: { type: 'number' },
+        wave_size: { type: 'number' },
+      },
+      required: ['wall_seconds', 'agents_spawned', 'wave_size'],
+    },
   },
-  required: ['markdown', 'confirmed_issues'],
+  required: ['markdown', 'confirmed_issues', 'ledger', 'cost'],
 }
 
 // --- prompts ----------------------------------------------------------------
@@ -160,7 +182,8 @@ phase('Prep')
 const prep = await agent(
   `Prepare the Transcode Forge UX-sweep run (repo root, use Bash/file tools):
 1. Rotate run dirs: if ${RUN_DIR} exists and contains any ${'S'}*.json or report files, delete ${PREV_DIR} (if present) and move ${RUN_DIR} to ${PREV_DIR}. Then create ${RUN_DIR} (and ${RUN_DIR}/shots). If ${RUN_DIR} is empty/missing, just create it. Also kill any stale instances: for every pidfile under ${RUN_DIR}/instances and ${PREV_DIR}/instances, run qa/launch_demo.py --stop for that port (ignore failures).
-2. Read qa/scenarios.md — it is the SINGLE source of truth. Return every scenario as {id (e.g. "S1"), title (the heading text after the em dash), brief (the full body text of that scenario, verbatim)}. Set rotated=true if you moved a previous run into ${PREV_DIR}.`,
+2. Write the current UTC time as ISO 8601 to ${RUN_DIR}/run-start.txt (the synthesize step computes the run's wall time from it).
+3. Read qa/scenarios.md — it is the SINGLE source of truth. Return every scenario as {id (e.g. "S1"), title (the heading text after the em dash), brief (the full body text of that scenario, verbatim)}. Set rotated=true if you moved a previous run into ${PREV_DIR}.`,
   { label: 'prep', phase: 'Prep', schema: SCENARIO_LIST }
 )
 if (!prep || !prep.scenarios || !prep.scenarios.length) {
@@ -189,11 +212,12 @@ for (let w = 0; w < SCENARIOS.length; w += WAVE) {
 }
 if (failed.length) log(`explore incomplete — no result for: ${failed.join(', ')} (their ${RUN_DIR}/<id>.json may still exist from a partial run)`)
 
-// Verify flagged findings, each on its own fresh instance. Max 3 verifier
-// instances per scenario (port block size) — overflow is REPORTED, not
-// silently dropped.
+// Verify flagged findings, each on its own fresh instance. Capped verifier
+// instances per scenario (port block allows 3; serial mode uses 1) —
+// overflow is REPORTED, not silently dropped.
 phase('Verify')
 let flaggedTotal = 0
+let verifyJobs = 0
 const unverifiedOverflow = []
 const verified = await parallel(
   perScenario.flatMap((r, i) => {
@@ -201,8 +225,10 @@ const verified = await parallel(
       (x) => x.status === 'broke' || (x.status === 'confusing' && x.severity === 'high')
     )
     flaggedTotal += flagged.length
-    flagged.slice(3).forEach((b) => unverifiedOverflow.push({ scenario: r.scenario.id, step: b.step }))
-    return flagged.slice(0, 3).map((b, n) => () =>
+    flagged.slice(VERIFY_CAP).forEach((b) => unverifiedOverflow.push({ scenario: r.scenario.id, step: b.step }))
+    const jobs = flagged.slice(0, VERIFY_CAP)
+    verifyJobs += jobs.length
+    return jobs.map((b, n) => () =>
       agent(verifyPrompt(r.scenario, b, VERIFY_PORT(i, n)), {
         label: `verify:${r.scenario.id}`,
         phase: 'Verify',
@@ -226,6 +252,9 @@ const coverage = {
   findings_confirmed: confirmed.length,
   unverified_overflow: unverifiedOverflow,
 }
+// Deterministic agent count for the cost log: prep + one explorer per
+// scenario attempted + verify jobs + this synthesize agent.
+const agentsSpawned = 1 + SCENARIOS.length + verifyJobs + 1
 const report = await agent(
   `Synthesize the Transcode Forge UX-sweep run in ${RUN_DIR} (repo root).
 
@@ -240,9 +269,15 @@ ${JSON.stringify(perScenario.map((r) => ({ id: r.scenario.id, findings: r.findin
 
 Steps:
 1. If ${PREV_DIR}/report.json exists, read it and mark each confirmed issue's novelty: "known" if the previous run confirmed substantially the same issue (same scenario + same failure), else "new". No previous report → everything is "new".
-2. Write a prioritized markdown report: coverage first, then confirmed issues by severity (novelty-tagged), then notable "confusing" items that failed verification (say why), then what worked. Per confirmed issue: one-line repro + a concrete suggested tests/qa/ assertion (the codify loop).
-3. Write the markdown to ${RUN_DIR}/report.md and the structured data (your full return value) to ${RUN_DIR}/report.json.
-4. Return {markdown, confirmed_issues} matching the schema.`,
+2. LEDGER (qa/findings.yml — committed, the run's durable output): read the ENTIRE ledger first. For each confirmed issue AND each notable judged-but-unreproduced lead, match against existing entries by MEANING (normalized route + symptom), not exact strings.
+   - Matched entry: update it in place — add/refresh "last_seen: <today's date> / <scenario id>" and record its id under ledger.updated. If its status is fixed or codified and the issue reproduced again this run, flip status to open and ALSO list its id under ledger.regressions (and flag it prominently in report.md — a regression of a guarded fix is the headline). A wontfix recurrence keeps wontfix (bump last_seen only).
+   - No match: append a new entry with id = stable semantic slug (route-symptom kebab-case, NEVER run-dated), title, "first_seen: <today> / <scenario>", severity, and status "new" for independently-verified findings or "unverified" for judged-but-not-reproduced leads. Record its id under ledger.added.
+   - Append-mostly: never delete or rewrite unrelated entries. Keep the YAML parseable — tests/qa/test_findings_ledger.py schema-checks it in CI (kebab-case ids, known statuses, first_seen format "YYYY-MM-DD / S<n>", fixed/codified entries must carry refs.pr).
+3. COST LOG: read ${RUN_DIR}/run-start.txt (ISO 8601, written by prep) and compute wall_seconds = now - start. cost = {wall_seconds, agents_spawned: ${agentsSpawned}, wave_size: ${WAVE}}. Include it in your return value and state it in report.md ("this run cost N agents over M minutes").
+4. Write a prioritized markdown report: coverage first, then confirmed issues by severity (novelty-tagged), then ledger changes (added/updated/regressions), then notable "confusing" items that failed verification (say why), then what worked. Per confirmed issue: one-line repro + a concrete suggested tests/qa/ assertion. End with the codify pointer: run /qa-codify <finding-id> to turn a ledger entry into a deterministic guard.
+5. If qa/coverage.py exists, also run: uv run python qa/coverage.py — append its coverage table to report.md (route-level coverage context). If the file is absent, skip this step silently.
+6. Write the markdown to ${RUN_DIR}/report.md and the structured data (your full return value) to ${RUN_DIR}/report.json.
+7. Return {markdown, confirmed_issues, ledger, cost} matching the schema.`,
   { label: 'report', phase: 'Synthesize', schema: REPORT }
 )
 
