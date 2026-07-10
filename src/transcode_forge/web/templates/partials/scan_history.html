@@ -18,7 +18,7 @@
             {% elif scan.status == 'failed' %}
             <span class="forge-pill forge-pill--failed">Failed</span>
             {% endif %}
-            <span class="font-mono text-2xs text-forge-mute tabular-nums">{{ scan.started_at[5:16]|replace('T', ' ') if scan.started_at else '' }}</span>
+            <span class="font-mono text-2xs text-forge-mute tabular-nums" data-visual-volatile>{{ scan.started_at[5:16]|replace('T', ' ') if scan.started_at else '' }}</span>
         </div>
     </div>
     {% endfor %}
