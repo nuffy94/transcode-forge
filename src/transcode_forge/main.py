@@ -98,7 +98,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await seed_demo_data(app.state.db)
 
         if settings.demo_static:
-            logger.info("Demo data seeded (STATIC — simulator disabled)")
+            # No simulator, but seeded heartbeats must not decay into
+            # "HEARTBEAT LOST" cards mid-run — see demo/heartbeat.py.
+            from transcode_forge.demo.heartbeat import run_static_heartbeat
+
+            background_tasks.append(asyncio.create_task(run_static_heartbeat(app.state.db)))
+            logger.info("Demo data seeded (STATIC — simulator disabled, heartbeat keep-alive on)")
         else:
             from transcode_forge.demo.simulator import run_simulator
 
