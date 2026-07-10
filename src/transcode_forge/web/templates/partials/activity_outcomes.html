@@ -55,7 +55,7 @@
             </td>
             <td class="col-mono text-xs {% if job.worker_name %}text-forge-steel{% else %}text-forge-mute{% endif %}">{{ job.worker_name or '—' }}</td>
             <td class="col-mono text-xs text-forge-ink tabular-nums">{{ job.duration }}</td>
-            <td class="col-mono text-xs text-forge-mute tabular-nums">{{ job.completed_at[:10] if job.completed_at else '—' }}</td>
+            <td class="col-mono text-xs text-forge-mute tabular-nums" data-visual-volatile>{{ job.completed_at[:10] if job.completed_at else '—' }}</td>
             <td class="text-right">
                 {% if job.status == 'failed' %}
                 <span class="flex justify-end gap-1.5">
