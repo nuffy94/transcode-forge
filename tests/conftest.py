@@ -51,23 +51,25 @@ async def _truncate_pg(conn: DBConnection) -> None:
         await conn.execute(f"TRUNCATE {joined} RESTART IDENTITY CASCADE")
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _pg_reset() -> AsyncIterator[None]:
-    """Before each Postgres test: apply migrations (idempotent — the first
-    test creates the schema, the rest skip) and TRUNCATE every table for
-    isolation. Autouse + function-scoped, so it runs before the db/app
-    fixtures populate anything, and stays on the per-function event loop
-    (no session-scoped-async-fixture loop pitfalls). A no-op under SQLite,
-    where each test already gets its own temp file."""
-    if not USE_PG:
+# Defined ONLY when targeting Postgres. An autouse *async* fixture forces
+# pytest-asyncio to run every test inside an event loop, which the sync
+# Playwright tests in tests/qa/ (Runner.run) cannot tolerate — so under the
+# default SQLite path this fixture must not exist at all, not merely no-op.
+if USE_PG:
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _pg_reset() -> AsyncIterator[None]:
+        """Before each Postgres test: apply migrations (idempotent — the
+        first test creates the schema, the rest skip) and TRUNCATE every
+        table for isolation. Autouse + function-scoped, so it runs before
+        the db/app fixtures populate anything, and stays on the per-function
+        event loop (no session-scoped-async-fixture loop pitfalls)."""
+        conn = await init_db(_TEST_DB_URL)
+        try:
+            await _truncate_pg(conn)
+        finally:
+            await conn.close()
         yield
-        return
-    conn = await init_db(_TEST_DB_URL)
-    try:
-        await _truncate_pg(conn)
-    finally:
-        await conn.close()
-    yield
 
 
 @pytest.fixture

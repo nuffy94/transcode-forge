@@ -61,9 +61,17 @@ def discover_migrations() -> list[tuple[int, str, str]]:
 
 
 def _adapt_for_postgres(sql: str) -> str:
-    """Promote selected INTEGER columns to BIGINT for Postgres."""
+    """Adapt SQLite-flavored DDL for Postgres.
+
+    - Promote byte-count / bitrate INTEGER columns to BIGINT (values routinely
+      exceed 2 GB / 2 Gbit).
+    - Promote REAL to DOUBLE PRECISION. SQLite's REAL is 8-byte (double), but
+      Postgres REAL is 4-byte (single) — a bare port silently halves the
+      precision of vmaf/duration/progress columns (97.8 -> 97.80000305).
+    """
     for col in _BIGINT_COLUMNS:
         sql = re.sub(rf"\b{col}\s+INTEGER\b", f"{col} BIGINT", sql)
+    sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql)
     return sql
 
 

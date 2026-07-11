@@ -9,10 +9,16 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import pytest
 
 from transcode_forge.migrations import _backfill_token_hashes_sqlite
 from transcode_forge.repos import worker_tokens as token_repo
+
+# The unique-binding backstop raises a driver-specific integrity error —
+# sqlite3.IntegrityError on SQLite, an asyncpg IntegrityConstraintViolationError
+# (UniqueViolationError's base) on Postgres.
+_INTEGRITY_ERRORS = (sqlite3.IntegrityError, asyncpg.exceptions.IntegrityConstraintViolationError)
 
 
 async def test_create_then_find_active_by_hash(db: Any) -> None:
@@ -24,12 +30,15 @@ async def test_create_then_find_active_by_hash(db: Any) -> None:
 
 
 async def test_find_active_uses_hash_not_plaintext(db: Any) -> None:
-    """Null the plaintext column and the token still authenticates by hash —
-    proves auth never reads it, so dropping it in v0.7 is safe."""
+    """Corrupt the plaintext column and the token still authenticates by hash
+    — proves auth never reads it, so dropping it in v0.7 is safe. Uses a bogus
+    value rather than NULL: `token` is the PRIMARY KEY, which SQLite allows to
+    be NULL but Postgres (where PK implies NOT NULL) does not — and a wrong
+    non-null value is the stronger check anyway."""
     raw = await token_repo.create(db, label="node-b")
     await db.execute(
-        "UPDATE worker_tokens SET token = NULL WHERE token_hash = ?",
-        (token_repo.hash_token(raw),),
+        "UPDATE worker_tokens SET token = ? WHERE token_hash = ?",
+        ("CORRUPTED-not-the-real-token", token_repo.hash_token(raw)),
     )
     await db.commit()
     assert await token_repo.find_active(db, raw) is not None
@@ -110,16 +119,20 @@ async def test_unique_worker_binding_enforced_by_schema(db: Any) -> None:
     await token_repo.link_worker(
         db, token_hash=token_repo.hash_token(raw_a), worker_id="same-worker"
     )
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(_INTEGRITY_ERRORS):
         await db.execute(
             "UPDATE worker_tokens SET worker_id = ? WHERE token_hash = ?",
             ("same-worker", token_repo.hash_token(raw_b)),
         )
+        await db.commit()
 
 
+@pytest.mark.sqlite_only
 async def test_backfill_hashes_legacy_plaintext_row(db: Any) -> None:
     """A row that predates 0004 (plaintext only, NULL hash) authenticates
-    after the backfill hook runs."""
+    after the backfill hook runs. SQLite-only: it drives the SQLite backfill
+    helper directly via db._conn (Postgres has its own _backfill_token_hashes_
+    postgres path, exercised when migration 0004 runs against legacy rows)."""
     legacy = token_repo.generate()
     now = datetime.now(UTC).isoformat()
     await db.execute(
