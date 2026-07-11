@@ -43,6 +43,53 @@ jobs:
       - name: Test
         run: uv run pytest --cov=transcode_forge --cov-report=term-missing
 
+  test-postgres:
+    # The same suite against real Postgres (the production DB) — exercises the
+    # asyncpg wrapper, ? -> $N placeholder translation, and real transactions
+    # that SQLite-only runs can't reach. TF_TEST_DB_URL flips conftest onto
+    # one shared DB, migrated once and TRUNCATEd per test. Separate job so a
+    # Postgres-only failure is isolated and the free SQLite lane stays fast.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tf
+          POSTGRES_PASSWORD: tf
+          POSTGRES_DB: tf_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --dev
+
+      - name: Install ffmpeg
+        # The real-encode pipeline integration test runs here too.
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Test (Postgres)
+        env:
+          TF_TEST_DB_URL: postgresql://tf:tf@localhost:5432/tf_test
+        run: uv run pytest -p no:cacheprovider
+
   qa-sweep:
     # Deterministic UX/QA sweep (axe + error capture + screenshots) against a
     # seeded demo-static instance. Separate job — needs a browser, no Redis.
