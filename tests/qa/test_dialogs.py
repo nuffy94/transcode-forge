@@ -12,8 +12,9 @@ Covered:
 import json
 
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Browser, Page
 
+from tests.qa.conftest import ADMIN_PW, launch_qa_app
 from tests.qa.sweep_lib import (
     SHOTS,
     attach_error_capture,
@@ -21,6 +22,10 @@ from tests.qa.sweep_lib import (
     error_toasts,
     login,
 )
+
+# Own port for the token-refresh guard's isolated instance (18799 = shared
+# session instance, 18801 = setup flow).
+TOKENS_PORT = 18802
 
 
 def _dialog_open(page: Page, dialog_id: str) -> bool:
@@ -148,6 +153,57 @@ def test_schedule_list_live_refresh(qa_base_url: str, admin_pw: str, page: Page)
         "!document.querySelector('#schedules-list').innerText.includes('qa-live-refresh')",
         timeout=5_000,
     )
+
+
+@pytest.mark.qa
+def test_worker_token_panels_live_refresh(
+    tmp_path_factory: pytest.TempPathFactory, browser: Browser
+) -> None:
+    """Regression guard (ledger: workers-token-panels-stale-after-issue-revoke):
+    issuing and revoking a worker token must update the token panels WITHOUT
+    a page reload — the schedules guard's sibling, same htmx `load` no-op
+    root cause, fixed by the same custom `refresh` trigger (PR #30).
+
+    The 4s assertion windows sit well inside the panels' 5s/10s polls, which
+    is what masked the original bug. Runs on its OWN instance: a revoked
+    token row is permanent, and the shared instance's /workers render is
+    pixel-baselined (test_visual)."""
+    qa_dir = tmp_path_factory.mktemp("qa-tokens")
+    with launch_qa_app(qa_dir, TOKENS_PORT, create_admin=True) as base_url:
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = ctx.new_page()
+        page.on("dialog", lambda d: d.accept())  # revoke uses confirm()
+        login(page, base_url, ADMIN_PW)
+
+        page.goto(f"{base_url}/workers", wait_until="domcontentloaded")
+        # Let the tokens panel finish its initial load (fresh instance: empty
+        # state), so the next content change must come from the custom
+        # refresh, not the load trigger.
+        page.wait_for_selector("#tokens-list:has-text('No worker tokens yet')", timeout=10_000)
+
+        page.click("#add-worker-toggle")
+        page.fill("#add-worker-label", "qa-token-refresh")
+        page.click("#issue-token-btn")
+        # Issue direction: both panels must show the new token live.
+        page.wait_for_selector("#tokens-list tr:has-text('qa-token-refresh')", timeout=4_000)
+        page.wait_for_selector(
+            "#add-worker-tokens-list tr:has-text('qa-token-refresh')", timeout=4_000
+        )
+
+        # Ride past the panels' next poll tick so the revoke assertion window
+        # is clean — a regressed no-op would leave the pill stale until the
+        # 10s poll, far outside the 4s bound.
+        page.wait_for_timeout(5_000)
+
+        # Revoke from the canonical "Worker tokens" panel (the same button
+        # sits in both panels — scope so the click is unambiguous). The row
+        # must flip to the Revoked pill live; :has-text is case-insensitive,
+        # so it matches the CSS-uppercased "REVOKED".
+        page.click("#tokens-list button[aria-label='Revoke token qa-token-refresh']")
+        page.wait_for_selector(
+            "#tokens-list tr:has-text('qa-token-refresh'):has-text('Revoked')", timeout=4_000
+        )
+        ctx.close()
 
 
 @pytest.mark.qa
