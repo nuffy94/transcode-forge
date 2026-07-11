@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from transcode_forge.worker.encoder import build_encode_command, run_encode
+from transcode_forge.worker.proc import managed_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -108,14 +109,14 @@ async def has_libvmaf() -> bool:
     """True if the measurement ffmpeg (TF_VMAF_FFMPEG or plain ffmpeg) is
     built with the libvmaf filter."""
     try:
-        proc = await asyncio.create_subprocess_exec(
+        async with managed_subprocess(
             VMAF_FFMPEG,
             "-hide_banner",
             "-filters",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+        ) as proc:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15.0)
     except (TimeoutError, FileNotFoundError, OSError):
         return False
     return b"libvmaf" in stdout
@@ -165,16 +166,20 @@ async def measure_vmaf(
             "-",
         ]
         try:
-            proc = await asyncio.create_subprocess_exec(
+            # managed_subprocess kills the child on timeout, cancellation
+            # (worker shutdown), or any error — a full-file VMAF pass runs
+            # for minutes-to-hours and must never be orphaned.
+            async with managed_subprocess(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SUBPROCESS_TIMEOUT)
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
-            raise VmafError("VMAF measurement timed out") from exc
+            ) as proc:
+                try:
+                    _, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=_SUBPROCESS_TIMEOUT
+                    )
+                except TimeoutError as exc:
+                    raise VmafError("VMAF measurement timed out") from exc
         except FileNotFoundError as exc:
             raise VmafUnavailableError("ffmpeg binary not found") from exc
 
@@ -230,12 +235,12 @@ async def _extract_samples(source: Path, duration: float, out_dir: Path) -> list
             "-y",
             str(sample),
         ]
-        proc = await asyncio.create_subprocess_exec(
+        async with managed_subprocess(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+        ) as proc:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
         if proc.returncode != 0 or not sample.exists() or sample.stat().st_size == 0:
             err = (stderr or b"").decode(errors="replace").strip()[:200]
             raise VmafError(f"Sample extraction failed at {offset:.0f}s: {err or 'empty sample'}")
