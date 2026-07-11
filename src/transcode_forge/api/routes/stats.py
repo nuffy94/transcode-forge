@@ -21,10 +21,14 @@ async def get_stats(
     async with db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status") as cursor:
         stats["jobs_by_status"] = {row[0]: row[1] for row in await cursor.fetchall()}
 
-    # Space savings
+    # Space savings. CAST the sums to BIGINT: SUM() over a BIGINT column
+    # returns `numeric` on Postgres, which asyncpg hands back as a Decimal
+    # that serializes to a string like "1.0E+9" — the byte totals must stay
+    # integers. (SQLite's BIGINT has integer affinity, so this is a no-op there.)
     async with db.execute(
-        "SELECT COUNT(*), COALESCE(SUM(space_saved), 0), "
-        "COALESCE(SUM(source_size), 0), COALESCE(SUM(output_size), 0) "
+        "SELECT COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT), "
+        "CAST(COALESCE(SUM(source_size), 0) AS BIGINT), "
+        "CAST(COALESCE(SUM(output_size), 0) AS BIGINT) "
         "FROM jobs WHERE status = 'complete'"
     ) as cursor:
         row = await cursor.fetchone()
@@ -36,7 +40,7 @@ async def get_stats(
 
     # Per-library breakdown
     async with db.execute(
-        "SELECT library, COUNT(*), COALESCE(SUM(space_saved), 0) "
+        "SELECT library, COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT) "
         "FROM jobs WHERE status = 'complete' GROUP BY library"
     ) as cursor:
         stats["by_library"] = {

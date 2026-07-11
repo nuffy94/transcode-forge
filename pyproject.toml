@@ -37,6 +37,7 @@ addopts = "--strict-markers -v --ignore=tests/qa --ignore=tests/test_s3_integrat
 markers = [
     "qa: UX/QA sweep against a seeded demo instance (run with: pytest tests/qa/)",
     "s3_integration: S3 integration tests with MinIO (run with: pytest tests/test_s3_integration.py)",
+    "sqlite_only: test relies on SQLite-specific behavior; skipped under TF_TEST_DB_URL=postgres",
 ]
 
 [tool.ruff]

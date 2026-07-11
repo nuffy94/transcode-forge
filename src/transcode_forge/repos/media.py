@@ -277,6 +277,9 @@ async def bulk_update_status(
     """Bulk update transcode status. Returns count updated."""
     if transcode_status not in _VALID_TRANSCODE_STATUSES:
         raise ValueError(f"Invalid transcode_status: {transcode_status!r}")
+    if not file_ids:
+        # An empty IN () is a syntax error on Postgres (SQLite tolerates it).
+        return 0
     now = datetime.now(UTC).isoformat()
     placeholders = ",".join("?" * len(file_ids))
     cur = await db.execute(
