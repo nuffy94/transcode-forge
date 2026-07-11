@@ -42,6 +42,7 @@ from typing import Any
 
 from transcode_forge.scanner.probe import ProbeError, ffprobe
 from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
+from transcode_forge.worker.proc import managed_subprocess
 from transcode_forge.worker.storage.filesystem import (
     _acquire_lock,
     _atomic_swap,
@@ -453,12 +454,12 @@ async def _decode_check(path: Path, duration: float) -> None:
             "null",
             "-",
         ]
-        proc = await asyncio.create_subprocess_exec(
+        async with managed_subprocess(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
+        ) as proc:
+            _, stderr = await proc.communicate()
         if proc.returncode != 0:
             err = (stderr or b"").decode(errors="replace").strip()[:200] or "unknown"
             raise PipelineError(

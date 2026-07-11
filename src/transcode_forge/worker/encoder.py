@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from transcode_forge.worker.proc import managed_subprocess
+
 logger = logging.getLogger(__name__)
 
 PROGRESS_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
@@ -346,13 +348,59 @@ async def run_encode(
     output_path = cmd[-1]  # Last arg is always the output file
     logger.info("Starting encode: %s", " ".join(cmd[:6]) + " ...")
 
+    last_callback_time = 0.0
+    error_lines: list[str] = []
+
     try:
-        proc = await asyncio.create_subprocess_exec(
+        # managed_subprocess guarantees the ffmpeg process tree dies if this
+        # coroutine is cancelled (worker shutdown/abort) or errors out — a
+        # cancelled encode must never leave an orphaned ffmpeg behind.
+        async with managed_subprocess(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,  # 1MB line buffer (ffmpeg metadata can be huge)
-        )
+        ) as proc:
+            # Validate stderr is available (should always be true with PIPE, but be safe)
+            if proc.stderr is None:
+                return EncodeResult(
+                    success=False,
+                    output_path=output_path,
+                    output_size=0,
+                    returncode=-1,
+                    error_message="ffmpeg subprocess stderr not available",
+                )
+
+            # Read stderr line by line for progress
+            while True:
+                try:
+                    line_bytes = await proc.stderr.readline()
+                except ValueError:
+                    # Line exceeded buffer limit — skip it
+                    continue
+                if not line_bytes:
+                    break
+                line = line_bytes.decode(errors="replace").strip()
+                if not line:
+                    continue
+
+                # Capture potential error lines (last N), skipping progress key=value
+                # spam from -progress pipe:2 so failure diagnostics stay useful.
+                if not line.startswith(_PROGRESS_KEYS):
+                    error_lines.append(line)
+                    if len(error_lines) > ERROR_LINES_BUFFER:
+                        error_lines.pop(0)
+
+                # Parse progress
+                progress = parse_progress(line, total_duration)
+                if progress is not None and progress_callback is not None:
+                    now = time.monotonic()
+                    if now - last_callback_time >= progress_interval:
+                        speed = parse_speed(line)
+                        await progress_callback(progress, speed)
+                        last_callback_time = now
+
+            await proc.wait()
     except FileNotFoundError:
         return EncodeResult(
             success=False,
@@ -361,50 +409,6 @@ async def run_encode(
             returncode=-1,
             error_message="ffmpeg binary not found",
         )
-
-    # Validate stderr is available (should always be true with PIPE, but be safe)
-    if proc.stderr is None:
-        return EncodeResult(
-            success=False,
-            output_path=output_path,
-            output_size=0,
-            returncode=-1,
-            error_message="ffmpeg subprocess stderr not available",
-        )
-
-    last_callback_time = 0.0
-    error_lines: list[str] = []
-
-    # Read stderr line by line for progress
-    while True:
-        try:
-            line_bytes = await proc.stderr.readline()
-        except ValueError:
-            # Line exceeded buffer limit — skip it
-            continue
-        if not line_bytes:
-            break
-        line = line_bytes.decode(errors="replace").strip()
-        if not line:
-            continue
-
-        # Capture potential error lines (last N), skipping progress key=value
-        # spam from -progress pipe:2 so failure diagnostics stay useful.
-        if not line.startswith(_PROGRESS_KEYS):
-            error_lines.append(line)
-            if len(error_lines) > ERROR_LINES_BUFFER:
-                error_lines.pop(0)
-
-        # Parse progress
-        progress = parse_progress(line, total_duration)
-        if progress is not None and progress_callback is not None:
-            now = time.monotonic()
-            if now - last_callback_time >= progress_interval:
-                speed = parse_speed(line)
-                await progress_callback(progress, speed)
-                last_callback_time = now
-
-    await proc.wait()
 
     out_path = Path(output_path)
     output_size = out_path.stat().st_size if out_path.exists() else 0
