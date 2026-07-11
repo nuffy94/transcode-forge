@@ -18,6 +18,15 @@ an orphan. Two layered defenses:
 POSIX children start in their own session (start_new_session=True) so a
 group signal also sweeps anything the child itself spawned. On Windows
 (dev only) both mechanisms degrade to plain terminate()/kill().
+
+Fork-safety note: preexec_fn forces subprocess off the posix_spawn fast
+path onto fork()+exec(), and this process is multithreaded (asyncio's
+to_thread pool) — a lock held by another thread at fork() time would
+deadlock the child before exec. The preexec_fn here is deliberately
+minimal (one pre-bound ctypes call, no imports/logging/allocation) to
+shrink that window; it cannot be closed entirely. If an encode ever
+hangs INSIDE subprocess creation (spawn never returns, no ffmpeg
+process appears), suspect this before anything else.
 """
 
 from __future__ import annotations
