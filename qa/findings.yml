@@ -58,10 +58,11 @@
 - id: workers-token-panels-stale-after-issue-revoke
   title: Worker-token panels don't refresh after issue/revoke until the 10s poll (same htmx `load` no-op)
   first_seen: 2026-07-05 / S5
+  last_seen: 2026-07-11 / codify
   severity: medium
-  status: fixed
-  refs: {pr: 30}
-  note: Fixed by the same custom-refresh-trigger pattern as the schedules entry; no dedicated guard test yet — codify to close.
+  status: codified
+  refs: {pr: 30, test: "tests/qa/test_dialogs.py::test_worker_token_panels_live_refresh"}
+  note: Fixed by the same custom-refresh-trigger pattern as the schedules entry (PR 30). Guard verified red-against-regression (load-trigger) and green-with-fix during codify.
 
 - id: workers-page-liveness-self-contradiction
   title: Workers page reads ACTIVE NODES 4 while every card shows HEARTBEAT LOST (frozen demo heartbeats)
