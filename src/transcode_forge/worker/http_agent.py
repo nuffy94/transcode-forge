@@ -43,6 +43,8 @@ class HttpWorkerAgent:
         self.worker_name = settings.worker_name or f"worker-{socket.gethostname()}"
         self.host = socket.gethostname()
         self._shutting_down = False
+        self._abort_requested = False
+        self._pipeline_task: asyncio.Task[dict[str, Any]] | None = None
         self.worker_id: str | None = None
         self._current_job_id: str | None = None
         self._current_progress: float = 0.0
@@ -148,16 +150,30 @@ class HttpWorkerAgent:
         await asyncio.to_thread(recover_orphaned_backups, roots, worker_id=self.worker_id)
 
     def _handle_shutdown(self) -> None:
-        if self._shutting_down:
+        """Escalating shutdown: 1st signal drains (finish the current job),
+        2nd aborts the in-flight encode ORDERLY (ffmpeg killed, job reported,
+        loops exit), 3rd force-exits. The old two-stage version raised
+        SystemExit straight out of the signal callback, which tore the event
+        loop down around a still-running ffmpeg — the 2026-07-06 orphan."""
+        if self._abort_requested:
             logger.warning("Force shutdown")
             raise SystemExit(1)
-        logger.info("Shutdown requested — finishing current job")
+        if self._shutting_down:
+            logger.warning("Second shutdown signal — aborting the current encode")
+            self._abort_requested = True
+            if self._pipeline_task is not None and not self._pipeline_task.done():
+                self._pipeline_task.cancel()
+            return
+        logger.info("Shutdown requested — finishing current job (signal again to abort it)")
         self._shutting_down = True
 
     async def _heartbeat_loop(self) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
-        while not self._shutting_down:
+        # Keep beating while a job is draining after the first shutdown
+        # signal — otherwise the scheduler shows "heartbeat lost" (and may
+        # treat the worker as dead) for the entire tail of the encode.
+        while not self._shutting_down or self._current_job_id is not None:
             status = "busy" if self._current_job_id else "online"
             try:
                 await self._client.heartbeat(
@@ -294,25 +310,38 @@ class HttpWorkerAgent:
 
         media_type = getattr(job, "_media_type", "") or ""
         try:
-            result = await run_pipeline(
-                source_path=str(source_path_local),
-                codec=codec,
-                backend=backend,
-                quality=job.quality_value,
-                source_duration=job.source_duration or 0,
-                job_id=job.id,
-                worker_id=self.worker_id,
-                target_vmaf=job.target_vmaf,
-                vmaf_safety_mean=(
-                    safety_mean if safety_mean is not None else self.settings.vmaf_safety_mean
-                ),
-                vmaf_safety_perc5=(
-                    safety_perc5 if safety_perc5 is not None else self.settings.vmaf_safety_perc5
-                ),
-                crf_search=self.settings.crf_search_enabled,
-                content="anime" if media_type == "anime" else None,
-                progress_callback=on_progress,
+            if self._abort_requested:
+                # The abort signal landed while we were fetching — don't
+                # start an hours-long encode we've been asked to abandon.
+                raise asyncio.CancelledError
+            # The pipeline runs as its own task so the shutdown handler can
+            # cancel JUST the encode (run_encode kills its ffmpeg tree on
+            # cancellation) without tearing down the whole agent.
+            pipeline_task = asyncio.ensure_future(
+                run_pipeline(
+                    source_path=str(source_path_local),
+                    codec=codec,
+                    backend=backend,
+                    quality=job.quality_value,
+                    source_duration=job.source_duration or 0,
+                    job_id=job.id,
+                    worker_id=self.worker_id,
+                    target_vmaf=job.target_vmaf,
+                    vmaf_safety_mean=(
+                        safety_mean if safety_mean is not None else self.settings.vmaf_safety_mean
+                    ),
+                    vmaf_safety_perc5=(
+                        safety_perc5
+                        if safety_perc5 is not None
+                        else self.settings.vmaf_safety_perc5
+                    ),
+                    crf_search=self.settings.crf_search_enabled,
+                    content="anime" if media_type == "anime" else None,
+                    progress_callback=on_progress,
+                )
             )
+            self._pipeline_task = pipeline_task
+            result = await pipeline_task
 
             # Commit the output via the storage backend.
             # For filesystem: swap already happened in run_pipeline; commit() validates sizes.
@@ -364,6 +393,30 @@ class HttpWorkerAgent:
                 job.id,
                 int(commit_result.space_saved),
             )
+        except asyncio.CancelledError:
+            # Deliberate shutdown abort (second signal): the encoder's
+            # managed subprocess has already killed its ffmpeg tree — report
+            # the job so it doesn't strand in 'transcoding', then return so
+            # the job loop can exit orderly. Cancellation we did NOT request
+            # (event-loop teardown) must keep propagating.
+            if not self._abort_requested:
+                if self._pipeline_task is not None and not self._pipeline_task.done():
+                    self._pipeline_task.cancel()
+                raise
+            logger.warning("Job %s aborted by shutdown", job.id)
+            try:
+                await asyncio.wait_for(
+                    self._client.failed(
+                        job_id=job.id,
+                        error_message="Aborted by worker shutdown",
+                        # A shutdown abort is not the file's fault — never
+                        # burn a retry on it.
+                        retry_count=job.retry_count,
+                    ),
+                    timeout=5.0,
+                )
+            except (TimeoutError, httpx.HTTPError, OSError):
+                logger.error("Could not report job %s abort to scheduler", job.id)
         except VmafGateError as e:
             await self._client.skipped(
                 job_id=job.id,
@@ -410,6 +463,7 @@ class HttpWorkerAgent:
             except (httpx.HTTPError, OSError):
                 logger.error("Could not report job %s failure to scheduler", job.id)
         finally:
+            self._pipeline_task = None
             self._current_job_id = None
             self._current_progress = 0.0
             await storage.cleanup(job)
