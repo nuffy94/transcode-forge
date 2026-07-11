@@ -228,7 +228,7 @@ async def list_tv_shows(
         SELECT
             m.show_name,
             COUNT(*) as episode_count,
-            SUM(m.file_size) as total_size,
+            CAST(SUM(m.file_size) AS BIGINT) as total_size,
             SUM(CASE
                 WHEN m.video_codec = 'hevc'
                     OR m.transcode_status = 'complete'
@@ -294,8 +294,11 @@ async def bulk_update_status(
 
 async def get_codec_stats(db: DBConnection) -> dict[str, Any]:
     """Get codec distribution across all files."""
+    # CAST to BIGINT: Postgres SUM(BIGINT) returns numeric → Decimal,
+    # which leaks into the /api/media/stats JSON (SQLite returns int).
     async with db.execute(
-        """SELECT video_codec, COUNT(*) as count, SUM(file_size) as total_size
+        """SELECT video_codec, COUNT(*) as count,
+                  CAST(SUM(file_size) AS BIGINT) as total_size
            FROM media_files GROUP BY video_codec ORDER BY count DESC"""
     ) as cur:
         return {

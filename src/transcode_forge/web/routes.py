@@ -199,8 +199,10 @@ async def dashboard_stats_partial(
     request: Request,
     db: DBConnection = Depends(get_db),
 ) -> Response:
+    # CAST to BIGINT: on Postgres SUM() over a BIGINT column returns
+    # numeric → Decimal (same dialect gap the /api/stats route fixed).
     async with db.execute(
-        "SELECT COALESCE(SUM(space_saved), 0) FROM jobs WHERE status = 'complete'"
+        "SELECT CAST(COALESCE(SUM(space_saved), 0) AS BIGINT) FROM jobs WHERE status = 'complete'"
     ) as cur:
         row = await cur.fetchone()
         space_saved = row[0] if row else 0
@@ -507,9 +509,11 @@ async def stats_partial(
     async with db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status") as cur:
         stats["jobs_by_status"] = {row[0]: row[1] for row in await cur.fetchall()}
 
+    # CAST the sums to BIGINT — Postgres SUM(BIGINT) returns numeric/Decimal.
     async with db.execute(
-        "SELECT COUNT(*), COALESCE(SUM(space_saved), 0), "
-        "COALESCE(SUM(source_size), 0), COALESCE(SUM(output_size), 0) "
+        "SELECT COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT), "
+        "CAST(COALESCE(SUM(source_size), 0) AS BIGINT), "
+        "CAST(COALESCE(SUM(output_size), 0) AS BIGINT) "
         "FROM jobs WHERE status = 'complete'"
     ) as cur:
         row = await cur.fetchone()
@@ -519,7 +523,7 @@ async def stats_partial(
         stats["total_output_bytes"] = row[3] if row else 0
 
     async with db.execute(
-        "SELECT library, COUNT(*), COALESCE(SUM(space_saved), 0) "
+        "SELECT library, COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT) "
         "FROM jobs WHERE status = 'complete' GROUP BY library"
     ) as cur:
         stats["by_library"] = {

@@ -1189,3 +1189,41 @@ class TestJobsRepo:
         assert updated is not None
         assert updated.output_size == 3000000
         assert updated.space_saved == 2000000
+
+
+class TestMediaAggregateTypes:
+    """PR #49 follow-up: on Postgres SUM() over a BIGINT column returns
+    numeric → Decimal, which leaked into /api/media/stats JSON. These pin
+    the CAST(... AS BIGINT) so byte totals stay ints on both engines."""
+
+    async def test_codec_stats_total_size_is_int(self, db, test_library):
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path="/media/movies/big.mkv",
+            filename="big.mkv",
+            video_codec="h264",
+            file_size=3_000_000_000,  # > int32 so a Decimal would show sci-notation
+        )
+        stats = await media_repo.get_codec_stats(db)
+        total = stats["h264"]["total_size"]
+        assert isinstance(total, int)
+        assert total == 3_000_000_000
+
+    async def test_list_shows_total_size_is_int(self, db, test_library):
+        for ep in (1, 2):
+            await media_repo.upsert_media_file(
+                db,
+                library_id=test_library,
+                file_path=f"/media/tv/show/s01e0{ep}.mkv",
+                filename=f"s01e0{ep}.mkv",
+                show_name="Aggregate Show",
+                season=1,
+                episode=ep,
+                video_codec="h264",
+                file_size=1_500_000_000,
+            )
+        shows = await media_repo.list_tv_shows(db)
+        row = next(s for s in shows if s["show_name"] == "Aggregate Show")
+        assert isinstance(row["total_size"], int)
+        assert row["total_size"] == 3_000_000_000

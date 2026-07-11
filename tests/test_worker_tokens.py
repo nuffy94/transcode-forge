@@ -5,6 +5,7 @@ These guard the migration backfill, expiry, revocation, and the invariant
 that the plaintext column is never consulted for auth.
 """
 
+import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -109,6 +110,50 @@ async def test_link_worker_cas_expected_rebind(db: Any) -> None:
     row = await token_repo.find_active(db, raw)
     assert row is not None
     assert row["worker_id"] == "w-2"
+
+
+async def test_link_worker_concurrent_first_bind_single_winner(db: Any) -> None:
+    """TRUE-concurrency CAS race (PR #49 follow-up): two workers racing to
+    first-bind the same token in parallel — exactly one may win. Under the
+    Postgres CI lane each UPDATE runs on its own pooled connection, so this
+    exercises the real row-lock race that single-writer SQLite (where the
+    sequential tests above run) can only serialize."""
+    raw = await token_repo.create(db, label="race-first-bind")
+    token_hash = token_repo.hash_token(raw)
+
+    results = await asyncio.gather(
+        token_repo.link_worker(db, token_hash=token_hash, worker_id="racer-a"),
+        token_repo.link_worker(db, token_hash=token_hash, worker_id="racer-b"),
+    )
+
+    assert sorted(results) == [False, True]  # exactly one winner
+    winner = "racer-a" if results[0] else "racer-b"
+    row = await token_repo.find_active(db, raw)
+    assert row is not None
+    assert row["worker_id"] == winner
+
+
+async def test_link_worker_concurrent_rebind_single_winner(db: Any) -> None:
+    """The same race on the rebind path: two machines presenting the same
+    (leaked) token and naming the same stale binding can't both steal it."""
+    raw = await token_repo.create(db, label="race-rebind")
+    token_hash = token_repo.hash_token(raw)
+    assert await token_repo.link_worker(db, token_hash=token_hash, worker_id="original") is True
+
+    results = await asyncio.gather(
+        token_repo.link_worker(
+            db, token_hash=token_hash, worker_id="thief-1", expected_worker_id="original"
+        ),
+        token_repo.link_worker(
+            db, token_hash=token_hash, worker_id="thief-2", expected_worker_id="original"
+        ),
+    )
+
+    assert sorted(results) == [False, True]
+    winner = "thief-1" if results[0] else "thief-2"
+    row = await token_repo.find_active(db, raw)
+    assert row is not None
+    assert row["worker_id"] == winner
 
 
 async def test_unique_worker_binding_enforced_by_schema(db: Any) -> None:
