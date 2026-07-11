@@ -56,7 +56,10 @@ if sys.platform == "win32":
             proc.kill()
 
 else:
-    _SPAWN_KWARGS = {"start_new_session": True}
+    # Annotated in BOTH platform branches: mypy narrows sys.platform and
+    # only checks the branch matching its --platform, so the win32
+    # annotation is invisible when CI's Linux mypy checks this branch.
+    _SPAWN_KWARGS: dict[str, Any] = {"start_new_session": True}
 
     if sys.platform == "linux":
         import ctypes
