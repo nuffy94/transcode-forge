@@ -269,8 +269,12 @@ async def requeue_orphan_active_jobs(
     reject its stale reports and its heartbeated .tf_lock makes the retry
     decline until it finishes or dies for real.
 
-    A single UPDATE with the predicate inline — a job that completes between
-    sweeps can never be stomped back to QUEUED.
+    The status/idleness guard is duplicated on the OUTER where-clause, not
+    just the subquery: under Postgres READ COMMITTED the subquery's id list
+    comes from the statement's snapshot, and only outer quals are re-checked
+    (EvalPlanQual) against a row a concurrent writer just changed — without
+    the duplication, a job completing at the exact moment of the sweep could
+    be stomped back to QUEUED.
     """
     active = (
         JobStatus.TRANSCODING.value,
@@ -290,11 +294,22 @@ async def requeue_orphan_active_jobs(
         f"  WHERE j.status IN ({placeholders_active})"
         f"    AND (w.status IS NULL OR w.status NOT IN ({placeholders_alive}))"
         "     AND j.updated_at < ?"
-        " ) RETURNING id, source_path"
+        " )"
+        f" AND status IN ({placeholders_active})"
+        "  AND updated_at < ?"
+        " RETURNING id, source_path"
     )
     async with db.execute(
         sql,
-        (JobStatus.QUEUED.value, now.isoformat(), *active, *alive, cutoff),
+        (
+            JobStatus.QUEUED.value,
+            now.isoformat(),
+            *active,
+            *alive,
+            cutoff,
+            *active,
+            cutoff,
+        ),
     ) as cur:
         rows = await cur.fetchall()
     await db.commit()
