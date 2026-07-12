@@ -11,6 +11,7 @@ from transcode_forge.db import DBConnection
 from transcode_forge.models.job import JobStatus
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import system as system_repo
 
 
@@ -94,6 +95,7 @@ async def retry_job(
         error_message=None,
         retry_count=job.retry_count + 1,
     )
+    await media_repo.update_status_by_job(db, job_id, transcode_status="queued")
     _toast(response, "Job retried", "success")
     return {"data": updated.model_dump(mode="json") if updated else None}
 
@@ -112,6 +114,7 @@ async def cancel_job(
         raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{job.status}'")
 
     updated = await job_repo.update_job(db, job_id, status=JobStatus.CANCELLED)
+    await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
     _toast(response, "Job cancelled", "warning")
     return {"data": updated.model_dump(mode="json") if updated else None}
 
@@ -143,6 +146,13 @@ async def cancel_all_pending(
 ) -> dict[str, Any]:
     """Cancel all pending and queued jobs."""
     now = datetime.now(UTC).isoformat()
+    # Catalog rows first, while the jobs still match the status filter.
+    await db.execute(
+        "UPDATE media_files SET transcode_status = 'needs_transcode',"
+        " skip_reason = NULL, updated_at = ? WHERE job_id IN"
+        " (SELECT id FROM jobs WHERE status IN ('pending', 'queued'))",
+        (now,),
+    )
     cur = await db.execute(
         "UPDATE jobs SET status = 'cancelled', updated_at = ?"
         " WHERE status IN ('pending', 'queued')",
