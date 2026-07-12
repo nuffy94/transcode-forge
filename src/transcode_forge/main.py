@@ -17,6 +17,7 @@ from transcode_forge.auth import AuthMiddleware
 from transcode_forge.config import Settings, get_settings
 from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.redis import close_redis_pool, create_redis_pool
+from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import workers as worker_repo
 from transcode_forge.scheduler_cron import run_scheduled_scans
 
@@ -115,7 +116,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         background_tasks.append(
             asyncio.create_task(_stale_worker_loop(app.state.db, settings.heartbeat_timeout))
         )
-        logger.info("Background tasks started (scans, stale worker cleanup)")
+        background_tasks.append(asyncio.create_task(_orphan_requeue_loop(app.state.db)))
+        logger.info("Background tasks started (scans, stale worker cleanup, orphan job requeue)")
 
     yield
 
@@ -141,6 +143,35 @@ async def _stale_worker_loop(db: DBConnection, heartbeat_timeout: int) -> None:
         except Exception:
             logger.exception("Stale worker cleanup failed")
         await asyncio.sleep(30)  # Check every 30 seconds
+
+
+# A job is only requeued after this long with no signs of life (progress
+# reports bump updated_at) — well past the ~90s dead-marking, so a brief
+# network partition can't cost a worker its job the moment it's marked dead.
+ORPHAN_REQUEUE_GRACE_SECONDS = 600
+
+
+async def _orphan_requeue_loop(db: DBConnection) -> None:
+    """Requeue active jobs whose worker died and never came back.
+
+    Registration releases a worker's jobs when it RE-registers; this loop
+    is the fallback for the worker that never does — without it those jobs
+    sit in 'transcoding' forever while the dashboard shows a live encode
+    that isn't happening."""
+    while True:
+        try:
+            requeued = await job_repo.requeue_orphan_active_jobs(
+                db, min_idle_seconds=ORPHAN_REQUEUE_GRACE_SECONDS
+            )
+            for row in requeued:
+                logger.warning(
+                    "Requeued orphan job %s (%s) — its worker is dead or gone",
+                    row["id"],
+                    row["source_path"],
+                )
+        except Exception:
+            logger.exception("Orphan job requeue failed")
+        await asyncio.sleep(30)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

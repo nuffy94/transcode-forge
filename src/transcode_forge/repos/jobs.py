@@ -253,6 +253,69 @@ async def find_orphan_active_jobs(db: DBConnection) -> list[dict[str, object]]:
         return [dict(r) for r in rows]
 
 
+async def requeue_orphan_active_jobs(
+    db: DBConnection, *, min_idle_seconds: int
+) -> list[dict[str, object]]:
+    """Requeue active jobs whose worker is dead, offline, or missing.
+
+    The healing counterpart to find_orphan_active_jobs (which only reports,
+    via /audit/integrity). Registration already releases a worker's jobs when
+    it RE-registers — this covers the worker that never comes back.
+
+    Only jobs idle for min_idle_seconds are touched: progress reports bump
+    updated_at, so idleness means no signs of life, and the grace keeps a
+    briefly-partitioned worker from losing its job the moment it's marked
+    dead. If a zombie does lose its job this way, the ownership checks
+    reject its stale reports and its heartbeated .tf_lock makes the retry
+    decline until it finishes or dies for real.
+
+    The status/idleness guard is duplicated on the OUTER where-clause, not
+    just the subquery: under Postgres READ COMMITTED the subquery's id list
+    comes from the statement's snapshot, and only outer quals are re-checked
+    (EvalPlanQual) against a row a concurrent writer just changed — without
+    the duplication, a job completing at the exact moment of the sweep could
+    be stomped back to QUEUED.
+    """
+    active = (
+        JobStatus.TRANSCODING.value,
+        JobStatus.ASSIGNED.value,
+        JobStatus.VERIFYING.value,
+    )
+    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    now = datetime.now(UTC)
+    cutoff = (now - timedelta(seconds=min_idle_seconds)).isoformat()
+    placeholders_active = ",".join("?" * len(active))
+    placeholders_alive = ",".join("?" * len(alive))
+    sql = (
+        "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
+        " progress = 0, updated_at = ?"
+        " WHERE id IN ("
+        "   SELECT j.id FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id"
+        f"  WHERE j.status IN ({placeholders_active})"
+        f"    AND (w.status IS NULL OR w.status NOT IN ({placeholders_alive}))"
+        "     AND j.updated_at < ?"
+        " )"
+        f" AND status IN ({placeholders_active})"
+        "  AND updated_at < ?"
+        " RETURNING id, source_path"
+    )
+    async with db.execute(
+        sql,
+        (
+            JobStatus.QUEUED.value,
+            now.isoformat(),
+            *active,
+            *alive,
+            cutoff,
+            *active,
+            cutoff,
+        ),
+    ) as cur:
+        rows = await cur.fetchall()
+    await db.commit()
+    return [dict(r) for r in rows]
+
+
 async def claim_next_job(
     db: DBConnection, worker_id: str, supported_codecs: list[str] | None = None
 ) -> Job | None:

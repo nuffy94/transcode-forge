@@ -1017,6 +1017,121 @@ class TestWorkersRepo:
 # ============================================================================
 
 
+class TestRequeueOrphanActiveJobs:
+    """Auto-requeue for jobs whose worker died and never re-registered —
+    the healing counterpart to find_orphan_active_jobs (which only
+    reports, via /audit/integrity)."""
+
+    async def _make_worker(self, db, *, status: WorkerStatus) -> Worker:
+        worker = Worker(name=f"w-{status.value}", host="10.0.0.1", status=status)
+        await worker_repo.upsert_worker(db, worker)
+        if status not in (WorkerStatus.ONLINE, WorkerStatus.BUSY):
+            # upsert refreshes status from the model but tests need it kept
+            await db.execute(
+                "UPDATE workers SET status = ? WHERE id = ?", (status.value, worker.id)
+            )
+            await db.commit()
+        return worker
+
+    async def _make_active_job(
+        self, db, *, worker_id: str | None, idle_seconds: int, path: str = "/a.mkv"
+    ) -> Job:
+        job = Job(
+            source_path=path,
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        stamp = (datetime.now(UTC) - timedelta(seconds=idle_seconds)).isoformat()
+        await db.execute(
+            "UPDATE jobs SET status = ?, worker_id = ?, started_at = ?, "
+            "progress = 0.4, updated_at = ? WHERE id = ?",
+            (JobStatus.TRANSCODING.value, worker_id, stamp, stamp, job.id),
+        )
+        await db.commit()
+        return job
+
+    async def test_dead_worker_idle_job_requeued(self, db):
+        dead = await self._make_worker(db, status=WorkerStatus.DEAD)
+        job = await self._make_active_job(db, worker_id=dead.id, idle_seconds=700)
+
+        requeued = await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+
+        assert [r["id"] for r in requeued] == [job.id]
+        fetched = await job_repo.get_job(db, job.id)
+        assert fetched.status == JobStatus.QUEUED
+        assert fetched.worker_id is None
+        assert fetched.started_at is None
+        assert fetched.progress == 0
+
+    async def test_missing_worker_row_requeued(self, db):
+        """A job whose worker_id references nobody (row deleted) is just as
+        orphaned as one whose worker is dead."""
+        job = await self._make_active_job(db, worker_id="gone-forever", idle_seconds=700)
+        requeued = await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+        assert [r["id"] for r in requeued] == [job.id]
+
+    async def test_grace_period_respected(self, db):
+        """A recently-active job is left alone even if its worker looks dead
+        — a brief partition must not cost the worker its job instantly."""
+        dead = await self._make_worker(db, status=WorkerStatus.DEAD)
+        job = await self._make_active_job(db, worker_id=dead.id, idle_seconds=60)
+
+        requeued = await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+
+        assert requeued == []
+        fetched = await job_repo.get_job(db, job.id)
+        assert fetched.status == JobStatus.TRANSCODING
+        assert fetched.worker_id == dead.id
+
+    async def test_alive_worker_jobs_untouched(self, db):
+        busy = await self._make_worker(db, status=WorkerStatus.BUSY)
+        job = await self._make_active_job(db, worker_id=busy.id, idle_seconds=9000)
+
+        requeued = await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+
+        assert requeued == []
+        fetched = await job_repo.get_job(db, job.id)
+        assert fetched.status == JobStatus.TRANSCODING
+
+    async def test_terminal_and_pending_jobs_untouched(self, db):
+        dead = await self._make_worker(db, status=WorkerStatus.DEAD)
+        stamp = (datetime.now(UTC) - timedelta(seconds=9000)).isoformat()
+        outcomes = {}
+        for status in (JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.PENDING):
+            job = Job(
+                source_path=f"/{status.value}.mkv",
+                library="movies",
+                source_codec="h264",
+                quality_value=21,
+            )
+            await job_repo.create_job(db, job)
+            await db.execute(
+                "UPDATE jobs SET status = ?, worker_id = ?, updated_at = ? WHERE id = ?",
+                (status.value, dead.id, stamp, job.id),
+            )
+            outcomes[job.id] = status
+        await db.commit()
+
+        requeued = await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+
+        assert requeued == []
+        for job_id, status in outcomes.items():
+            assert (await job_repo.get_job(db, job_id)).status == status
+
+    async def test_requeued_job_is_claimable_again(self, db):
+        dead = await self._make_worker(db, status=WorkerStatus.DEAD)
+        job = await self._make_active_job(db, worker_id=dead.id, idle_seconds=700)
+
+        await job_repo.requeue_orphan_active_jobs(db, min_idle_seconds=600)
+        claimed = await job_repo.claim_next_job(db, "fresh-worker")
+
+        assert claimed is not None
+        assert claimed.id == job.id
+        assert claimed.worker_id == "fresh-worker"
+
+
 class TestJobsRepo:
     """Tests for jobs_repo functions."""
 
