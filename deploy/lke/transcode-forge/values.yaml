@@ -61,6 +61,12 @@ worker:
   # Scratch space for S3 fetch + transcode output (emptyDir on the node
   # disk). Must hold source + output + samples for the largest file.
   scratchSize: 15Gi
+  # Extra plain env vars for the worker container (name: value). E.g. a
+  # gateless acceptance run sets TF_VMAF_FFMPEG=/usr/bin/ffmpeg (the
+  # distro binary has no libvmaf, so the worker skips CRF search + the
+  # VMAF gate — "pre-VMAF behavior" — instead of hours of full-file CPU
+  # VMAF).
+  extraEnv: {}
   # The CPU limit is deliberate on shared clusters: encodes soak every
   # cycle they're given, and the limit is what keeps them from starving
   # neighbor pods. Always set one.

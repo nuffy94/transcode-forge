@@ -189,6 +189,11 @@ class TestToggles:
         docs = _template("worker.replicas=2", "secrets.workerToken=sentinel-worker-token")
         assert docs[("Deployment", f"{FULLNAME}-worker")]["spec"]["replicas"] == 2
 
+    def test_worker_extra_env(self):
+        docs = _template(r"worker.extraEnv.TF_VMAF_FFMPEG=/usr/bin/ffmpeg")
+        env = _env(_container(docs[("Deployment", f"{FULLNAME}-worker")]))
+        assert env["TF_VMAF_FFMPEG"]["value"] == "/usr/bin/ffmpeg"
+
     def test_missing_auth_secret_fails(self):
         result = _helm("template", "tf", str(CHART), "--set", "secrets.pgPassword=x")
         assert result.returncode != 0
