@@ -159,3 +159,20 @@ async def ffprobe(path: str | Path) -> ProbeResult:
 def is_video_file(path: Path) -> bool:
     """Check if a file has a recognized video extension."""
     return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+# The transcode pipeline's sidecar markers (worker/storage/filesystem.py:
+# LOCK_SUFFIX / TMP_SUFFIX / BAK_SUFFIX — the on-disk format is frozen).
+# Imported here as literals to keep the scheduler-side scanner decoupled
+# from the worker package.
+_PIPELINE_ARTIFACT_MARKERS = (".tf_lock", ".tf_tmp", ".tf_bak")
+
+
+def is_pipeline_artifact(path: Path) -> bool:
+    """True for the pipeline's sidecar files (movie.tf_bak.mkv,
+    movie.tf_tmp.mkv, movie.mkv.tf_lock[.new]).
+
+    These carry real media extensions, so the extension check alone would
+    catalog them — phantom rows, and a cataloged backup is one queue click
+    from being transcoded."""
+    return any(marker in path.name for marker in _PIPELINE_ARTIFACT_MARKERS)

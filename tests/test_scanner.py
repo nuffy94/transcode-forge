@@ -6,7 +6,33 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from transcode_forge.scanner.probe import ProbeError, ProbeResult, ffprobe, is_video_file
+from transcode_forge.scanner.probe import (
+    ProbeError,
+    ProbeResult,
+    ffprobe,
+    is_pipeline_artifact,
+    is_video_file,
+)
+
+
+class TestIsPipelineArtifact:
+    """Pipeline sidecar files carry real media extensions (movie.tf_bak.mkv)
+    so the extension check alone would catalog them — phantom rows, and a
+    queueable backup is one queue click from being transcoded."""
+
+    def test_bak_is_artifact(self):
+        assert is_pipeline_artifact(Path("movie.tf_bak.mkv")) is True
+
+    def test_tmp_is_artifact(self):
+        assert is_pipeline_artifact(Path("movie.tf_tmp.mkv")) is True
+
+    def test_lock_is_artifact(self):
+        assert is_pipeline_artifact(Path("movie.mkv.tf_lock")) is True
+        assert is_pipeline_artifact(Path("movie.mkv.tf_lock.new")) is True
+
+    def test_regular_video_is_not(self):
+        assert is_pipeline_artifact(Path("movie.mkv")) is False
+        assert is_pipeline_artifact(Path("Some.Film.2020.1080p.mkv")) is False
 
 
 class TestIsVideoFile:
@@ -259,6 +285,25 @@ class TestScanLibrary:
         result = await self._scan(db, lib)
         assert result.files_found == 1
         assert result.files_new == 1
+
+    async def test_pipeline_artifacts_never_cataloged(self, db, tmp_path):
+        """A scan racing a transcode (or following a crash) sees .tf_bak /
+        .tf_tmp siblings — they must not become catalog rows."""
+        from transcode_forge.repos import media as media_repo
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "movie.mkv").write_bytes(b"x" * 100)
+        (lib / "movie.tf_bak.mkv").write_bytes(b"x" * 100)
+        (lib / "movie.tf_tmp.mkv").write_bytes(b"x" * 50)
+
+        result = await self._scan(db, lib)
+        assert result.files_found == 1
+        assert result.files_new == 1
+
+        files, total = await media_repo.list_media_files(db)
+        assert total == 1
+        assert files[0]["file_path"].endswith("movie.mkv")
 
     async def test_unchanged_file_skipped_on_rescan(self, db, tmp_path):
         from transcode_forge.repos import scans as scan_repo
