@@ -95,6 +95,26 @@ class TestAtomicSwap:
         # Original should be restored from backup
         assert original.exists() or bak.exists()
 
+    def test_swap_refuses_to_clobber_existing_backup(self, tmp_path):
+        """A pre-existing .tf_bak is the LAST copy of a true original
+        (completed job whose backup delete failed). POSIX rename replaces
+        silently — without this guard, re-encoding that path destroys it."""
+        original = tmp_path / "test.mkv"
+        tmp = tmp_path / "test.tf_tmp.mkv"
+        bak = tmp_path / "test.tf_bak.mkv"
+
+        original.write_bytes(b"confirmed encode")
+        tmp.write_bytes(b"new encode")
+        bak.write_bytes(b"the real original")
+
+        with pytest.raises(PipelineError, match="backup"):
+            _atomic_swap(original, tmp, bak)
+
+        # Nothing moved: all three files intact.
+        assert original.read_bytes() == b"confirmed encode"
+        assert bak.read_bytes() == b"the real original"
+        assert tmp.read_bytes() == b"new encode"
+
 
 class TestSafeDelete:
     def test_deletes_existing_file(self, tmp_path):
@@ -346,6 +366,105 @@ class TestRunPipeline:
         # Original intact, no leftover files
         assert source.read_bytes() == b"original"
         assert not (tmp_path / "test.mkv.tf_lock").exists()
+
+    async def test_preexisting_backup_aborts_before_swap(self, tmp_path):
+        """End-to-end: a stranded .tf_bak at the source path must abort the
+        pipeline at SWAP with the original untouched — never silently
+        overwrite the backup."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+        stranded_bak = tmp_path / "test.tf_bak.mkv"
+        stranded_bak.write_bytes(b"the real original")
+
+        async def mock_run_encode(cmd, total_duration, progress_callback=None):
+            from transcode_forge.worker.encoder import EncodeResult
+
+            output = Path(cmd[-1])
+            output.write_bytes(b"y" * 5000)
+            return EncodeResult(
+                success=True, output_path=str(output), output_size=5000, returncode=0
+            )
+
+        mock_probe = ProbeResult(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5000000,
+            duration=3600.0,
+            file_size=5000,
+        )
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+        ):
+            with pytest.raises(PipelineError, match="backup"):
+                await run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+
+        assert source.read_bytes() == b"x" * 10000
+        assert stranded_bak.read_bytes() == b"the real original"
+
+    async def test_lock_heartbeat_refreshes_lock_during_encode(self, tmp_path):
+        """The lock timestamp must be refreshed while the pipeline runs so
+        staleness means dead — a live multi-hour encode's lock may not
+        decay into 'stale' for restarting neighbors on shared storage."""
+        import asyncio
+
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+        lock = tmp_path / "test.mkv.tf_lock"
+        seen: dict[str, str] = {}
+
+        async def mock_run_encode(cmd, total_duration, progress_callback=None):
+            from transcode_forge.worker.encoder import EncodeResult
+
+            seen["before"] = json.loads(lock.read_text())["timestamp"]
+            await asyncio.sleep(0.15)
+            seen["after"] = json.loads(lock.read_text())["timestamp"]
+            output = Path(cmd[-1])
+            output.write_bytes(b"y" * 5000)
+            return EncodeResult(
+                success=True, output_path=str(output), output_size=5000, returncode=0
+            )
+
+        mock_probe = ProbeResult(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5000000,
+            duration=3600.0,
+            file_size=5000,
+        )
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.LOCK_TOUCH_INTERVAL", 0.02),
+        ):
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job",
+                worker_id="test-worker",
+            )
+
+        assert seen["after"] > seen["before"], "lock timestamp should refresh mid-encode"
+        # Heartbeat cancelled cleanly: no lock resurrection, no temp leftovers.
+        assert not lock.exists()
+        assert not any(p.name.endswith(".new") for p in tmp_path.iterdir())
 
     async def test_lock_conflict(self, tmp_path):
         source = tmp_path / "test.mkv"
