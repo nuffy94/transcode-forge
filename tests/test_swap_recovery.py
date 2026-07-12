@@ -10,7 +10,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from transcode_forge.worker.storage.filesystem import recover_orphaned_backups
+from transcode_forge.worker.storage.filesystem import (
+    _touch_lock,
+    recover_orphaned_backups,
+    recover_source_path,
+)
 
 WORKER = "worker-self"
 OTHER = "worker-other"
@@ -160,6 +164,98 @@ class TestStaleLockCleanup:
     def test_nonexistent_root_is_noop(self, tmp_path: Path):
         stats = recover_orphaned_backups([tmp_path / "does-not-exist"], worker_id=WORKER)
         assert all(count == 0 for count in stats.values())
+
+
+class TestTouchLock:
+    """The lock heartbeat: run_pipeline refreshes the lock's timestamp
+    periodically so 'stale' means dead, not just long-running — without
+    it, a restarting neighbor on shared NFS treats a live >2h encode's
+    lock as abandoned and deletes the tmp out from under it."""
+
+    def test_touch_refreshes_timestamp_and_keeps_identity(self, tmp_path: Path):
+        lock = tmp_path / "movie.mkv.tf_lock"
+        _write_lock(lock, worker_id=WORKER, age_hours=3.0)
+        old_ts = json.loads(lock.read_text())["timestamp"]
+
+        _touch_lock(lock, job_id="job-1", worker_id=WORKER)
+
+        data = json.loads(lock.read_text())
+        assert data["timestamp"] > old_ts
+        assert data["worker_id"] == WORKER
+        assert data["job_id"] == "job-1"
+
+    def test_touch_leaves_no_temp_file(self, tmp_path: Path):
+        lock = tmp_path / "movie.mkv.tf_lock"
+        _write_lock(lock, worker_id=WORKER)
+        _touch_lock(lock, job_id="job-1", worker_id=WORKER)
+        leftovers = [p for p in tmp_path.iterdir() if p != lock]
+        assert leftovers == []
+
+    def test_touched_foreign_lock_counts_as_fresh(self, tmp_path: Path):
+        """An old lock that was just touched belongs to a live pipeline —
+        recovery must respect it even though it was CREATED hours ago."""
+        original, bak, lock, _ = _stage(tmp_path, lock_owner=OTHER, lock_age=48.0)
+        _touch_lock(lock, job_id="job-1", worker_id=OTHER)
+        stats = recover_orphaned_backups([tmp_path], worker_id=WORKER)
+        assert stats["restored"] == 0
+        assert stats["skipped_active"] == 1
+        assert bak.exists() and lock.exists() and not original.exists()
+
+
+class TestRecoverSourcePath:
+    """Claim-time single-path recovery: the same crash matrix as the
+    startup scan, applied lazily when a worker is about to process a
+    path — this is what heals a crash whose worker never comes back."""
+
+    def test_clean_path_is_untouched(self, tmp_path: Path):
+        original = tmp_path / "movie.mkv"
+        original.write_bytes(ORIGINAL_BYTES)
+        assert recover_source_path(original, worker_id=WORKER) == "clean"
+        assert original.read_bytes() == ORIGINAL_BYTES
+
+    def test_missing_original_restored_from_bak(self, tmp_path: Path):
+        original, bak, lock, _ = _stage(tmp_path, lock_owner=OTHER, lock_age=48.0)
+        assert recover_source_path(original, worker_id=WORKER) == "restored"
+        assert original.read_bytes() == ORIGINAL_BYTES
+        assert not bak.exists()
+        assert not lock.exists()
+
+    def test_unconfirmed_encode_replaced_when_lock_stale(self, tmp_path: Path):
+        original, bak, _, _ = _stage(tmp_path, original=True, lock_owner=OTHER, lock_age=48.0)
+        assert recover_source_path(original, worker_id=WORKER) == "restored"
+        assert original.read_bytes() == ORIGINAL_BYTES
+        assert not bak.exists()
+
+    def test_stale_lock_and_tmp_cleaned(self, tmp_path: Path):
+        original, _, lock, tmp = _stage(
+            tmp_path, bak=False, original=True, lock_owner=OTHER, lock_age=48.0, tmp=True
+        )
+        assert recover_source_path(original, worker_id=WORKER) == "cleaned"
+        assert not lock.exists()
+        assert not tmp.exists()
+        assert original.read_bytes() == ENCODE_BYTES  # source untouched
+
+    def test_own_leftover_lock_is_stale(self, tmp_path: Path):
+        """A fresh lock under OUR worker_id at claim time is a leftover from
+        this worker's previous life (one pipeline per path) — clean it."""
+        original, _, lock, _ = _stage(tmp_path, bak=False, original=True, lock_owner=WORKER)
+        assert recover_source_path(original, worker_id=WORKER) == "cleaned"
+        assert not lock.exists()
+
+    def test_fresh_foreign_lock_declines(self, tmp_path: Path):
+        original, bak, lock, _ = _stage(tmp_path, lock_owner=OTHER)
+        assert recover_source_path(original, worker_id=WORKER) == "active"
+        assert bak.exists()
+        assert lock.exists()
+
+    def test_finished_transcode_plus_bak_needs_attention(self, tmp_path: Path):
+        """bak + media file + NO lock: a completed job whose backup delete
+        failed. The bak is the LAST copy of the true original — never
+        proceed to an encode that would swap over it."""
+        original, bak, _, _ = _stage(tmp_path, original=True)
+        assert recover_source_path(original, worker_id=WORKER) == "attention"
+        assert original.read_bytes() == ENCODE_BYTES
+        assert bak.read_bytes() == ORIGINAL_BYTES
 
 
 class TestAgentWiring:
