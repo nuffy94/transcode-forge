@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import stat
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -221,15 +222,47 @@ def _touch_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
         }
     )
     tmp = lock_path.with_name(lock_path.name + ".new")
-    tmp.write_text(payload)
     try:
+        tmp.write_text(payload)
         os.replace(tmp, lock_path)
     except OSError:
         # A failed touch is non-fatal (the heartbeat retries next tick) but
-        # must not litter media dirs with .new files — e.g. Windows replace
-        # fails transiently when a reader holds the destination open.
+        # must not litter media dirs with .new files — neither recovery scan
+        # globs them, so a leak would sit invisible forever. E.g. Windows
+        # replace fails transiently when a reader holds the destination open.
         _safe_delete(tmp)
         raise
+
+
+class LockHeartbeatGuard:
+    """Serializes lock touches against the final unlock.
+
+    Cancelling a task awaiting ``asyncio.to_thread`` does NOT wait for the
+    underlying OS thread — an in-flight ``_touch_lock`` can complete AFTER
+    the pipeline's finally block deleted the lock, resurrecting it with a
+    fresh timestamp (other workers then decline the path as "active" for
+    hours). The guard makes that impossible at the thread level: ``stop()``
+    takes the same mutex as every touch, so it returns only once any
+    in-flight touch has finished, and every later touch no-ops.
+    """
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self._stopped = False
+
+    def touch(self, lock_path: Path, *, job_id: str, worker_id: str) -> None:
+        """Refresh the lock unless the guard has been stopped."""
+        with self._mutex:
+            if self._stopped:
+                return
+            _touch_lock(lock_path, job_id=job_id, worker_id=worker_id)
+
+    def stop(self) -> None:
+        """Block until any in-flight touch finishes; all later touches no-op.
+
+        Call (via a thread) BEFORE deleting the lock file."""
+        with self._mutex:
+            self._stopped = True
 
 
 def pipeline_artifacts(src: Path) -> tuple[Path, Path, Path]:
@@ -459,14 +492,17 @@ def recover_source_path(
     worker never restarts: the startup scan can't run if nobody starts up.
 
     Returns:
-    - ``"clean"``:     no artifacts; nothing done.
-    - ``"restored"``:  original restored from .tf_bak; leftovers removed.
-    - ``"cleaned"``:   stale .tf_lock/.tf_tmp removed (no backup involved).
-    - ``"active"``:    fresh foreign lock — another worker is mid-pipeline
-                       on this path right now; hands off.
-    - ``"attention"``: backup + finished-looking original with no lock (or
-                       a restore that failed) — operator must reconcile;
-                       hands off.
+    - ``"clean"``:          no artifacts; nothing done.
+    - ``"restored"``:       original restored from .tf_bak (or another
+                            recovery beat us to it); leftovers removed.
+    - ``"cleaned"``:        stale .tf_lock/.tf_tmp removed (no backup).
+    - ``"active"``:         fresh foreign lock — another worker is
+                            mid-pipeline on this path right now; hands off.
+    - ``"attention"``:      backup + finished-looking original with no
+                            lock — operator must reconcile; hands off.
+    - ``"restore_failed"``: the bak→original restore itself errored; the
+                            backup may be the only intact copy — operator
+                            must investigate; hands off, never delete.
     """
     lock, tmp, bak = pipeline_artifacts(original)
     stale_after = timedelta(hours=stale_lock_hours)
@@ -489,8 +525,14 @@ def recover_source_path(
         try:
             bak.replace(original)
         except OSError as e:
+            if not bak.exists() and original.exists():
+                # Benign lost race: a concurrent recovery (manual retry vs
+                # auto-requeue) already consumed the bak and restored the
+                # path. Exactly one replace wins; the file is correct.
+                logger.info("[RECOVERY] %s already restored by another recovery", original)
+                return "restored"
             logger.critical("[RECOVERY] Could not restore %s → %s: %s", bak, original, e)
-            return "attention"
+            return "restore_failed"
         logger.warning(
             "[RECOVERY] Claim-time restore of %s: %s (from %s)",
             "original over unconfirmed encode" if clobbered_unconfirmed else "missing original",

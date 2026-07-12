@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from transcode_forge.worker.storage.filesystem import (
+    LockHeartbeatGuard,
     _touch_lock,
     recover_orphaned_backups,
     recover_source_path,
@@ -202,6 +203,65 @@ class TestTouchLock:
         assert bak.exists() and lock.exists() and not original.exists()
 
 
+class TestLockHeartbeatGuard:
+    """Cancelling a task awaiting asyncio.to_thread does NOT wait for the
+    OS thread — without the guard, an in-flight touch completing after
+    UNLOCK resurrects the deleted lock with a fresh timestamp, and other
+    workers decline the path as 'active' for hours (review HIGH-1)."""
+
+    def test_touch_after_stop_is_a_noop(self, tmp_path: Path):
+        guard = LockHeartbeatGuard()
+        lock = tmp_path / "movie.mkv.tf_lock"
+        guard.stop()
+        guard.touch(lock, job_id="j1", worker_id=WORKER)
+        assert not lock.exists(), "a touch after stop() must never recreate the lock"
+
+    def test_stop_waits_for_inflight_touch(self, tmp_path: Path, monkeypatch):
+        """stop() must block until a touch that already entered the guarded
+        region finishes — that ordering is what lets the caller delete the
+        lock afterwards without a resurrection window."""
+        import threading
+        import time
+
+        import transcode_forge.worker.storage.filesystem as fs
+
+        lock = tmp_path / "movie.mkv.tf_lock"
+        started = threading.Event()
+        release = threading.Event()
+        real_touch = fs._touch_lock
+
+        def blocking_touch(lock_path, *, job_id, worker_id):
+            started.set()
+            assert release.wait(timeout=5), "test deadlock"
+            real_touch(lock_path, job_id=job_id, worker_id=worker_id)
+
+        monkeypatch.setattr(fs, "_touch_lock", blocking_touch)
+
+        guard = LockHeartbeatGuard()
+        toucher = threading.Thread(
+            target=guard.touch, args=(lock,), kwargs={"job_id": "j1", "worker_id": WORKER}
+        )
+        toucher.start()
+        assert started.wait(timeout=5)
+
+        stopper = threading.Thread(target=guard.stop)
+        stopper.start()
+        time.sleep(0.05)
+        assert stopper.is_alive(), "stop() must block while a touch is in flight"
+
+        release.set()
+        stopper.join(timeout=5)
+        toucher.join(timeout=5)
+        assert not stopper.is_alive()
+
+        # The in-flight touch completed BEFORE stop returned — so a delete
+        # performed after stop() can never be undone by it.
+        assert lock.exists()
+        lock.unlink()
+        guard.touch(lock, job_id="j1", worker_id=WORKER)
+        assert not lock.exists()
+
+
 class TestRecoverSourcePath:
     """Claim-time single-path recovery: the same crash matrix as the
     startup scan, applied lazily when a worker is about to process a
@@ -256,6 +316,38 @@ class TestRecoverSourcePath:
         assert recover_source_path(original, worker_id=WORKER) == "attention"
         assert original.read_bytes() == ENCODE_BYTES
         assert bak.read_bytes() == ORIGINAL_BYTES
+
+    def test_failed_restore_is_not_attention(self, tmp_path: Path):
+        """A restore that ERRORS must be distinguishable from the ambiguous
+        'attention' state — the operator guidance is opposite (attention:
+        'delete the backup after verifying'; restore_failed: 'the backup may
+        be the only copy — never delete') (review HIGH-2)."""
+        bak = tmp_path / "movie.tf_bak.mkv"
+        bak.write_bytes(ORIGINAL_BYTES)
+        original = tmp_path / "movie.mkv"
+        original.mkdir()  # a directory at the media path makes replace() error
+        _write_lock(tmp_path / "movie.mkv.tf_lock", worker_id=OTHER, age_hours=48.0)
+
+        assert recover_source_path(original, worker_id=WORKER) == "restore_failed"
+        assert bak.read_bytes() == ORIGINAL_BYTES  # backup untouched
+
+    def test_lost_restore_race_reports_restored(self, tmp_path: Path, monkeypatch):
+        """Two recoveries racing the same path: the loser's replace() raises
+        because the winner consumed the bak — that's a success, not an
+        operator alert (review MEDIUM-1)."""
+        original, _bak, _, _ = _stage(tmp_path)  # bak only, original missing
+        real_replace = Path.replace
+
+        def racing_replace(self: Path, target):
+            # Simulate the concurrent winner: it restores the original and
+            # consumes the bak an instant before our rename executes.
+            real_replace(self, target)
+            raise FileNotFoundError("simulated lost rename race")
+
+        monkeypatch.setattr(Path, "replace", racing_replace)
+
+        assert recover_source_path(original, worker_id=WORKER) == "restored"
+        assert original.read_bytes() == ORIGINAL_BYTES
 
 
 class TestAgentWiring:

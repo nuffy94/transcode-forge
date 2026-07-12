@@ -279,7 +279,7 @@ class HttpWorkerAgent:
             recovery = await asyncio.to_thread(
                 recover_source_path, Path(source_ref), worker_id=self.worker_id
             )
-            if recovery in ("active", "attention"):
+            if recovery in ("active", "attention", "restore_failed"):
                 messages = {
                     "active": (
                         "Source path is locked by another live worker — likely still "
@@ -291,15 +291,22 @@ class HttpWorkerAgent:
                         "for this source — refusing to encode over the backup. Verify "
                         "the media plays, delete the backup manually, then retry."
                     ),
+                    "restore_failed": (
+                        "Restoring the original from its .tf_bak backup FAILED — the "
+                        "backup may be the only intact copy of this file. Do NOT "
+                        "delete it; check the worker log for the restore error and "
+                        "reconcile manually."
+                    ),
                 }
                 logger.warning("Declining job %s (%s): %s", job.id, recovery, source_ref)
                 await self._client.failed(
                     job_id=job.id,
                     error_message=messages[recovery],
-                    # Neither case is the file's fault — never burn a retry.
+                    # None of these are the file's fault — never burn a retry.
                     retry_count=job.retry_count,
                 )
                 self._current_job_id = None
+                await storage.cleanup(job)
                 return
             if recovery in ("restored", "cleaned"):
                 logger.warning("Claim-time recovery on %s: %s", source_ref, recovery)

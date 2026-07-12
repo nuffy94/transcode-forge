@@ -33,7 +33,6 @@ that local path is passed here.
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -45,12 +44,12 @@ from transcode_forge.scanner.probe import ProbeError, ffprobe
 from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
 from transcode_forge.worker.proc import managed_subprocess
 from transcode_forge.worker.storage.filesystem import (
+    LockHeartbeatGuard,
     _acquire_lock,
     _atomic_swap,
     _preserve_metadata,
     _rollback_swap,
     _safe_delete,
-    _touch_lock,
     pipeline_artifacts,
 )
 from transcode_forge.worker.vmaf import (
@@ -233,6 +232,7 @@ async def run_pipeline(
     predicted_vmaf_mean: float | None = None
     predicted_vmaf_perc5: float | None = None
     lock_heartbeat: asyncio.Task[None] | None = None
+    heartbeat_guard = LockHeartbeatGuard()
 
     try:
         # Step 1: LOCK
@@ -241,7 +241,7 @@ async def run_pipeline(
         # Heartbeat the lock for the whole pipeline (encode + VMAF + swap)
         # so "stale" means dead to the recovery scans, not merely old.
         lock_heartbeat = asyncio.create_task(
-            _lock_heartbeat(lock_path, job_id=job_id, worker_id=worker_id)
+            _lock_heartbeat(lock_path, job_id=job_id, worker_id=worker_id, guard=heartbeat_guard)
         )
 
         # Optional pre-step: target-VMAF quality search on short samples.
@@ -389,11 +389,19 @@ async def run_pipeline(
 
     finally:
         # Stop the heartbeat BEFORE deleting the lock — an in-flight touch
-        # would resurrect the file right after the unlink.
+        # would resurrect the file right after the unlink. Cancelling the
+        # task is NOT enough: asyncio.to_thread cancellation doesn't wait
+        # for the OS thread, so the guard's mutex is what actually
+        # serializes a detached touch against the delete below.
         if lock_heartbeat is not None:
             lock_heartbeat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await lock_heartbeat
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Lock heartbeat task died unexpectedly")
+        await asyncio.to_thread(heartbeat_guard.stop)
         # Step 8: UNLOCK (always runs)
         await asyncio.to_thread(_safe_delete, lock_path)
         # Clean up tmp if it still exists (failed encode or gate skip)
@@ -401,14 +409,17 @@ async def run_pipeline(
         logger.info("[UNLOCK] Lock released")
 
 
-async def _lock_heartbeat(lock_path: Path, *, job_id: str, worker_id: str) -> None:
+async def _lock_heartbeat(
+    lock_path: Path, *, job_id: str, worker_id: str, guard: LockHeartbeatGuard
+) -> None:
     """Refresh the lock's timestamp every LOCK_TOUCH_INTERVAL seconds until
     cancelled. A failed touch is logged, never fatal — the pipeline owns
-    the lock either way; the heartbeat only keeps its liveness visible."""
+    the lock either way; the heartbeat only keeps its liveness visible.
+    Touches go through the guard so one can never outlive UNLOCK."""
     while True:
         await asyncio.sleep(LOCK_TOUCH_INTERVAL)
         try:
-            await asyncio.to_thread(_touch_lock, lock_path, job_id=job_id, worker_id=worker_id)
+            await asyncio.to_thread(guard.touch, lock_path, job_id=job_id, worker_id=worker_id)
         except OSError as e:
             logger.warning("Could not refresh lock %s: %s", lock_path, e)
 
