@@ -27,6 +27,7 @@ from transcode_forge.db import DBConnection
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.models.worker import Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import worker_tokens as token_repo
 from transcode_forge.repos import workers as worker_repo
 
@@ -516,6 +517,10 @@ async def complete_job(
         progress=1.0,
         completed_at=datetime.now(UTC).isoformat(),
     )
+    # Keep the catalog in step with the outcome — S3 rows can't self-heal
+    # on rescan (the master object is unchanged), so this is their only
+    # path out of 'queued'.
+    await media_repo.update_status_by_job(db, job_id, transcode_status="complete")
 
 
 @router.post("/worker/job/{job_id}/skipped", status_code=204)
@@ -556,6 +561,9 @@ async def skip_job(
         file_size=job.source_size,
         skip_reason=SkipReason(body.reason),
     )
+    await media_repo.update_status_by_job(
+        db, job_id, transcode_status="skipped", skip_reason=body.reason
+    )
     logger.info("Job %s skipped by worker: %s (%s)", job_id, body.reason, body.error_message[:120])
 
 
@@ -575,6 +583,9 @@ async def fail_job(
         retry_count=body.retry_count,
         completed_at=datetime.now(UTC).isoformat(),
     )
+    # Original kept and re-queueable; the row keeps job_id so the drawer
+    # still surfaces the failed job.
+    await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
 
 
 @router.post("/worker/job/{job_id}/register-derivative", status_code=204)

@@ -267,6 +267,32 @@ async def update_media_status(
     await db.commit()
 
 
+async def update_status_by_job(
+    db: DBConnection,
+    job_id: str,
+    *,
+    transcode_status: str,
+    skip_reason: str | None = None,
+) -> None:
+    """Reflect a job outcome onto the media row that was queued into it.
+
+    Keyed by the job_id stamped at queue time; a no-op when no catalog row
+    points at the job. The row's job_id is kept so the file drawer stays
+    linked to the outcome. Without this, S3-library rows say 'queued'
+    forever after the job ends — the master object never changes, so a
+    rescan can't self-heal them the way a filesystem swap does.
+    """
+    if transcode_status not in _VALID_TRANSCODE_STATUSES:
+        raise ValueError(f"Invalid transcode_status: {transcode_status!r}")
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "UPDATE media_files SET transcode_status = ?, skip_reason = ?, updated_at = ?"
+        " WHERE job_id = ?",
+        (transcode_status, skip_reason, now, job_id),
+    )
+    await db.commit()
+
+
 async def bulk_update_status(
     db: DBConnection,
     file_ids: list[str],
