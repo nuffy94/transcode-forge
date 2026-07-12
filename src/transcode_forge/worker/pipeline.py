@@ -33,6 +33,7 @@ that local path is passed here.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -49,6 +50,8 @@ from transcode_forge.worker.storage.filesystem import (
     _preserve_metadata,
     _rollback_swap,
     _safe_delete,
+    _touch_lock,
+    pipeline_artifacts,
 )
 from transcode_forge.worker.vmaf import (
     VmafError,
@@ -63,6 +66,10 @@ logger = logging.getLogger(__name__)
 LOCK_SUFFIX = ".tf_lock"
 TMP_SUFFIX = ".tf_tmp"
 BAK_SUFFIX = ".tf_bak"
+# Lock heartbeat cadence: the recovery scans treat locks older than 2h as
+# dead, which is only a valid liveness signal because a running pipeline
+# refreshes its lock this often (encodes + VMAF passes routinely run >2h).
+LOCK_TOUCH_INTERVAL = 300.0
 DURATION_TOLERANCE = 2.0  # seconds of allowed duration drift
 DECODE_SAMPLE_SECONDS = 10.0  # length of each decode sample in the deep check
 DECODE_SAMPLE_OFFSETS = (0.05, 0.50, 0.95)  # fractions of total duration to sample at
@@ -191,11 +198,9 @@ async def run_pipeline(
         VmafGateError: If measured VMAF is below the floor (skip outcome).
     """
     src = Path(source_path)
-    # Keep original extension so ffmpeg recognizes the container format
-    # e.g. movie.mkv → movie.tf_tmp.mkv (not movie.mkv.tf_tmp)
-    lock_path = src.with_suffix(src.suffix + LOCK_SUFFIX)
-    tmp_path = src.with_name(src.stem + TMP_SUFFIX + src.suffix)
-    bak_path = src.with_name(src.stem + BAK_SUFFIX + src.suffix)
+    # Sidecar naming keeps the original extension so ffmpeg recognizes the
+    # container format (movie.tf_tmp.mkv, not movie.mkv.tf_tmp).
+    lock_path, tmp_path, bak_path = pipeline_artifacts(src)
 
     src_stat = await asyncio.to_thread(src.stat)
     source_size = src_stat.st_size
@@ -227,11 +232,17 @@ async def run_pipeline(
 
     predicted_vmaf_mean: float | None = None
     predicted_vmaf_perc5: float | None = None
+    lock_heartbeat: asyncio.Task[None] | None = None
 
     try:
         # Step 1: LOCK
         await asyncio.to_thread(_acquire_lock, lock_path, job_id=job_id, worker_id=worker_id)
         logger.info("[LOCK] Acquired: %s", lock_path)
+        # Heartbeat the lock for the whole pipeline (encode + VMAF + swap)
+        # so "stale" means dead to the recovery scans, not merely old.
+        lock_heartbeat = asyncio.create_task(
+            _lock_heartbeat(lock_path, job_id=job_id, worker_id=worker_id)
+        )
 
         # Optional pre-step: target-VMAF quality search on short samples.
         # Any failure here falls back to the fixed preset — the full-file
@@ -377,11 +388,29 @@ async def run_pipeline(
         }
 
     finally:
+        # Stop the heartbeat BEFORE deleting the lock — an in-flight touch
+        # would resurrect the file right after the unlink.
+        if lock_heartbeat is not None:
+            lock_heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lock_heartbeat
         # Step 8: UNLOCK (always runs)
         await asyncio.to_thread(_safe_delete, lock_path)
         # Clean up tmp if it still exists (failed encode or gate skip)
         await asyncio.to_thread(_safe_delete, tmp_path)
         logger.info("[UNLOCK] Lock released")
+
+
+async def _lock_heartbeat(lock_path: Path, *, job_id: str, worker_id: str) -> None:
+    """Refresh the lock's timestamp every LOCK_TOUCH_INTERVAL seconds until
+    cancelled. A failed touch is logged, never fatal — the pipeline owns
+    the lock either way; the heartbeat only keeps its liveness visible."""
+    while True:
+        await asyncio.sleep(LOCK_TOUCH_INTERVAL)
+        try:
+            await asyncio.to_thread(_touch_lock, lock_path, job_id=job_id, worker_id=worker_id)
+        except OSError as e:
+            logger.warning("Could not refresh lock %s: %s", lock_path, e)
 
 
 async def _verify_output(
