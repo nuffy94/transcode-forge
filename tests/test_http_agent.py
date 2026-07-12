@@ -331,6 +331,153 @@ class TestProcessJobFilesystemHappyPath:
         assert agent._current_job_id is None
 
 
+class TestClaimTimeRecovery:
+    """_process_job runs single-path swap recovery before fetch for
+    filesystem jobs — this is what heals a mid-swap crash whose worker
+    never restarts (the startup scan can't run if nobody starts up)."""
+
+    def _agent(self, test_settings) -> HttpWorkerAgent:
+        agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
+        agent.worker_id = "worker-1"
+        agent.capabilities = _cpu_caps()
+        agent._client = AsyncMock()
+        return agent
+
+    def _fs_job(self, source: Path) -> Job:
+        job = Job(
+            source_path=str(source),
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        object.__setattr__(job, "_backend_type", "filesystem")
+        return job
+
+    @pytest.mark.asyncio
+    async def test_hidden_original_restored_then_job_proceeds(self, test_settings, tmp_path):
+        """Crash-between-renames leftovers on the claimed path: the original
+        is restored from .tf_bak and the encode proceeds normally."""
+        source = tmp_path / "movie.mkv"
+        bak = tmp_path / "movie.tf_bak.mkv"
+        bak.write_bytes(b"the original")
+        # No source file — it's hidden as the bak. No lock (ancient crash).
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        mock_backend = AsyncMock()
+        mock_backend.fetch = AsyncMock(return_value=source)
+        mock_backend.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=5))
+        mock_backend.cleanup = AsyncMock()
+
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job)
+
+        assert source.read_bytes() == b"the original"
+        assert not bak.exists()
+        mock_pipeline.assert_called_once()
+        agent._client.complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fresh_foreign_lock_declines_without_burning_retry(self, test_settings, tmp_path):
+        """A fresh (heartbeated) foreign lock means another worker is
+        encoding this path right now — decline the job with the retry
+        count UNCHANGED (not the file's fault) and touch nothing."""
+        import json
+        from datetime import UTC, datetime
+
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        lock = tmp_path / "movie.mkv.tf_lock"
+        lock.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-other",
+                    "worker_id": "worker-other",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+        )
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+        job.retry_count = 2
+
+        mock_backend = AsyncMock()
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job)
+
+        mock_pipeline.assert_not_called()
+        agent._client.failed.assert_called_once()
+        kwargs = agent._client.failed.call_args.kwargs
+        assert kwargs["retry_count"] == 2  # unchanged
+        assert lock.exists()
+        assert source.read_bytes() == b"the original"
+        assert agent._current_job_id is None
+
+    @pytest.mark.asyncio
+    async def test_needs_attention_state_declines_job(self, test_settings, tmp_path):
+        """bak + finished-looking media file + no lock: the bak is the last
+        copy of the true original — the job must decline, not encode over
+        it (the SWAP guard would fire anyway; this fails fast + clearly)."""
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"confirmed encode")
+        bak = tmp_path / "movie.tf_bak.mkv"
+        bak.write_bytes(b"the real original")
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        mock_backend = AsyncMock()
+        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job)
+
+        mock_pipeline.assert_not_called()
+        agent._client.failed.assert_called_once()
+        assert "backup" in agent._client.failed.call_args.kwargs["error_message"].lower()
+        assert source.read_bytes() == b"confirmed encode"
+        assert bak.read_bytes() == b"the real original"
+
+    @pytest.mark.asyncio
+    async def test_s3_jobs_skip_filesystem_recovery(self, test_settings, tmp_path):
+        """S3 keys are bucket coordinates — the filesystem recovery scan
+        must not run on them (masters are immutable; scratch manager owns
+        S3-side crash cleanup)."""
+        agent = self._agent(test_settings)
+        agent._client.check_derivative = AsyncMock(return_value={"found": False})
+
+        job = Job(
+            source_path="masters/movies/test.mkv",
+            library="s3-movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        object.__setattr__(job, "_backend_type", "s3")
+        object.__setattr__(job, "_s3_bucket", "bkt")
+        job.source_resolution = "1920x1080"
+
+        output_file = tmp_path / "out.mkv"
+        output_file.write_bytes(b"fake video data")
+        mock_backend = AsyncMock()
+        mock_backend.fetch = AsyncMock(return_value=output_file)
+        mock_backend.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=0))
+        mock_backend.cleanup = AsyncMock()
+
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.recover_source_path") as mock_recover,
+        ):
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 0}
+            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
+                await agent._process_job(job)
+
+        mock_recover.assert_not_called()
+
+
 class TestPathMapTranslation:
     """TF_PATH_MAP must be applied to filesystem sources before fetch — and
     never to S3 keys (they're bucket coordinates, not mount points)."""

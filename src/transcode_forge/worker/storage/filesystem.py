@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import stat
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -204,12 +205,92 @@ def _acquire_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
         ) from None
 
 
+def _touch_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
+    """Atomically refresh the lock's timestamp (the lock heartbeat).
+
+    Written to a sibling temp file then os.replace()d so readers see the
+    old or the new JSON, never a partial write. Recovery treats locks
+    older than RECOVERY_STALE_LOCK_HOURS as dead — this heartbeat is what
+    makes that inference valid for encodes that legitimately run longer
+    (x265-slow 4K passes the 2h mark easily).
+    """
+    payload = json.dumps(
+        {
+            "job_id": job_id,
+            "worker_id": worker_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
+    tmp = lock_path.with_name(lock_path.name + ".new")
+    try:
+        tmp.write_text(payload)
+        os.replace(tmp, lock_path)
+    except OSError:
+        # A failed touch is non-fatal (the heartbeat retries next tick) but
+        # must not litter media dirs with .new files — neither recovery scan
+        # globs them, so a leak would sit invisible forever. E.g. Windows
+        # replace fails transiently when a reader holds the destination open.
+        _safe_delete(tmp)
+        raise
+
+
+class LockHeartbeatGuard:
+    """Serializes lock touches against the final unlock.
+
+    Cancelling a task awaiting ``asyncio.to_thread`` does NOT wait for the
+    underlying OS thread — an in-flight ``_touch_lock`` can complete AFTER
+    the pipeline's finally block deleted the lock, resurrecting it with a
+    fresh timestamp (other workers then decline the path as "active" for
+    hours). The guard makes that impossible at the thread level: ``stop()``
+    takes the same mutex as every touch, so it returns only once any
+    in-flight touch has finished, and every later touch no-ops.
+    """
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self._stopped = False
+
+    def touch(self, lock_path: Path, *, job_id: str, worker_id: str) -> None:
+        """Refresh the lock unless the guard has been stopped."""
+        with self._mutex:
+            if self._stopped:
+                return
+            _touch_lock(lock_path, job_id=job_id, worker_id=worker_id)
+
+    def stop(self) -> None:
+        """Block until any in-flight touch finishes; all later touches no-op.
+
+        Call (via a thread) BEFORE deleting the lock file."""
+        with self._mutex:
+            self._stopped = True
+
+
+def pipeline_artifacts(src: Path) -> tuple[Path, Path, Path]:
+    """(lock, tmp, bak) sidecar paths for a source file — the single
+    source of truth for the pipeline's artifact naming
+    (movie.mkv → movie.mkv.tf_lock, movie.tf_tmp.mkv, movie.tf_bak.mkv)."""
+    lock = src.with_name(src.name + LOCK_SUFFIX)
+    tmp = src.with_name(src.stem + TMP_SUFFIX + src.suffix)
+    bak = src.with_name(src.stem + BAK_SUFFIX + src.suffix)
+    return lock, tmp, bak
+
+
 def _atomic_swap(original: Path, tmp: Path, bak: Path) -> None:
     """Rename original → bak, then tmp → original.
 
     If the second rename fails, restore bak → original.
     """
     from transcode_forge.worker.pipeline import PipelineError
+
+    if bak.exists():
+        # A stranded backup is the LAST copy of a true original (e.g. a
+        # completed job whose CLEANUP failed). POSIX rename would replace
+        # it silently — refuse instead; an operator must reconcile first.
+        raise PipelineError(
+            "SWAP",
+            f"Pre-existing backup at {bak} — refusing to overwrite it. "
+            "Verify the media file plays, then delete the backup manually.",
+        )
 
     try:
         original.rename(bak)
@@ -395,6 +476,80 @@ def recover_orphaned_backups(
             stats["needs_attention"],
         )
     return stats
+
+
+def recover_source_path(
+    original: Path,
+    *,
+    worker_id: str,
+    stale_lock_hours: float = RECOVERY_STALE_LOCK_HOURS,
+) -> str:
+    """Single-path swap recovery, run by a worker at claim time.
+
+    Same crash matrix as ``recover_orphaned_backups`` (kept in sync by
+    hand — the scan variant also aggregates stats), applied lazily to the
+    one path a job is about to touch. This is what heals a crash whose
+    worker never restarts: the startup scan can't run if nobody starts up.
+
+    Returns:
+    - ``"clean"``:          no artifacts; nothing done.
+    - ``"restored"``:       original restored from .tf_bak (or another
+                            recovery beat us to it); leftovers removed.
+    - ``"cleaned"``:        stale .tf_lock/.tf_tmp removed (no backup).
+    - ``"active"``:         fresh foreign lock — another worker is
+                            mid-pipeline on this path right now; hands off.
+    - ``"attention"``:      backup + finished-looking original with no
+                            lock — operator must reconcile; hands off.
+    - ``"restore_failed"``: the bak→original restore itself errored; the
+                            backup may be the only intact copy — operator
+                            must investigate; hands off, never delete.
+    """
+    lock, tmp, bak = pipeline_artifacts(original)
+    stale_after = timedelta(hours=stale_lock_hours)
+
+    if lock.exists() and _lock_is_active(lock, worker_id=worker_id, stale_after=stale_after):
+        return "active"
+
+    if bak.exists():
+        if original.exists() and not lock.exists():
+            logger.critical(
+                "[RECOVERY] MANUAL ATTENTION: backup %s exists but %s looks like a "
+                "finished transcode (pipeline unlocked). Not touching either file — "
+                "verify the media plays, then delete the backup (or restore it "
+                "manually).",
+                bak,
+                original,
+            )
+            return "attention"
+        clobbered_unconfirmed = original.exists()
+        try:
+            bak.replace(original)
+        except OSError as e:
+            if not bak.exists() and original.exists():
+                # Benign lost race: a concurrent recovery (manual retry vs
+                # auto-requeue) already consumed the bak and restored the
+                # path. Exactly one replace wins; the file is correct.
+                logger.info("[RECOVERY] %s already restored by another recovery", original)
+                return "restored"
+            logger.critical("[RECOVERY] Could not restore %s → %s: %s", bak, original, e)
+            return "restore_failed"
+        logger.warning(
+            "[RECOVERY] Claim-time restore of %s: %s (from %s)",
+            "original over unconfirmed encode" if clobbered_unconfirmed else "missing original",
+            original,
+            bak,
+        )
+        _safe_delete(lock)
+        _safe_delete(tmp)
+        return "restored"
+
+    if lock.exists() or tmp.exists():
+        _safe_delete(lock)
+        _safe_delete(tmp)
+        logger.warning("[RECOVERY] Cleared stale pipeline leftovers for %s", original)
+        return "cleaned"
+
+    return "clean"
 
 
 def _recover_backups_under(

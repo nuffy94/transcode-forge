@@ -28,7 +28,10 @@ from transcode_forge.worker.pipeline import (
     VmafGateError,
     run_pipeline,
 )
-from transcode_forge.worker.storage.filesystem import recover_orphaned_backups
+from transcode_forge.worker.storage.filesystem import (
+    recover_orphaned_backups,
+    recover_source_path,
+)
 from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
@@ -267,6 +270,47 @@ class HttpWorkerAgent:
         # scratch. TF_PATH_MAP only applies to filesystem paths — S3 keys are
         # bucket coordinates, not mount points.
         source_ref = job.source_path if is_s3 else self._translate_path(job.source_path)
+
+        # Claim-time swap recovery (filesystem only — S3 masters are
+        # immutable and scratch owns S3-side crash cleanup): heal crash
+        # leftovers on this path before touching it. The startup scan
+        # can't help when the crashed worker never comes back.
+        if not is_s3:
+            recovery = await asyncio.to_thread(
+                recover_source_path, Path(source_ref), worker_id=self.worker_id
+            )
+            if recovery in ("active", "attention", "restore_failed"):
+                messages = {
+                    "active": (
+                        "Source path is locked by another live worker — likely still "
+                        "encoding it; retry after that pipeline finishes or its lock "
+                        "goes stale."
+                    ),
+                    "attention": (
+                        "A .tf_bak backup and a finished-looking media file both exist "
+                        "for this source — refusing to encode over the backup. Verify "
+                        "the media plays, delete the backup manually, then retry."
+                    ),
+                    "restore_failed": (
+                        "Restoring the original from its .tf_bak backup FAILED — the "
+                        "backup may be the only intact copy of this file. Do NOT "
+                        "delete it; check the worker log for the restore error and "
+                        "reconcile manually."
+                    ),
+                }
+                logger.warning("Declining job %s (%s): %s", job.id, recovery, source_ref)
+                await self._client.failed(
+                    job_id=job.id,
+                    error_message=messages[recovery],
+                    # None of these are the file's fault — never burn a retry.
+                    retry_count=job.retry_count,
+                )
+                self._current_job_id = None
+                await storage.cleanup(job)
+                return
+            if recovery in ("restored", "cleaned"):
+                logger.warning("Claim-time recovery on %s: %s", source_ref, recovery)
+
         try:
             source_path_local = await storage.fetch(source_ref)
         except (OSError, Exception) as e:
