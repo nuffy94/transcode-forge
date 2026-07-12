@@ -69,6 +69,13 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
+          lifecycle:
+            # Keep serving while endpoint removal propagates to kube-proxy
+            # on every node; without this, one in-flight request can land
+            # on the terminating pod and get reset mid-rollout.
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           livenessProbe:
             httpGet:
               path: /api/health/live

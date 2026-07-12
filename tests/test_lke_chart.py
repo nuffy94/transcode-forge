@@ -108,6 +108,10 @@ class TestDefaultRender:
         assert c["livenessProbe"]["httpGet"]["path"] == "/api/health/live"
         assert c["readinessProbe"]["httpGet"]["path"] == "/api/health/ready"
         assert c["ports"][0]["containerPort"] == 8000
+        # preStop drain: without it a rolling update resets whichever
+        # request races the endpoint removal (observed live: 1 blip in
+        # 170 polls until this landed).
+        assert c["lifecycle"]["preStop"]["exec"]["command"] == ["sleep", "5"]
 
     def test_image_is_pinned(self):
         docs = _template()
