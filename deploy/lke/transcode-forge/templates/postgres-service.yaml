@@ -1,0 +1,21 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "transcode-forge.fullname" . }}-postgres
+  labels:
+    {{- include "transcode-forge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  # Headless: governs the StatefulSet; with one replica the service name
+  # resolves straight to the pod.
+  clusterIP: None
+  selector:
+    {{- include "transcode-forge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+{{- end }}

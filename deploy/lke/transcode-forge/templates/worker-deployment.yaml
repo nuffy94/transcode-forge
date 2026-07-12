@@ -1,0 +1,68 @@
+{{- if and (gt (int .Values.worker.replicas) 0) (not .Values.secrets.workerToken) }}
+{{- fail "worker.replicas > 0 requires secrets.workerToken — issue one from the scheduler UI (Workers -> Issue token), then `helm upgrade --reuse-values --set secrets.workerToken=... --set worker.replicas=N`" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "transcode-forge.fullname" . }}-worker
+  labels:
+    {{- include "transcode-forge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ int .Values.worker.replicas }}
+  # Recreate, not RollingUpdate: a surge worker would double CPU demand on
+  # a small pool, and the old pod's shutdown already re-queues its job.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "transcode-forge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "transcode-forge.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      # Room for the worker's staged shutdown to kill ffmpeg and report
+      # the job back before the pod is force-killed.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "transcode_forge.worker"]
+          env:
+            - name: TF_SERVER_URL
+              value: "http://{{ include "transcode-forge.fullname" . }}:8000"
+            - name: TF_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "transcode-forge.fullname" . }}
+                  key: TF_WORKER_TOKEN
+            - name: TF_WORKER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TF_PREFERRED_BACKEND
+              value: "cpu"
+            - name: TF_WORKER_MAX_CONCURRENT
+              value: {{ .Values.worker.maxConcurrent | quote }}
+            - name: TF_SCRATCH_DIR
+              value: /scratch
+            {{- include "transcode-forge.s3Env" . | nindent 12 }}
+            {{- range $name, $value := .Values.worker.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: scratch
+              mountPath: /scratch
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ .Values.worker.scratchSize | quote }}

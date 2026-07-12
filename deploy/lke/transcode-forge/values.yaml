@@ -1,0 +1,122 @@
+# Default values — the "small" tier: fits a shared 2x (2 vCPU / 4 GB)
+# LKE pool (g6-standard-2) alongside other workloads. Overlay
+# values-medium.yaml / values-large.yaml for bigger pools; real encode
+# throughput wants a Dedicated CPU pool (Shared vCPUs steal cycles from
+# x265 exactly when it needs them).
+#
+# Tiers (mirrors the StackScript sizing: WORKER_MAX_CONCURRENT ~ vCPU/4,
+# clamped 1..4; here worker *replicas* are the scaling axis instead):
+#   small  (this file)      2 vCPU / 4 GB shared  — 1 worker, 1 job at a time
+#   medium (values-medium)  4 vCPU / 8 GB         — 1 worker, more CPU headroom
+#   large  (values-large)   8 vCPU / 16 GB dedic. — 2 workers
+
+image:
+  repository: ghcr.io/nuffy94/transcode-forge
+  # Pinned release tag — never ":latest" (v0.9.5 carries the four S3
+  # scan/claim/derivative fixes the S3-only media plane depends on).
+  tag: "0.9.5"
+  pullPolicy: IfNotPresent
+
+# All secret material. Inject at install time (e.g. via `op run` + --set);
+# never commit real values. authSecret is required; pgPassword is required
+# while postgres.enabled; workerToken is issued from the scheduler UI
+# (Workers -> Issue token) after first boot, then applied with
+# `helm upgrade --reuse-values --set secrets.workerToken=...`.
+secrets:
+  authSecret: ""
+  pgPassword: ""
+  s3AccessKeyId: ""
+  s3SecretAccessKey: ""
+  workerToken: ""
+
+# S3-compatible Object Storage (non-secret half; keys live under secrets).
+# On LKE this is the media plane — block storage is RWO, so libraries are
+# S3 libraries. Example: https://us-ord-1.linodeobjects.com / us-ord-1.
+s3:
+  endpointUrl: ""
+  region: ""
+
+scheduler:
+  # Set true when serving over HTTPS (ingress with TLS) so the session
+  # cookie carries the Secure flag. Keep false for port-forward access.
+  sessionSecure: false
+  logLevel: info
+  # Extra plain env vars for the scheduler container (name: value).
+  extraEnv: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 768Mi
+
+worker:
+  # Workers need a server-issued token, so the chart defaults to none and
+  # rendering fails if replicas > 0 without secrets.workerToken. Flow:
+  # install with 0 -> /setup -> issue token -> upgrade with token + 1.
+  replicas: 0
+  # Encode slots per worker. Leave at 1 and scale replicas instead —
+  # ffmpeg already threads across the CPU limit.
+  maxConcurrent: 1
+  # Scratch space for S3 fetch + transcode output (emptyDir on the node
+  # disk). Must hold source + output + samples for the largest file.
+  scratchSize: 15Gi
+  # Extra plain env vars for the worker container (name: value). E.g. a
+  # gateless acceptance run sets TF_VMAF_FFMPEG=/usr/bin/ffmpeg (the
+  # distro binary has no libvmaf, so the worker skips CRF search + the
+  # VMAF gate — "pre-VMAF behavior" — instead of hours of full-file CPU
+  # VMAF).
+  extraEnv: {}
+  # The CPU limit is deliberate on shared clusters: encodes soak every
+  # cycle they're given, and the limit is what keeps them from starving
+  # neighbor pods. Always set one.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: 1500m
+      memory: 2Gi
+
+redis:
+  image: redis:7-alpine
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+# In-cluster Postgres (StatefulSet + PVC). For a managed database
+# (e.g. Linode Managed DB / DBaaS) set enabled: false and put the full
+# connection URL in externalDb.url — same toggle the StackScript offers.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  user: tf
+  database: transcode_forge
+  # Empty -> the cluster's default StorageClass (on LKE:
+  # linode-block-storage-retain). Linode volumes have a 10Gi minimum.
+  storageClass: ""
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+externalDb:
+  # postgresql://user:pass@host:5432/db?sslmode=require — used (and
+  # required) only when postgres.enabled is false. Contains credentials,
+  # so it lands in the Secret; inject it the same way as secrets.*.
+  url: ""
+
+# Off by default: the acceptance path is `kubectl port-forward`, and on a
+# shared cluster the release shouldn't claim a public edge unless asked.
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []

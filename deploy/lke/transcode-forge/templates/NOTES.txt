@@ -1,0 +1,21 @@
+Transcode Forge is deploying.
+
+1. Wait for the scheduler to go Ready:
+     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "transcode-forge.fullname" . }}-scheduler
+
+2. Reach the UI (no public edge by default):
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "transcode-forge.fullname" . }} 8000:8000
+   then open http://localhost:8000 — first boot lands on /setup to create
+   the admin user.
+
+3. Add an S3 library (Settings -> Add library -> S3 Object Storage) and
+   scan it. LKE block storage is single-node, so media lives in Object
+   Storage.
+
+{{- if eq (int .Values.worker.replicas) 0 }}
+
+4. No workers yet (worker.replicas=0). Issue a token in the UI
+   (Workers -> Issue token), then:
+     helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} \
+       --reuse-values --set secrets.workerToken=<token> --set worker.replicas=1
+{{- end }}
