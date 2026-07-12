@@ -1,0 +1,32 @@
+# Large tier overlay — an 8 vCPU / 16 GB Dedicated pool (g6-dedicated-8).
+# Sized for two workers, each with its own CPU slice (replicas scale
+# better than maxConcurrent: one ffmpeg already threads across its limit).
+#   helm install ... -f values-large.yaml
+# Replicas stay 0 at install (workers need a server-issued token); after
+# issuing one: --set secrets.workerToken=... --set worker.replicas=2
+worker:
+  scratchSize: 30Gi
+  resources:
+    requests:
+      cpu: 2500m
+      memory: 2Gi
+    limits:
+      cpu: 3500m
+      memory: 5Gi
+
+scheduler:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+postgres:
+  storage: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi

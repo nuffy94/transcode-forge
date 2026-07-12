@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "transcode-forge.fullname" . }}-scheduler
+  labels:
+    {{- include "transcode-forge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Zero-downtime upgrades: the new pod must be Ready before the old
+      # one is taken out.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "transcode-forge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "transcode-forge.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
+      annotations:
+        # Roll the pod when secret material changes — env from secretKeyRef
+        # is only read at container start.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.postgres.enabled }}
+      initContainers:
+        # The app migrates at boot; waiting for Postgres avoids a noisy
+        # CrashLoopBackOff on first install while the PVC provisions.
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until nc -z {{ include "transcode-forge.fullname" . }}-postgres 5432; do echo waiting for postgres; sleep 2; done
+      {{- end }}
+      containers:
+        - name: scheduler
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: TF_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "transcode-forge.fullname" . }}
+                  key: TF_DB_URL
+            - name: TF_REDIS_URL
+              value: "redis://{{ include "transcode-forge.fullname" . }}-redis:6379/0"
+            - name: TF_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "transcode-forge.fullname" . }}
+                  key: TF_AUTH_SECRET
+            - name: TF_SESSION_SECURE
+              value: {{ .Values.scheduler.sessionSecure | quote }}
+            - name: TF_LOG_LEVEL
+              value: {{ .Values.scheduler.logLevel | quote }}
+            {{- include "transcode-forge.s3Env" . | nindent 12 }}
+            {{- range $name, $value := .Values.scheduler.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
