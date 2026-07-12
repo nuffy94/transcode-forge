@@ -13,7 +13,12 @@ from transcode_forge.db import DBConnection
 from transcode_forge.models.scan import Scan, ScanStatus
 from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import scans as scan_repo
-from transcode_forge.scanner.probe import ProbeError, ffprobe, is_video_file
+from transcode_forge.scanner.probe import (
+    ProbeError,
+    ffprobe,
+    is_pipeline_artifact,
+    is_video_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +95,17 @@ async def scan_library(
     try:
         # Skip symlinks: following them can catalog files outside the
         # library root, and the pipeline's lock/bak files would land at
-        # the link path instead of the real file.
+        # the link path instead of the real file. Skip pipeline artifacts:
+        # .tf_bak/.tf_tmp siblings carry media extensions and would become
+        # phantom (queueable!) catalog rows during any scan that races a
+        # transcode or follows a crash.
         video_files = [
-            f for f in root.rglob("*") if f.is_file() and not f.is_symlink() and is_video_file(f)
+            f
+            for f in root.rglob("*")
+            if f.is_file()
+            and not f.is_symlink()
+            and is_video_file(f)
+            and not is_pipeline_artifact(f)
         ]
         video_files.sort()
 
