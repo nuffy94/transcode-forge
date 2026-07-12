@@ -4,6 +4,76 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-07-12
+
+### Fixed
+- **Graceful shutdown orphaned the running ffmpeg encode.** A single SIGTERM
+  ("finish current job, then exit") could tear the worker down around a
+  still-running encode, leaving a detached ffmpeg writing `.tf_tmp` forever
+  (observed live on two LXC workers). The worker now manages its whole
+  ffmpeg process tree (`worker/proc.py`), escalates shutdown in three
+  stages (drain → orderly abort → force), and never strands the job
+  unreported. (#50)
+- **The atomic swap could destroy a stranded backup.** With a leftover
+  `.tf_bak` at a media path (a completed job whose backup delete failed),
+  re-encoding that file silently renamed the new encode over the last copy
+  of the true original — then cleanup deleted it. The swap now refuses to
+  run while a backup exists. (#54)
+- **Crash recovery only worked if the crashed worker came back.** The
+  startup recovery scan can't run when nobody restarts: a mid-swap crash
+  left the original hidden as `.tf_bak` indefinitely while every retry
+  burned on the dead worker's lock. Workers now run single-path recovery at
+  claim time — restoring hidden originals, clearing stale leftovers, and
+  declining (without consuming a retry) when the path is genuinely busy or
+  needs an operator. (#54)
+- **Live long encodes looked abandoned to recovery.** Lock files carried
+  only their creation timestamp, so any encode past the 2-hour staleness
+  threshold could have its lock and in-progress output deleted by a
+  restarting neighbor on shared storage. Pipelines now heartbeat their lock
+  every 5 minutes for the full run (encode + VMAF + swap window). (#54)
+- **Catalog rows no longer go stale after job outcomes.** Completed and
+  skipped jobs now sync `media_files.transcode_status` (S3 rows can't
+  self-heal on rescan — the master object never changes). (#53)
+- **Scans no longer catalog pipeline sidecar files.** `movie.tf_bak.mkv` /
+  `movie.tf_tmp.mkv` passed the extension check and became real — and
+  queueable — catalog entries during any scan that raced a transcode. (#56)
+- Aggregate SQL casts hardened against PostgreSQL `SUM(bigint)` overflow in
+  the remaining stats queries; claim/registration races covered by true
+  concurrency tests. (#51)
+- Active-transcode progress bars no longer flicker on every poll — polled
+  panels morph in place instead of being innerHTML-swapped. (#39)
+
+### Added
+- **Jobs orphaned by a dead worker requeue automatically.** The scheduler
+  now requeues active jobs whose worker is dead, offline, or missing after
+  10 minutes without signs of life — previously they sat in "transcoding"
+  forever unless the same worker re-registered. The integrity audit
+  endpoint reports the same condition. (#56)
+- **Kubernetes deployment (LKE).** A Helm chart
+  (`deploy/lke/transcode-forge/`) with golden-render tests and an
+  operations runbook — scheduler + workers on Linode Kubernetes Engine,
+  rolling updates drain in-flight encodes. (#52)
+- Reproducible open-licensed benchmark corpus builder. (#38)
+- CI now runs the full test suite against real PostgreSQL in addition to
+  SQLite — the lane caught nine real dialect bugs on its first run. (#49)
+- A four-layer QA system (deterministic browser sweep, visual baselines,
+  coverage gate, findings ledger + AI exploratory workflow) documented as a
+  contract in `docs/QA.md`, plus a scripted pre-release staging smoke
+  (`scripts/staging_smoke.sh`). (#40–#48)
+
+### Compatibility
+- No schema changes (latest migration remains 0010).
+- **Workers should be upgraded**: the shutdown-orphan fix (#50), the swap
+  guard, lock heartbeat, and claim-time recovery (#54) are all worker-side.
+  Old workers keep functioning against a 0.9.6 scheduler, but locks written
+  by pre-0.9.6 workers are never refreshed — recovery may treat their
+  long-running encodes as stale. Upgrade workers promptly after the
+  scheduler.
+- The scheduler's orphan-job auto-requeue changes steady-state behavior:
+  jobs stuck on dead workers requeue after ~10 minutes instead of waiting
+  for the worker to return. Reports from a worker whose job was requeued
+  are rejected by the existing ownership checks.
+
 ## [0.9.5] - 2026-07-08
 
 ### Fixed
