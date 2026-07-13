@@ -33,8 +33,38 @@ export function detailText(body, fallback = 'Something went wrong') {
     return fallback;
 }
 
+/* <dialog>.showModal() puts the dialog in the browser TOP LAYER and makes
+ * everything outside its subtree INERT — the global fixed container
+ * renders under the backdrop, invisible and unclickable, so errors fired
+ * while a modal is open looked like silent failures (qa ledger:
+ * settings-duplicate-path-409-behind-modal). Toasts therefore mount
+ * INSIDE the open modal (children of the dialog stay interactive and
+ * paint above its backdrop; position:fixed keeps the corner placement).
+ * When the dialog closes, surviving toasts migrate back to the global
+ * container so persistent errors are never lost with it. */
+function toastHost() {
+    const global = document.getElementById('toast-container');
+    let modal = null;
+    try {
+        modal = document.querySelector('dialog:modal');
+    } catch (_e) {
+        return global; // no :modal support → pre-existing behavior
+    }
+    if (!modal) return global;
+    let host = modal.querySelector('.forge-toast-host');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'forge-toast-host';
+        modal.appendChild(host);
+        modal.addEventListener('close', () => {
+            while (host.firstChild) global.appendChild(host.firstChild);
+        });
+    }
+    return host;
+}
+
 export function showToast(message, type = 'info') {
-    const container = document.getElementById('toast-container');
+    const container = toastHost();
     if (!container) return;
     const kind = KNOWN_TYPES.includes(type) ? type : 'info';
 

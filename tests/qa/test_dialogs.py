@@ -131,6 +131,59 @@ def test_dialog_states(qa_base_url: str, admin_pw: str, page: Page) -> None:
 
 
 @pytest.mark.qa
+def test_error_toast_above_open_dialog(qa_base_url: str, admin_pw: str, page: Page) -> None:
+    """Regression guard (ledger: settings-duplicate-path-409-behind-modal).
+
+    showModal() puts the dialog in the browser top layer, where z-index is
+    meaningless — an error toast fired while the add-library modal is open
+    must still be the topmost element at its own center (visible AND
+    clickable), not buried under the dialog backdrop where an invalid form
+    submission looks like a silent failure."""
+    login(page, qa_base_url, admin_pw)
+    page.goto(f"{qa_base_url}/settings", wait_until="domcontentloaded")
+    page.wait_for_timeout(1000)
+    page.click("#add-lib-btn")
+    page.wait_for_timeout(300)
+    assert _dialog_open(page, "add-lib-modal"), "add-library modal did not open"
+
+    # Empty name → 422 → persistent error toast, dialog stays open.
+    page.fill("#lib-name", "")
+    page.fill("#lib-path", "/tmp/qa-codify-toast")
+    page.click("#add-lib-save")
+    page.wait_for_selector('[data-toast-type="error"]', timeout=5_000)
+    assert _dialog_open(page, "add-lib-modal"), "dialog should stay open for correction"
+    # Let the slide-in animation settle — the toast enters from off-viewport
+    # right, so an immediate hit test measures a mid-flight rect.
+    page.wait_for_timeout(600)
+
+    hit = page.evaluate(
+        """() => {
+            const t = document.querySelector('[data-toast-type="error"]');
+            const r = t.getBoundingClientRect();
+            const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return {
+                topmost: el ? el.tagName + (el.id ? '#' + el.id : '') : null,
+                inside_toast: el ? (t === el || t.contains(el)) : false,
+                has_box: r.width > 0 && r.height > 0,
+            };
+        }"""
+    )
+    assert hit["has_box"], "error toast has no rendered box while the dialog is open"
+    assert hit["inside_toast"], (
+        f"error toast is buried under {hit['topmost']} while the dialog is open"
+    )
+
+    # The dismiss X must be genuinely clickable right now, dialog still open.
+    page.click('[data-toast-type="error"] .forge-toast-x', timeout=3_000)
+    page.wait_for_timeout(200)
+    assert page.locator('[data-toast-type="error"]').count() == 0, (
+        "dismiss click did not remove the toast"
+    )
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+
+
+@pytest.mark.qa
 def test_schedule_list_live_refresh(qa_base_url: str, admin_pw: str, page: Page) -> None:
     """Regression guard (QA M2/M3): add and delete must update the schedule
     list WITHOUT a page reload. The old code re-fired the htmx `load`
