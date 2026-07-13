@@ -24,7 +24,7 @@ FILE="${1:?usage: staging_smoke.sh /path/to/file.mkv [hevc|av1]}"
 CODEC="${2:-hevc}"
 PORT="${TF_STAGING_PORT:-8001}"
 BASE="http://127.0.0.1:${PORT}"
-COMPOSE=(docker compose -f docker-compose.staging.yml)
+COMPOSE=(docker compose -f docker-compose.staging.yml --env-file .env.staging)
 PW="staging-smoke-$(date +%s)"
 COOKIES="$(mktemp)"
 MEDIA_DIR="${TF_STAGING_MEDIA:-./staging-media}"
@@ -38,6 +38,12 @@ command -v jq >/dev/null || { echo "FATAL: jq is required"; exit 1; }
 # missing bind-mount sources as root, which would make the later cp fail on
 # a fresh checkout with a root-mode dockerd.
 mkdir -p "$MEDIA_DIR/movies" "$MEDIA_DIR/tv"
+
+# Seed the env file every compose invocation interpolates. Compose expands
+# the WHOLE file — profiles included — so the worker's ${TF_WORKER_TOKEN:?}
+# guard fires even for the scheduler-only `up` in step 1 and for teardown.
+# Step 3 overwrites the placeholder with the real issued token.
+echo "TF_WORKER_TOKEN=placeholder-issued-in-step-3" > .env.staging
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { echo "SMOKE FAIL: $*"; exit 1; }
@@ -86,7 +92,7 @@ TOKEN=$(api POST /api/worker-tokens '{"label": "staging-smoke"}' | jq -re '.toke
 echo "TF_WORKER_TOKEN=$TOKEN" > .env.staging
 
 say "4/8 worker up"
-"${COMPOSE[@]}" --profile worker --env-file .env.staging up -d --build
+"${COMPOSE[@]}" --profile worker up -d --build
 wait_for 120 "staging-cpu registration" bash -c \
     "curl -fsS -b '$COOKIES' '$BASE/api/workers' | jq -e '(.data // .)[] | select(.name == \"staging-cpu\")'"
 
