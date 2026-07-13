@@ -135,16 +135,48 @@
   status: unverified
 
 - id: settings-duplicate-path-409-behind-modal
-  title: Duplicate-path 409 has a good message but the toast lands dimmed behind the open modal
+  title: Error toasts render behind any open <dialog> (top layer) — invisible AND unclickable while the modal is open
   first_seen: 2026-07-05 / S8
-  severity: low
-  status: unverified
+  last_seen: 2026-07-12 / S8
+  severity: medium
+  status: verified
+  note: >-
+    Upgraded low->medium on the 2026-07-12 release-gate sweep: hit-test
+    evidence shows the general case, not just dimming. showModal() puts the
+    dialog in the browser top layer; #toast-container is a plain fixed
+    element, so EVERY toast fired while a dialog is open is fully obscured
+    by the backdrop and unclickable (elementFromPoint at the toast's center
+    resolves to DIALOG#add-lib-modal; a click on the dismiss X times out).
+    Invalid add/edit-library submissions look like silent failures until
+    the dialog closes. Reproduced on both the 422 empty-name and 409
+    duplicate-path probes; independently re-verified on a fresh instance
+    same day (elementFromPoint flips to the toast the moment the dialog
+    closes). Fix directions: popover API for the toast container, append
+    toasts into the open dialog, or field-level errors inside the modal.
 
 - id: settings-schedule-422-reason-discarded
   title: Schedule end-hour 422 shows generic "Failed to add schedule", discarding the server's precise reason
   first_seen: 2026-07-05 / S8
+  last_seen: 2026-07-12 / S8
   severity: low
   status: unverified
+  note: >-
+    Re-observed with full repro on the 2026-07-12 release-gate sweep.
+    addSchedule() in settings.js is the only handler that hard-codes a
+    generic string instead of detailText(err, ...) — one-line fix.
+
+- id: settings-library-422-toast-lacks-field-name
+  title: Library-create 422 toast shows the raw Pydantic message without naming the offending field
+  first_seen: 2026-07-12 / S8
+  severity: low
+  status: new
+  note: >-
+    "String should have at least 1 character" with two text inputs in the
+    modal (Name, Path) — the user can't tell which field failed. Map
+    FastAPI's loc array to a field label in toast.js detailText(), or add
+    a client-side required check like the worker-token form has. Distinct
+    from the codified settings-error-toast-object-object (that fixed the
+    [object Object] rendering; the text is readable now, just unattributed).
 
 - id: shell-status-pills-online-vs-degraded
   title: Two unlabeled global status pills can read as opposites (header "Online" vs sidebar "Degraded") with no tooltip
