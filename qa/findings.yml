@@ -139,20 +139,19 @@
   first_seen: 2026-07-05 / S8
   last_seen: 2026-07-12 / S8
   severity: medium
-  status: verified
+  status: codified
+  refs: {pr: 59, test: "tests/qa/test_dialogs.py::test_error_toast_above_open_dialog"}
   note: >-
     Upgraded low->medium on the 2026-07-12 release-gate sweep: hit-test
-    evidence shows the general case, not just dimming. showModal() puts the
-    dialog in the browser top layer; #toast-container is a plain fixed
-    element, so EVERY toast fired while a dialog is open is fully obscured
-    by the backdrop and unclickable (elementFromPoint at the toast's center
-    resolves to DIALOG#add-lib-modal; a click on the dismiss X times out).
-    Invalid add/edit-library submissions look like silent failures until
-    the dialog closes. Reproduced on both the 422 empty-name and 409
-    duplicate-path probes; independently re-verified on a fresh instance
-    same day (elementFromPoint flips to the toast the moment the dialog
-    closes). Fix directions: popover API for the toast container, append
-    toasts into the open dialog, or field-level errors inside the modal.
+    evidence showed the general case — showModal() makes everything
+    outside the dialog subtree INERT, so every toast fired while a modal
+    was open was obscured by the backdrop AND unclickable. Fix (2026-07-13):
+    toasts fired while a modal is open mount in a dialog-local host
+    (children of the dialog stay interactive and paint above its
+    backdrop); survivors migrate to the global container on dialog close.
+    The popover-API direction was tried first and REJECTED: a popover
+    outside the modal's subtree stays inert in Chromium even when later
+    in the top layer — visible-ish but skipped by hit testing entirely.
 
 - id: settings-schedule-422-reason-discarded
   title: Schedule end-hour 422 shows generic "Failed to add schedule", discarding the server's precise reason

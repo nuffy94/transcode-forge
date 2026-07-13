@@ -852,6 +852,22 @@ input.forge-input.pl-8 { padding-left: 2rem; }
    Toasts — console messages. data-toast-type + role are load-bearing
    for QA (error toasts persist until dismissed BY DESIGN).
    ==================================================================== */
+/* Dialog-local toast host (toast.js): toasts fired while a modal is open
+   mount inside the dialog — everything OUTSIDE a showModal() dialog is
+   inert, so the global container is invisible and unclickable under the
+   backdrop. Mirrors #toast-container's corner placement (fixed children
+   of a dialog still anchor to the viewport). */
+.forge-toast-host {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: 24rem;
+}
+
 .forge-toast {
     display: flex;
     align-items: center;
