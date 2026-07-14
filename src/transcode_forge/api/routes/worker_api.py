@@ -141,6 +141,9 @@ class ClaimRequest(BaseModel):
 class ProgressRequest(BaseModel):
     progress: float = Field(ge=0.0, le=1.0)
     speed: float | None = None
+    # Pipeline phase (models.job.JobPhase value); older workers omit it and
+    # the job row keeps NULL — the dashboard falls back to the plain meter.
+    phase: str | None = None
 
 
 class CompleteRequest(BaseModel):
@@ -301,7 +304,7 @@ async def register(
     # worker) can pick them up cleanly.
     cur = await db.execute(
         "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, updated_at = ? WHERE worker_id = ? AND status IN (?, ?)",
+        " progress = 0, phase = NULL, updated_at = ? WHERE worker_id = ? AND status IN (?, ?)",
         (
             JobStatus.QUEUED.value,
             datetime.now(UTC).isoformat(),
@@ -468,7 +471,10 @@ async def progress(
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
     await _require_owned_job(db, job_id, token_row)
-    await job_repo.update_job(db, job_id, progress=body.progress)
+    if body.phase is not None:
+        await job_repo.update_job(db, job_id, progress=body.progress, phase=body.phase)
+    else:
+        await job_repo.update_job(db, job_id, progress=body.progress)
     redis = getattr(request.app.state, "redis", None)
     if redis is not None:
         try:
@@ -486,6 +492,7 @@ async def progress(
                         "worker_id": token_row.get("worker_id"),
                         "progress": body.progress,
                         "speed": body.speed,
+                        "phase": body.phase,
                     }
                 ),
             )

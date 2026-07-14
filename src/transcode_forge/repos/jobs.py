@@ -175,6 +175,7 @@ _VALID_JOB_COLUMNS = frozenset(
         "status",
         "worker_id",
         "progress",
+        "phase",
         "output_size",
         "space_saved",
         "error_message",
@@ -288,7 +289,7 @@ async def requeue_orphan_active_jobs(
     placeholders_alive = ",".join("?" * len(alive))
     sql = (
         "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, updated_at = ?"
+        " progress = 0, phase = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})"

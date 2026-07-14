@@ -234,6 +234,7 @@ class HttpWorkerAgent:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
         self._current_job_id = job.id
         self._current_progress = 0.0
+        self._current_phase: str | None = None
         codec = job.target_codec or "hevc"
         backend = self._resolve_backend(codec)
         if backend is None:
@@ -348,9 +349,23 @@ class HttpWorkerAgent:
         async def on_progress(progress: float, speed: float | None) -> None:
             self._current_progress = progress
             try:
-                await self._client.progress(job_id=job.id, progress=progress, speed=speed)
+                await self._client.progress(
+                    job_id=job.id, progress=progress, speed=speed, phase=self._current_phase
+                )
             except (httpx.HTTPError, OSError):
                 logger.debug("Progress update failed", exc_info=True)
+
+        async def on_phase(phase: str) -> None:
+            # Phase transitions are worth a report even between ffmpeg
+            # progress ticks — the search/gauge phases emit no progress at
+            # all, and they're exactly the ones that used to look "stuck".
+            self._current_phase = phase
+            try:
+                await self._client.progress(
+                    job_id=job.id, progress=self._current_progress, speed=None, phase=phase
+                )
+            except (httpx.HTTPError, OSError):
+                logger.debug("Phase update failed", exc_info=True)
 
         media_type = getattr(job, "_media_type", "") or ""
         try:
@@ -382,6 +397,7 @@ class HttpWorkerAgent:
                     crf_search=self.settings.crf_search_enabled,
                     content="anime" if media_type == "anime" else None,
                     progress_callback=on_progress,
+                    phase_callback=on_phase,
                 )
             )
             self._pipeline_task = pipeline_task

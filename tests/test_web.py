@@ -78,6 +78,70 @@ class TestProgressPollMorph:
             assert "48%" in resp.text, partial
             assert "47%" not in resp.text, partial
 
+    async def test_phased_job_renders_station_bar(self, client: AsyncClient, app):
+        """A job with a reported phase renders the five-station pipeline bar
+        with the current station active — and gate-off jobs mark Search and
+        Gauge as 'off' instead of pretending they happen."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Stations.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=97.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.3, phase="gauge")
+
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert 'data-phase="gauge"' in resp.text
+        assert 'data-station="gauge"' in resp.text
+        assert "forge-station--active forge-station--timed" in resp.text
+        assert "Gauging quality" in resp.text
+        # Passed stations cooled, future stations pending.
+        assert "forge-station--done" in resp.text
+        assert "forge-station--todo" in resp.text
+        # The protocol ticks carry accessible names, not hover-only meaning.
+        assert 'aria-label="Lock' in resp.text
+        assert 'aria-label="Unlock' in resp.text
+
+    async def test_gate_off_job_marks_search_and_gauge_off(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/GateOff.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=None,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.5, phase="encode")
+
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert resp.text.count("forge-station--off") == 2  # search + gauge
+        assert ">off<" in resp.text
+
+    async def test_phaseless_job_keeps_classic_meter(self, client: AsyncClient, app):
+        """Pre-phase workers report no phase — the row must render exactly
+        the classic meter (no stations), so mixed fleets stay coherent."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/OldWorker.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.478)
+
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert "forge-station" not in resp.text
+        assert "forge-meter" in resp.text
+        assert "48%" in resp.text
+
     async def test_workers_partial_renders_real_job_progress(self, client: AsyncClient, app):
         """The card must carry the job's actual progress — a hardcoded 0%
         placeholder dragged the WS-driven bar back to zero on every poll."""

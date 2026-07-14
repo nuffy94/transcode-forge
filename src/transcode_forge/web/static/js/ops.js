@@ -64,6 +64,28 @@ export function initLiveProgress() {
             if (barEl) barEl.style.width = pct + '%';
             // At 0% the server renders "starting" — don't fight it with "0%".
             if (pctEl && pct > 0) pctEl.textContent = pct + '%';
+            // Phase transitions move the station highlight between polls;
+            // label colors and readout copy catch up on the next 3s morph.
+            if (data.phase && row.dataset.phase !== data.phase) {
+                row.dataset.phase = data.phase;
+                const order = ['search', 'encode', 'verify', 'gauge', 'swap'];
+                const cur = order.indexOf(data.phase);
+                row.querySelectorAll('.forge-station').forEach((st) => {
+                    if (st.classList.contains('forge-station--off')) return;
+                    const i = order.indexOf(st.dataset.station);
+                    st.classList.remove(
+                        'forge-station--done',
+                        'forge-station--active',
+                        'forge-station--todo',
+                        'forge-station--timed'
+                    );
+                    if (i < cur) st.classList.add('forge-station--done');
+                    else if (i === cur) {
+                        st.classList.add('forge-station--active');
+                        if (data.phase !== 'encode') st.classList.add('forge-station--timed');
+                    } else st.classList.add('forge-station--todo');
+                });
+            }
         };
         ws.onclose = () => setTimeout(connect, 5000);
     }

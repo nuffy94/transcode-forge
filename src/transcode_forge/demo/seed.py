@@ -605,15 +605,24 @@ async def seed_demo_data(db: DBConnection) -> None:
             source_duration=_rng.uniform(3600, 7200),
             source_size=_rng.randint(2_000_000_000, 12_000_000_000),
             quality_value=quality,
+            target_vmaf=97.0,
             status=JobStatus.TRANSCODING,
         )
         await job_repo.create_job(db, job)
+        # Deterministic phase spread so the dashboard's station bar shows
+        # every state: encode (with a real %), plus one search, gauge, and
+        # verify (the phases that used to render as a stuck 0% meter). One
+        # job keeps a NULL phase — the pre-phase-worker fallback stays
+        # rendered and pixel-guarded.
+        phases = ["encode", "search", "gauge", "encode", None]
+        phase = phases[i % len(phases)]
         await job_repo.update_job(
             db,
             job.id,
             worker_id=wid,
-            progress=round(_rng.uniform(0.05, 0.75), 3),
+            progress=round(_rng.uniform(0.05, 0.75), 3) if phase == "encode" else 0.0,
             started_at=_past(started_hours_ago).isoformat(),
+            **({"phase": phase} if phase else {}),
         )
         await db.execute(
             "UPDATE jobs SET created_at = ? WHERE id = ?",

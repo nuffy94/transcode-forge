@@ -27,6 +27,22 @@ class TargetCodec(StrEnum):
     AV1 = "av1"
 
 
+class JobPhase(StrEnum):
+    """The pipeline's human-watchable time phases, reported by the worker
+    with each progress update and rendered as the dashboard's station bar.
+
+    These are the five stretches a person can WATCH, not the 8 protocol
+    steps — LOCK/CONFIRM/CLEANUP/UNLOCK are sub-second bookkeeping (the UI
+    shows them as tick marks with no duration). Only ENCODE carries a true
+    percentage; the others render as elapsed time."""
+
+    SEARCH = "search"  # CRF search probes on samples (optional pre-step)
+    ENCODE = "encode"  # the full transcode — the only honest %
+    VERIFY = "verify"  # ffprobe + decode samples on the output
+    GAUGE = "gauge"  # full-file VMAF vs the original (COMPARE's long half)
+    SWAP = "swap"  # atomic swap + post-swap confirm
+
+
 class Job(BaseModel):
     """A single transcode job tracking source file through the pipeline."""
 
@@ -55,6 +71,9 @@ class Job(BaseModel):
     status: JobStatus = JobStatus.PENDING
     worker_id: str | None = None
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Pipeline phase (JobPhase value) — NULL until a phase-aware worker
+    # reports one; the dashboard falls back to the plain meter row.
+    phase: str | None = None
     output_size: int | None = None
     space_saved: int | None = None
     error_message: str | None = None

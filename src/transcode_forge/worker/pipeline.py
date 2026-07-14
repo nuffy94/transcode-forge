@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from transcode_forge.models.job import JobPhase
 from transcode_forge.scanner.probe import ProbeError, ffprobe
 from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
 from transcode_forge.worker.proc import managed_subprocess
@@ -162,6 +163,7 @@ async def run_pipeline(
     crf_search: bool = False,
     content: str | None = None,
     progress_callback: Callable[[float, float | None], Any] | None = None,
+    phase_callback: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the full 8-step transcode pipeline.
 
@@ -184,6 +186,8 @@ async def run_pipeline(
             meets target_vmaf before the full encode.
         content: Optional content hint forwarded to the builder ('anime').
         progress_callback: Async callable(progress, speed) for progress updates.
+        phase_callback: Async callable(phase) fired at each JobPhase
+            transition (search/encode/verify/gauge/swap) for the UI.
 
     Returns:
         Dict with source_size, output_size, space_saved, backend,
@@ -256,7 +260,13 @@ async def run_pipeline(
                     "CRF search are DISABLED for this encode (pre-VMAF behavior). "
                     "Update the worker image to restore the quality guarantee."
                 )
+
+        async def _phase(name: str) -> None:
+            if phase_callback is not None:
+                await phase_callback(name)
+
         if crf_search and target_vmaf is not None and vmaf_available:
+            await _phase(JobPhase.SEARCH)
             assert search_perc5_floor is not None
             try:
                 search = await find_quality_for_target(
@@ -283,6 +293,7 @@ async def run_pipeline(
         resolved_crf = map_quality(codec, backend, quality)
 
         # Step 2: TRANSCODE
+        await _phase(JobPhase.ENCODE)
         cmd = build_encode_command(
             codec, backend, str(src), str(tmp_path), quality, content=content
         )
@@ -296,6 +307,7 @@ async def run_pipeline(
         logger.info("[TRANSCODE] Complete: %s", tmp_path)
 
         # Step 3: VERIFY
+        await _phase(JobPhase.VERIFY)
         await _verify_output(tmp_path, source_duration, expected_codec=codec)
         logger.info("[VERIFY] Output verified: codec=%s, duration OK", codec)
 
@@ -321,6 +333,7 @@ async def run_pipeline(
         vmaf_perc5: float | None = None
         if target_vmaf is not None and vmaf_available:
             try:
+                await _phase(JobPhase.GAUGE)
                 score = await measure_vmaf(src, tmp_path, height=source_height)
                 vmaf_mean, vmaf_perc5 = score.mean, score.perc5
             except VmafUnavailableError:
@@ -353,6 +366,7 @@ async def run_pipeline(
                 )
 
         # Step 5: SWAP
+        await _phase(JobPhase.SWAP)
         await asyncio.to_thread(_atomic_swap, src, tmp_path, bak_path)
         logger.info("[SWAP] Original → .tf_bak, tmp → original")
 
