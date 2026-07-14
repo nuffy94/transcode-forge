@@ -53,22 +53,22 @@
     --color-forge-brass:       #d9b35c;
     --color-forge-paper:       #ede7d8;
     --color-forge-ink:         #c8c0ad;
-    --color-forge-mute:        #9a8f7d;
+    --color-forge-mute:        #b3a894;
     --color-forge-faint:       #6b6350;
 
     /* Type families — Big Shoulders is reserved for the wordmark and rare
-       display moments; ALL numerals render in IBM Plex Mono (tabular). */
+       display moments; ALL numerals render in Intel One Mono (tabular by construction). */
     --font-display:  "Big Shoulders Display", Impact, sans-serif;
     --font-body:     "IBM Plex Sans", system-ui, sans-serif;
-    --font-mono:     "IBM Plex Mono", ui-monospace, monospace;
-    --font-label:    "IBM Plex Mono", ui-monospace, monospace;
+    --font-mono:     "Intel One Mono", ui-monospace, monospace;
+    --font-label:    "Intel One Mono", ui-monospace, monospace;
 
     /* Stamped/uppercase label tracking — the connective voice of the console */
-    --tracking-stamp: 0.18em;
+    --tracking-stamp: 0.08em;
 
     /* Micro type step for stamped labels and data captions */
-    --text-2xs: 0.625rem;
-    --text-2xs--line-height: 0.875rem;
+    --text-2xs: 0.71875rem;
+    --text-2xs--line-height: 1rem;
 
     /* Motion — functional only. One easing, short durations. */
     --ease-forge: cubic-bezier(0.22, 1, 0.36, 1);
@@ -81,7 +81,7 @@
 /* ====================================================================
    Vendored fonts (latin subsets, self-hosted — no Google Fonts CDN).
    Big Shoulders Display and IBM Plex Sans are variable (weight-range faces);
-   IBM Plex Mono ships static per weight. All OFL-1.1 — license text in
+   Intel One Mono ships static per weight (600 maps to the Medium face). All OFL-1.1 — license text in
    static/vendor/fonts/OFL.txt.
    ==================================================================== */
 @font-face {
@@ -99,32 +99,32 @@
     src: url("/static/vendor/fonts/ibm-plex-sans.woff2") format("woff2");
 }
 @font-face {
-    font-family: "IBM Plex Mono";
+    font-family: "Intel One Mono";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/static/vendor/fonts/ibm-plex-mono-400.woff2") format("woff2");
+    src: url("/static/vendor/fonts/intel-one-mono-400.woff2") format("woff2");
 }
 @font-face {
-    font-family: "IBM Plex Mono";
+    font-family: "Intel One Mono";
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url("/static/vendor/fonts/ibm-plex-mono-500.woff2") format("woff2");
+    src: url("/static/vendor/fonts/intel-one-mono-500.woff2") format("woff2");
 }
 @font-face {
-    font-family: "IBM Plex Mono";
+    font-family: "Intel One Mono";
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url("/static/vendor/fonts/ibm-plex-mono-600.woff2") format("woff2");
+    src: url("/static/vendor/fonts/intel-one-mono-500.woff2") format("woff2");
 }
 @font-face {
-    font-family: "IBM Plex Mono";
+    font-family: "Intel One Mono";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url("/static/vendor/fonts/ibm-plex-mono-700.woff2") format("woff2");
+    src: url("/static/vendor/fonts/intel-one-mono-700.woff2") format("woff2");
 }
 
 /* ====================================================================
@@ -149,7 +149,7 @@
     --forge-brass:       #d9b35c;
     --forge-paper:       #ede7d8;
     --forge-ink:         #c8c0ad;
-    --forge-mute:        #9a8f7d;
+    --forge-mute:        #b3a894;
     --forge-faint:       #6b6350;
     --forge-ease:        cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -278,7 +278,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
 }
 .forge-brand-eyebrow {
     display: block;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -297,7 +297,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
 .forge-brand-ver {
     margin-left: auto;
     align-self: flex-end;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     color: var(--forge-mute);
     letter-spacing: 0.05em;
@@ -307,7 +307,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
 .forge-navgroup {
     padding: 0 16px;
     margin: 14px 0 4px;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -348,7 +348,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
 
 /* Queue count chip in the nav */
 .forge-navbadge {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -369,7 +369,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     border-bottom: 1px solid var(--forge-rule);
 }
 .forge-crumb {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -404,7 +404,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     border-bottom: 1px solid var(--forge-rule);
 }
 .forge-panel-title {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -419,7 +419,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
    integer. Consumers set the value's font-size.
    ==================================================================== */
 .forge-stat-label {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -427,7 +427,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     color: var(--forge-mute);
 }
 .forge-stat-value {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1, "zero" 1;
@@ -436,7 +436,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     color: var(--forge-paper);
 }
 .forge-stat-unit {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 11px;
     font-weight: 500;
     color: var(--forge-mute);
@@ -444,7 +444,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     letter-spacing: 0.12em;
 }
 .forge-stat-meta {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 10px;
     color: var(--forge-ink);
     letter-spacing: 0.04em;
@@ -467,7 +467,8 @@ main, header, aside, footer { position: relative; z-index: 1; }
     height: 100%;
     min-width: 3px;
     background: linear-gradient(90deg, var(--forge-ember-deep), var(--forge-ember) 60%, var(--forge-ember-hot));
-    box-shadow: 0 0 8px rgba(255, 122, 26, 0.45);
+    /* No glow: halation on dark screens was part of the eye-strain pass
+       (type workshop 2026-07-13) — the fill reads by its edge, not a haze. */
     transition: width 500ms var(--forge-ease);
 }
 .forge-meter-fill::after {
@@ -492,7 +493,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     align-items: center;
     gap: 5px;
     padding: 2px 7px;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -537,7 +538,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     display: inline-flex;
     padding: 0.05rem 0.35rem;
     border: 1px solid;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 0.625rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -556,7 +557,7 @@ main, header, aside, footer { position: relative; z-index: 1; }
     gap: 7px;
     height: 28px;
     padding: 0 12px;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -633,7 +634,7 @@ input.forge-input, select.forge-select, textarea.forge-textarea {
     background: var(--forge-well);
     border: 1px solid var(--forge-rule);
     color: var(--forge-paper);
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 12px;
     padding: 6px 10px;
     transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -690,7 +691,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
 .forge-table th {
     padding: 7px 12px;
     text-align: left;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -715,7 +716,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     color: var(--forge-ink);
     vertical-align: middle;
 }
-.forge-table .col-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.forge-table .col-mono { font-family: 'Intel One Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
 /* Sticky header variant — requires a solid th background */
 .forge-scroll { overflow: auto; }
@@ -873,7 +874,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     align-items: center;
     gap: 10px;
     padding: 9px 12px;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 11px;
     background: var(--forge-panel);
     border: 1px solid var(--forge-rule-bright);
@@ -924,7 +925,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
 .forge-banner {
     margin-bottom: 20px;
     padding: 10px 14px;
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 11px;
     border: 1px solid;
     border-left-width: 2px;
@@ -996,7 +997,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     color: var(--forge-ink);
 }
 .forge-empty-hint {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 11px;
     color: var(--forge-mute);
     max-width: 360px;
@@ -1015,7 +1016,7 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     border-top: 1px solid var(--forge-rule);
 }
 .forge-pager-info {
-    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-family: 'Intel One Mono', ui-monospace, monospace;
     font-size: 10px;
     color: var(--forge-mute);
     font-variant-numeric: tabular-nums;

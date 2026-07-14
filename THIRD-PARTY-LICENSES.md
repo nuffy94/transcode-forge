@@ -28,7 +28,7 @@ nothing from third-party hosts at runtime)
 
 | Asset | License | Where |
 |-------|---------|-------|
-| Big Shoulders Display, IBM Plex Sans, IBM Plex Mono (latin woff2 subsets) | SIL Open Font License 1.1 — text shipped alongside (`static/vendor/fonts/OFL.txt`) | `src/transcode_forge/web/static/vendor/fonts/` |
+| Big Shoulders Display, IBM Plex Sans (latin woff2 subsets), Intel One Mono (woff2, © Intel) | SIL Open Font License 1.1 — text shipped alongside (`static/vendor/fonts/OFL.txt`) | `src/transcode_forge/web/static/vendor/fonts/` |
 | HTMX 2.0.4 + `htmx-ext-ws` | BSD-2-Clause | `src/transcode_forge/web/static/vendor/` |
 | Lucide icon path data (v1.23.0, curated subset) | ISC — attribution comment in the file | inlined in `src/transcode_forge/web/templates/partials/_icons.html` |
 | Tailwind CSS v4 | MIT | build-time tool only (pinned standalone CLI, cached locally, not committed); its compiled output is `static/css/app.css` |
