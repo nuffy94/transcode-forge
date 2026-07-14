@@ -4,6 +4,62 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-07-14
+
+### Added
+- **Active transcodes now show where they are, not just a percentage.**
+  Workers report the pipeline phase with every progress update (migration
+  0011 adds `jobs.phase`), and the dashboard renders each active job as a
+  five-station pipeline bar — Search → Encode → Verify → Gauge → Swap —
+  with the sub-second protocol steps as tick marks. Only Encode shows a
+  percentage, because only Encode has one: the CRF search and VMAF gauge
+  phases used to masquerade as a meter stuck at 0% for up to half an hour.
+  Gate-off jobs mark Search and Gauge "off" instead of pretending they
+  happen. Jobs from pre-phase workers keep the classic meter row, so mixed
+  fleets render coherently. (#62, #63)
+
+### Changed
+- **Type refresh for long console sessions.** The data face changes from
+  IBM Plex Mono to Intel One Mono (OFL, designed for low-strain
+  legibility), with a token pass to match: stamped labels grow to 11.5px
+  with relaxed tracking, functional muted text is lifted for contrast, and
+  the ember glow is removed from meter fills (halation on dark screens was
+  part of the strain). (#60)
+- The Docker image's static ffmpeg (the VMAF measurement binary) is pinned
+  to a dated BtbN GPL release instead of rolling "latest" — image builds
+  are reproducible and the GPL binary's corresponding source stays
+  identifiable. `THIRD-PARTY-LICENSES.md` now documents the image's GPL
+  source pointers. (#61)
+
+### Fixed
+- **The VMAF gauge now uses every core.** The filter graph pinned
+  `n_threads=0` — libvmaf's "no threading" — so every quality measurement
+  fleet-wide ran single-threaded: the pipeline's dominant cost on
+  hardware-encode workers. It now defaults to the machine's CPU count.
+  (#61)
+- **Error toasts fired over an open modal are visible and dismissable.**
+  `showModal()` makes everything outside the dialog subtree inert, so an
+  invalid add/edit-library submission looked like a silent failure until
+  the dialog closed. Toasts now mount in a dialog-local host while a modal
+  is open and migrate back on close, so persistent errors are never lost.
+  (#59)
+- Stats library cards no longer render "−0 GiB" for libraries that reclaim
+  nothing (S3 masters by design; sub-GiB savings that round to zero). (#61)
+- Bench reports derive compression from source vs output sizes — S3 arms
+  reported 0.0% saved despite 66% real compression. (#61)
+- The staging smoke script seeds its compose env file up front — compose
+  interpolates the whole file, profiles included, so the worker's required
+  token variable used to kill the scheduler-only bring-up and teardown.
+  (#58)
+
+### Compatibility
+- Migration 0011 (`jobs.phase`) is additive and applies automatically on
+  scheduler boot.
+- Old workers simply omit the phase field — their jobs render with the
+  classic meter row. Upgrade workers to get station-level progress and the
+  multithreaded VMAF gauge (the gauge fix is worker-side and is the big
+  speedup of this release).
+
 ## [0.9.6] - 2026-07-12
 
 ### Fixed
