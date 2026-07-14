@@ -224,6 +224,30 @@ class TestPartials:
         assert response.status_code == 200
         assert "Space saved" in response.text
 
+    async def test_stats_library_card_never_shows_minus_zero(self, client: AsyncClient, app):
+        """Regression (S4b bench): the library card prefixes savings with a
+        decorative minus (U+2212), so zero-reclaimed libraries (S3 — masters
+        are immutable) rendered "minus-zero GiB". Sub-GiB savings too."""
+        db = app.state.db
+        j = Job(
+            source_path="/s3/corpus.mkv",
+            library="corpus-v1",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, j)
+        await job_repo.update_job(
+            db,
+            j.id,
+            status=JobStatus.COMPLETE,
+            space_saved=0,
+            source_size=1000,
+            output_size=400,
+        )
+        response = await client.get("/partials/stats")
+        assert response.status_code == 200
+        assert chr(0x2212) + "0" not in response.text  # the decorative minus glyph
+
     async def test_skip_stats_partial_empty(self, client: AsyncClient):
         response = await client.get("/partials/skip-stats")
         assert response.status_code == 200

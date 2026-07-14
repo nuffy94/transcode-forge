@@ -128,17 +128,23 @@ async def measure_vmaf(
     *,
     height: int | None = None,
     n_subsample: int = VMAF_SUBSAMPLE,
+    n_threads: int | None = None,
 ) -> VmafScore:
     """Score `encoded` against `source` with the resolution-matched model.
 
     Frame scores are pooled in Python (mean / perc5 / min) from the JSON
     log so the gate can insist on worst-scene quality, not just the mean.
 
+    n_threads defaults to the machine's core count — libvmaf's own default
+    (0) means NO threading, which silently ran every gauge single-threaded
+    fleet-wide until the S4b bench caught it (idle cores during a 4K pass).
+
     Raises:
         VmafUnavailableError: If ffmpeg lacks the libvmaf filter.
         VmafError: On measurement failure.
     """
     model = select_model(height)
+    threads = n_threads if n_threads is not None else (os.cpu_count() or 1)
     with tempfile.TemporaryDirectory(prefix="tf-vmaf-") as tmp:
         log_path = Path(tmp) / "vmaf.json"
         # libvmaf: first input = distorted, second = reference. Both sides
@@ -150,7 +156,7 @@ async def measure_vmaf(
             "[dis][ref]libvmaf="
             f"model=version={model}"
             f":log_fmt=json:log_path={log_path.as_posix()}"
-            f":n_subsample={n_subsample}:n_threads=0"
+            f":n_subsample={n_subsample}:n_threads={threads}"
         )
         cmd = [
             VMAF_FFMPEG,

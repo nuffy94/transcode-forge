@@ -67,6 +67,33 @@ class TestMeasureVmafErrors:
             with pytest.raises(VmafUnavailableError):
                 await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
 
+    async def test_gauge_uses_all_cores(self, tmp_path):
+        """Regression (S4b bench, 2026-07-14): the filter graph pinned
+        n_threads=0 — libvmaf's 'no threading' — so every gauge fleet-wide
+        ran single-threaded. Found live: three idle cores during a 4K
+        gauge. The graph must request the machine's core count."""
+        import os
+
+        captured: list = []
+
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        async def fake_exec(*args, **kwargs):
+            captured.extend(args)
+            return Proc()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafError):  # no log gets written; the cmd is the assertion
+                await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+
+        graph = next(str(a) for a in captured if "libvmaf" in str(a))
+        assert f"n_threads={os.cpu_count() or 1}" in graph
+        assert "n_threads=0" not in graph
+
     async def test_other_failure_is_vmaf_error(self, tmp_path):
         class Proc:
             returncode = 1

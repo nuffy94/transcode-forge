@@ -51,7 +51,11 @@
             <div>
                 <p class="forge-stat-value text-2xl">{{ data.completed }}</p>
                 <p class="forge-stat-meta mt-1">files processed</p>
-                <p class="font-mono text-sm font-semibold text-forge-oxide tabular-nums mt-3">−{{ "%.0f"|format(data.space_saved_bytes / 1073741824) }} <span class="text-forge-mute text-xs font-normal">GiB</span></p>
+                {# The minus is decorative ("N GiB removed") — guard on the
+                   ROUNDED value or zero-reclaimed libraries (S3 masters are
+                   immutable) and sub-GiB savings render as "−0 GiB". #}
+                {% set saved_gib = (data.space_saved_bytes / 1073741824)|round(0)|int %}
+                <p class="font-mono text-sm font-semibold {% if saved_gib > 0 %}text-forge-oxide{% else %}text-forge-mute{% endif %} tabular-nums mt-3">{% if saved_gib > 0 %}−{{ saved_gib }}{% else %}0{% endif %} <span class="text-forge-mute text-xs font-normal">GiB</span></p>
             </div>
             <div class="relative w-16 h-16 flex-shrink-0">
                 <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36" aria-hidden="true">

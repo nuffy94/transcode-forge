@@ -19,7 +19,11 @@ RUN sed -i 's|^Components: main$|Components: main contrib non-free non-free-firm
 # static BtbN build, which links libvmaf with the built-in models
 # (vmaf_v0.6.1 + vmaf_4k_v0.6.1 — no external model files needed).
 # The build fails loudly if either encoder or the scoring path is missing.
-ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+# PINNED to a dated release (not the rolling "latest"): the binary is GPL —
+# distributing it in the published image requires the corresponding source
+# to stay identifiable (see THIRD-PARTY-LICENSES.md), and pinning also keeps
+# image builds reproducible. Bump deliberately.
+ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-13-14-11/ffmpeg-n7.1.5-2-g998de74adf-linux64-gpl-7.1.tar.xz
 RUN curl -fsSL "$VMAF_FFMPEG_URL" -o /tmp/ffmpeg-static.tar.xz \
     && mkdir -p /opt/ffmpeg-vmaf \
     && tar -xJf /tmp/ffmpeg-static.tar.xz --strip-components=2 -C /opt/ffmpeg-vmaf \
