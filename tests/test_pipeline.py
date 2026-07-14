@@ -4,7 +4,7 @@ import json
 import os
 from datetime import UTC
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -465,6 +465,83 @@ class TestRunPipeline:
         # Heartbeat cancelled cleanly: no lock resurrection, no temp leftovers.
         assert not lock.exists()
         assert not any(p.name.endswith(".new") for p in tmp_path.iterdir())
+
+    async def test_phase_callback_emission_order(self, tmp_path):
+        """The dashboard's station bar is only as honest as these events:
+        a plain run reports encode->verify->swap; a gated run inserts
+        gauge before the swap (search needs crf_search + a target)."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        async def mock_run_encode(cmd, total_duration, progress_callback=None):
+            from transcode_forge.worker.encoder import EncodeResult
+
+            output = Path(cmd[-1])
+            output.write_bytes(b"y" * 5000)
+            return EncodeResult(
+                success=True, output_path=str(output), output_size=5000, returncode=0
+            )
+
+        mock_probe = ProbeResult(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5000000,
+            duration=3600.0,
+            file_size=5000,
+        )
+
+        phases: list[str] = []
+
+        async def on_phase(phase: str) -> None:
+            phases.append(str(phase))
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+        ):
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job",
+                worker_id="test-worker",
+                phase_callback=on_phase,
+            )
+        assert phases == ["encode", "verify", "swap"]
+
+        # Gated run: gauge appears; search needs the CRF search enabled too.
+        source2 = tmp_path / "test2.mkv"
+        source2.write_bytes(b"x" * 10000)
+        phases.clear()
+
+        from transcode_forge.worker.vmaf import VmafScore
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
+            patch(
+                "transcode_forge.worker.pipeline.measure_vmaf",
+                AsyncMock(return_value=VmafScore(mean=97.0, perc5=95.0, min=94.0)),
+            ),
+        ):
+            await run_pipeline(
+                source_path=str(source2),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job2",
+                worker_id="test-worker",
+                target_vmaf=95.0,
+                phase_callback=on_phase,
+            )
+        assert phases == ["encode", "verify", "gauge", "swap"]
 
     async def test_lock_conflict(self, tmp_path):
         source = tmp_path / "test.mkv"

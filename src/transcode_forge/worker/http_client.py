@@ -105,10 +105,17 @@ class WorkerHttpClient:
         _raise_for_status(r)
         return cast("dict[str, Any] | None", r.json().get("job"))
 
-    async def progress(self, *, job_id: str, progress: float, speed: float | None) -> None:
+    async def progress(
+        self,
+        *,
+        job_id: str,
+        progress: float,
+        speed: float | None,
+        phase: str | None = None,
+    ) -> None:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/progress",
-            json={"progress": progress, "speed": speed},
+            json={"progress": progress, "speed": speed, "phase": phase},
         )
         _raise_for_status(r)
 
