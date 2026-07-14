@@ -95,20 +95,35 @@
 - id: settings-scan-completion-unconfirmed
   title: Scan completion/failure never confirmed on the Settings page that triggered it
   first_seen: 2026-07-05 / S2
+  last_seen: 2026-07-14 / S2
   severity: low
   status: unverified
 
 - id: activity-failed-scans-not-surfaced
   title: Failed scans appear only in Queue/Dashboard "Recent scans", never on Activity, with no failure toast
   first_seen: 2026-07-05 / S10
-  severity: low
+  last_seen: 2026-07-14 / S10
+  severity: medium
   status: unverified
+  note: >-
+    Re-observed with full repro on the 2026-07-14 sweep (S3 library scan
+    against a fake bucket). Upgraded low->medium: after the optimistic
+    "Scanning..." toast, the failure is invisible on /activity (neither
+    facet covers scan runs — verified the string never appears there) and
+    the only honest surface is the Recent-scans FAILED pill on / and
+    /queue, which the Settings-triggered user was never pointed at.
 
 - id: queue-paused-state-indicator-weak
   title: Paused queue's only persistent cue is the button reading RESUME (no banner/tile)
   first_seen: 2026-07-05 / S3
+  last_seen: 2026-07-14 / S3
   severity: low
   status: unverified
+  note: >-
+    Re-observed 2026-07-14 with a page-wide text probe — zero "paus*" text
+    outside the button after the toast fades, and pending rows still say
+    "AWAITING CAPACITY", misattributing the stall. The dashboard scheduler
+    panel does show a Paused chip; /queue itself does not.
 
 - id: settings-tuning-save-pins-env-overrides
   title: Tuning save silently pins untouched fields as env-shadowing DB overrides (no indicator, no reset)
@@ -119,20 +134,38 @@
 - id: settings-crf-input-direction-unhinted
   title: CRF is a bare 1-51 number input; the lower-is-better hint lives only in the read-only presets panel
   first_seen: 2026-07-05 / S4
+  last_seen: 2026-07-14 / S4
   severity: low
   status: unverified
+  note: >-
+    Re-observed 2026-07-14 — the hint and the tier mapping are both
+    invisible from inside the Add/Edit modals where the number is typed;
+    a live tier readout next to #lib-quality / #edit-lib-quality would close it.
 
 - id: workers-docker-join-command-hardcoded-path
   title: Generated Docker join command hardcodes -v /mnt/media/movies with no edit-me marker
   first_seen: 2026-07-05 / S5
+  last_seen: 2026-07-14 / S5
   severity: low
   status: unverified
+  note: >-
+    Re-observed 2026-07-14. Softened by the storage panel directly below
+    (reads as guidance, not a trap), but the example also omits the
+    instance's /media/tv library; deriving -v lines from the configured
+    library paths would make the command truly copy-paste-and-done.
 
 - id: activity-excluded-state-not-marked-in-list
   title: Exclusion state visible only in the drawer; Activity rows still offer Retry + Exclude on excluded files
   first_seen: 2026-07-05 / S7
+  last_seen: 2026-07-14 / S7
   severity: low
   status: unverified
+  note: >-
+    Re-observed 2026-07-14 and widened: the Movies catalog row for an
+    excluded file also shows no hint — still NEEDS TRANSCODE pill,
+    selectable checkbox, and an active QUEUE button. The bulk-queue
+    dead-end it enables is ledgered separately
+    (movies-queue-excluded-success-toast-noop).
 
 - id: settings-duplicate-path-409-behind-modal
   title: Error toasts render behind any open <dialog> (top layer) — invisible AND unclickable while the modal is open
@@ -156,13 +189,18 @@
 - id: settings-schedule-422-reason-discarded
   title: Schedule end-hour 422 shows generic "Failed to add schedule", discarding the server's precise reason
   first_seen: 2026-07-05 / S8
-  last_seen: 2026-07-12 / S8
-  severity: low
+  last_seen: 2026-07-14 / S8
+  severity: medium
   status: unverified
   note: >-
     Re-observed with full repro on the 2026-07-12 release-gate sweep.
     addSchedule() in settings.js is the only handler that hard-codes a
     generic string instead of detailText(err, ...) — one-line fix.
+    2026-07-14: hit independently by TWO agents (S6 start-hour 25, S8
+    end-hour 99) — upgraded low->medium: settings.js:313 discards the
+    server's exact user-ready reason while six sibling handlers in the
+    same file parse it, and the number input happily displays the
+    out-of-range value as if accepted.
 
 - id: settings-library-422-toast-lacks-field-name
   title: Library-create 422 toast shows the raw Pydantic message without naming the offending field
@@ -176,12 +214,23 @@
     a client-side required check like the worker-token form has. Distinct
     from the codified settings-error-toast-object-object (that fixed the
     [object Object] rendering; the text is readable now, just unattributed).
+    Re-observed 2026-07-14 / S8 with identical symptoms — detailText() in
+    toast.js still drops the loc array (root cause confirmed at line 26).
 
 - id: shell-status-pills-online-vs-degraded
   title: Two unlabeled global status pills can read as opposites (header "Online" vs sidebar "Degraded") with no tooltip
   first_seen: 2026-07-05 / S9
+  last_seen: 2026-07-14 / S9
   severity: low
   status: unverified
+  note: >-
+    Re-observed by two independent agents on the 2026-07-14 sweep (S1 and
+    S9). S1 adds a sharper edge: the header chip is hardcoded static
+    markup in base.html (~lines 102-105) — a pulsing green "Online" with
+    no binding to health data, so in a real outage it would keep pulsing
+    green while partials/health.html honestly reads Degraded. Binding the
+    header chip to the same health source (or labeling both chips with
+    what they measure) resolves it.
 
 - id: dashboard-error-reasons-truncated-no-title
   title: Dashboard error reasons truncate with no title attribute (full text unreachable)
@@ -200,3 +249,135 @@
   first_seen: 2026-07-05 / S9
   severity: low
   status: unverified
+
+- id: dashboard-queued-tile-vocabulary-drift
+  title: Dashboard "QUEUED 20 — waiting for capacity" aggregates pending+queued while /queue uses QUEUED for only 8 and pins "awaiting capacity" on PENDING
+  first_seen: 2026-07-14 / S9
+  severity: medium
+  status: unverified
+  note: >-
+    "Queued" names two different populations in two views: user reads
+    QUEUED 20 on the dashboard, opens /queue, filters by the QUEUED tile,
+    and sees 8 jobs — the count shrinks by 12 unexplained. Counts
+    themselves reconcile (12 pending + 8 queued = 20); only the words
+    disagree. /stats already carries the honest label ("WAITING 20 —
+    pending + queued") the dashboard tile should copy. Sidebar Queue
+    badge uses the aggregate meaning too.
+
+- id: tv-efficiency-tile-unexplained
+  title: TV "EFFICIENCY 42%" tile is converted-episode share but nothing defines it; collides with Stats' AVG SAVINGS 45%
+  first_seen: 2026-07-14 / S1
+  severity: low
+  status: unverified
+  note: >-
+    Flagged independently by S1 and S9. Computed as transcoded_episodes /
+    total_episodes (catalog.js ~line 391) — library conversion progress,
+    not any efficiency measure. Only /tv stat tile with no subtitle;
+    easily misread as size savings next to the genuinely-a-ratio AVG
+    SAVINGS 45%. Rename ("CONVERTED"/"DONE") or add a defining subtitle.
+
+- id: demo-seed-transcoding-jobs-exceed-worker-slots
+  title: Demo seed pins all 5 transcoding jobs on 1-slot rack-node-2, so Dashboard and Workers views contradict (5 running > 4 total slots)
+  first_seen: 2026-07-14 / S1
+  severity: low
+  status: unverified
+  note: >-
+    seed.py marks only rack-node-2 BUSY in _WORKERS and round-robins the
+    5 transcoding jobs over busy_workers (len 1). Dashboard shows five
+    simultaneous encodes all labeled rack-node-2; Workers shows that node
+    (SLOTS 1) running one job with three STANDBY nodes "awaiting
+    assignment" and 20 jobs "waiting for capacity". Demo-data artifact,
+    not product logic — fix in the seed + add a seed-coherence assertion
+    (transcoding count <= sum of BUSY workers' slots).
+
+- id: demo-seed-scan-found-counts-incoherent
+  title: Demo seed's Recent-scans found-counts are pure randints (111/167/178 movies "found" vs a 103-movie catalog)
+  first_seen: 2026-07-14 / S1
+  severity: low
+  status: unverified
+  note: >-
+    seed.py uses _rng.randint(80, 200) for files_found, unrelated to the
+    seeded catalog (103 movies / 240 episodes), and counts fluctuate
+    non-monotonically across dates. Stands out precisely because every
+    other seeded number reconciles across pages.
+
+- id: movies-small-file-size-renders-zero-gib
+  title: Catalog sizes below ~50 MB render as "0.0 GiB" (single-decimal GiB formatting)
+  first_seen: 2026-07-14 / S2
+  severity: low
+  status: unverified
+  note: >-
+    Cosmetic; irrelevant at real media sizes, but "0.0 GiB" on a real
+    70 KB file reads as missing data. Step down units below 1 GiB.
+
+- id: workers-add-wizard-stale-after-revoke
+  title: Revoking the just-issued token doesn't reset the open Add-a-worker wizard — dead token stays in the reveal box and command blocks
+  first_seen: 2026-07-14 / S5
+  severity: low
+  status: unverified
+  note: >-
+    After revoke, the "COPY NOW — SHOWN ONLY ONCE" panel and both Step 2
+    command blocks still display the revoked token, and Step 3 still says
+    "waiting for the worker to connect..." above a row whose pill reads
+    REVOKED. A newcomer who revokes to start over can copy a command with
+    a dead token. Mitigated by the visible REVOKED pill directly below.
+
+- id: movies-queue-excluded-success-toast-noop
+  title: Bulk-queueing an excluded file yields a success-styled "Queued 0 files" toast with no reason
+  first_seen: 2026-07-14 / S7
+  severity: low
+  status: unverified
+  note: >-
+    Server correctly honors the exclusion (no job created), but the
+    feedback is a dead end: SUCCESS toast for a silent no-op, and the
+    Movies row shows no exclusion hint (see
+    activity-excluded-state-not-marked-in-list). Queue endpoint should
+    return a skipped/excluded count the UI can voice ("Queued 0 — 1
+    excluded").
+
+- id: queue-scan-limit-label-contradicts-copy
+  title: Scan-limit input's aria-label "Maximum files to queue" contradicts the panel's own "it never queues them" copy
+  first_seen: 2026-07-14 / S9
+  severity: low
+  status: unverified
+  note: >-
+    Sighted users see an unexplained bare "Max" placeholder; screen-reader
+    users hear the opposite of the panel copy two lines below. Truth
+    (scanner.py:74): the limit caps files probed/cataloged per scan. The
+    ScanRequest.limit Field description in api/routes/scan.py:25 carries
+    the same stale wording.
+
+- id: workers-offline-card-raw-iso-heartbeat
+  title: Workers offline card prints raw ISO-8601 heartbeat ("2026-07-14T16:01:26") — third format for the same field across views
+  first_seen: 2026-07-14 / S9
+  severity: low
+  status: unverified
+  note: >-
+    partials/workers.html:93 slices last_heartbeat[:19] with the "T"
+    intact, while the same card's footer shows relative "58S AGO" and
+    /stats formats the same field "2026-07-14 16:01". Pick one format.
+
+- id: settings-reset-all-jobs-label-mismatch
+  title: Maintenance button labeled "Reset all jobs" actually deletes all jobs (its own confirm says "DELETE ALL JOBS")
+  first_seen: 2026-07-14 / S9
+  severity: low
+  status: unverified
+  note: >-
+    "Reset" commonly reads as re-queue/start-over; the handler targets
+    DELETE /api/jobs/reset and the confirm() shouts "DELETE ALL JOBS —
+    including in-progress, completed, and history?". Confirm gate makes
+    it safe; label and action still disagree. "Delete all jobs" matches
+    the confirm text.
+
+- id: scans-failed-no-error-reason
+  title: FAILED scan entries carry zero diagnostic detail — identical pill for bad bucket, missing TF_S3_* vars, or network failure
+  first_seen: 2026-07-14 / S10
+  severity: low
+  status: unverified
+  note: >-
+    The scans table/model has no error column; the real cause lives only
+    in the scheduler log (logger.exception in scan.py run_scan). Given
+    the Add-modal defers S3 credentials to "the scheduler's TF_S3_*
+    environment", a first S3 scan failing is the expected new-user path —
+    the one moment a reason is most needed. Pairs with
+    activity-failed-scans-not-surfaced (where the failure shows at all).
