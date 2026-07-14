@@ -57,7 +57,7 @@
                 <div class="forge-station-seg">
                     {% if key == 'encode' and state == 'active' %}<div class="forge-station-fill" data-progress-bar style="width: {{ pct }}%;"></div>{% endif %}
                 </div>
-                <div class="forge-station-lbl flex justify-between gap-1 font-mono text-2xs uppercase {% if state == 'active' %}text-forge-ember-hot{% elif state == 'done' %}text-forge-oxide/90{% else %}text-forge-faint{% endif %}">
+                <div class="forge-station-lbl flex justify-between gap-1 font-mono text-2xs uppercase {% if state == 'active' %}text-forge-ember-hot{% elif state == 'done' %}text-forge-oxide/90{% else %}text-forge-mute{% endif %}">
                     <span>{{ label }}</span>
                     {% if key == 'encode' and state == 'active' %}<span class="tabular-nums font-semibold" data-progress-pct>{% if pct %}{{ pct }}%{% else %}…{% endif %}</span>
                     {% elif off %}<span>off</span>{% endif %}

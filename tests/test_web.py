@@ -105,6 +105,9 @@ class TestProgressPollMorph:
         # The protocol ticks carry accessible names, not hover-only meaning.
         assert 'aria-label="Lock' in resp.text
         assert 'aria-label="Unlock' in resp.text
+        # forge-faint is decoration-only BY SYSTEM RULE (fails AA as text) —
+        # axe caught 11 violations when todo labels used it (PR #62 round 2).
+        assert "text-forge-faint" not in resp.text
 
     async def test_gate_off_job_marks_search_and_gauge_off(self, client: AsyncClient, app):
         db = app.state.db
