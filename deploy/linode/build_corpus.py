@@ -23,8 +23,10 @@ Sources (all Creative Commons, redistributable with attribution):
   * Blender open movies (CC-BY 3.0) ............ animation
   * Netflix Open Content "Meridian" (CC BY 4.0)  live-action grain, 4K HDR
 
-Runs on a Linux host with ffmpeg (built with libzimg for zscale), rclone, and
-curl. On Ubuntu 24.04:  apt-get install -y ffmpeg rclone curl
+Runs on a Linux host with ffmpeg, rclone, and curl. The tone-map needs a
+static BtbN ffmpeg build (n7.1+): Ubuntu 24.04's distro ffmpeg 6.1 fails the
+zscale chain outright ("no path between colorspaces" from its zimg). Put the
+static ffmpeg/ffprobe first on PATH; rclone and curl are fine from apt.
 
 Bucket credentials come from the environment, same contract as seed-media.sh:
     export S3_ENDPOINT=https://us-ord-1.linodeobjects.com
@@ -137,7 +139,13 @@ ENCODE_BY_HEIGHT: dict[int, dict[str, str]] = {
 X264_PRESET = "medium"
 
 # Robust PQ/HLG -> bt709 SDR tone-map (hable), then resize, then 8-bit 4:2:0.
+# The setparams stamp comes first: HDR masters ship UNTAGGED (Meridian's
+# container carries no colorimetry despite the filename), and zscale fails
+# fast with "no path between colorspaces" on untagged input — its tin/pin/min
+# input hints do not help. Stamping the HDR10 signal set (bt2020/PQ) gives
+# the chain a defined starting point.
 _TONEMAP = (
+    "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,"
     "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
     "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
 )
@@ -280,6 +288,14 @@ def encode_cmd(clip: Clip, master: Master, src: Path, out: Path) -> list[str]:
         "128k",
         "-movflags",
         "+faststart",
+        # Strip chapters and mov timecode: the mp4 muxer re-emits both as
+        # "codec none" data tracks, and the product's stream-preserving
+        # encode fails the whole job on them ("Could not find tag for
+        # codec none").
+        "-map_chapters",
+        "-1",
+        "-write_tmcd",
+        "0",
         str(out),
     ]
 
@@ -462,7 +478,9 @@ def main(argv: list[str]) -> int:
         print(f"[{clip.clip_id}]  {clip.content_class}  {clip.height}p  <- {clip.master}")
         cmd = encode_cmd(clip, master, scratch / master.filename, out_path)
 
-        if out_path.exists() and not args.force and not dry:
+        # st_size guard: a failed encode leaves a 0-byte poison file that a
+        # bare exists() check would keep forever.
+        if out_path.exists() and out_path.stat().st_size > 0 and not args.force and not dry:
             print(f"  skip encode (exists): {out_path.name}")
         else:
             ensure_master(master, scratch, dry=dry)
