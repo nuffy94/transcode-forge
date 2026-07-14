@@ -94,6 +94,34 @@ class TestMeasureVmafErrors:
         assert f"n_threads={os.cpu_count() or 1}" in graph
         assert "n_threads=0" not in graph
 
+    async def test_gauge_pairs_frames_by_index(self, tmp_path):
+        """Regression (gauge desync, 2026-07-14): the graph used
+        setpts=PTS-STARTPTS, leaving framesync to pair frames by timestamp.
+        A source muxed on a different ms-rounding grid than the encode
+        (1-2ms apart) paired frame N against ref frame N-1 for much of the
+        file — a real 480p episode gauged 75.33/2.67 against its true
+        97.25/95.98 and was falsely skipped. Both branches must rebase onto
+        the same synthetic timeline so frames pair by index."""
+        captured: list = []
+
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        async def fake_exec(*args, **kwargs):
+            captured.extend(args)
+            return Proc()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafError):  # no log gets written; the cmd is the assertion
+                await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+
+        graph = next(str(a) for a in captured if "libvmaf" in str(a))
+        assert graph.count("settb=AVTB,setpts=N*100000") == 2  # dis AND ref
+        assert "PTS-STARTPTS" not in graph
+
     async def test_other_failure_is_vmaf_error(self, tmp_path):
         class Proc:
             returncode = 1

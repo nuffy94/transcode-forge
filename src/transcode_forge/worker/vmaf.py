@@ -150,9 +150,18 @@ async def measure_vmaf(
         # libvmaf: first input = distorted, second = reference. Both sides
         # are normalized to the same 10-bit format before scoring so an
         # 8-bit source vs 10-bit encode doesn't fail the filter.
+        #
+        # Both sides are also rebased onto one shared synthetic timeline
+        # (settb + setpts=N*100000: 10fps in µs ticks, integer-exact) so
+        # framesync pairs frames by INDEX, not timestamp. Timestamp pairing
+        # is fragile: a source muxed on a different ms-rounding grid than
+        # ffmpeg's (1-2ms apart) pairs frame N against ref frame N-1 for
+        # much of the file — a real 480p episode gauged 75.33/2.67 against
+        # its true 97.25/95.98 and was falsely skipped. The pipeline never
+        # resamples frames, so equal-index frames are always the right pair.
         graph = (
-            "[0:v]setpts=PTS-STARTPTS,format=yuv420p10le[dis];"
-            "[1:v]setpts=PTS-STARTPTS,format=yuv420p10le[ref];"
+            "[0:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[dis];"
+            "[1:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[ref];"
             "[dis][ref]libvmaf="
             f"model=version={model}"
             f":log_fmt=json:log_path={log_path.as_posix()}"
