@@ -4,6 +4,21 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] - 2026-07-14
+
+### Fixed
+- **The VMAF gauge pairs frames by index, not timestamp.** The quality
+  gate compared encode and source with their original timestamps, letting
+  libvmaf pair frame N against source frame N-1 whenever a source's muxer
+  rounded its millisecond grid differently than ffmpeg's (1-2ms apart) —
+  every cut and motion frame scored near zero, and genuinely good encodes
+  were falsely skipped (a real 480p episode gauged mean 75.33 /
+  perc5 2.67 against its true 97.25 / 95.98). Both inputs are now rebased
+  onto one shared synthetic timeline so equal-index frames — always the
+  same picture, since the encode path never resamples — are what gets
+  compared. Scores on well-behaved sources are bit-identical to before;
+  the CRF search inherits the same fix. (#66)
+
 ## [0.9.7] - 2026-07-14
 
 ### Added
