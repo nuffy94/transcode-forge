@@ -37,9 +37,11 @@ generated into the bucket alongside the clips.
 | Netflix "Meridian" | live-action | CC BY 4.0 | Netflix Open Content; 4K 59.94 **HDR (P3/PQ)**, 811 MB MP4 |
 
 Meridian is tone-mapped PQ→bt709 SDR (hable) and used for three clips (two
-1080p scenes + one native-4K cut). **Its color metadata is required** — the
-tone-map chain reads the source transfer function; an untagged HDR input fails
-fast with `zscale: no path between colorspaces`. Meridian carries proper tags.
+1080p scenes + one native-4K cut). **The master ships UNTAGGED** — despite the
+filename, its container carries no colorimetry, and zscale fails fast with
+`zscale: no path between colorspaces` on untagged input (its `tin`/`pin`/`min`
+hints don't help). The builder stamps the HDR10 signal set up front with
+`setparams` so the tone-map chain has a defined starting point.
 
 > **v1 caveat (no silent gaps):** live-action is Meridian only, so that class is
 > one production sampled three ways. Netflix **El Fuente** (SDR 4K60, CC BY 4.0,
@@ -70,9 +72,13 @@ ceilings per target height:
 | 2160p | 22 | 45 Mbps | 90 Mbps |
 
 HDR masters get the tone-map chain prepended:
-`zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv`.
+`setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv`.
 Audio is AAC 128k (copied through if present, dropped if absent). `+faststart`
-so every clip probes cleanly.
+so every clip probes cleanly. Chapters and mov timecode are stripped
+(`-map_chapters -1 -write_tmcd 0`): the mp4 muxer re-emits both as
+"codec none" data tracks, which break any downstream stream-preserving
+encode ("Could not find tag for codec none") — the Blender masters carry
+chapters, and Big Buck Bunny a tmcd track.
 
 Reproducible by **recipe**, not bit-for-bit: x264 output varies by build and
 thread count. The manifest records the exact command, tool version, and each
@@ -80,8 +86,11 @@ clip's sha256 so drift is detectable.
 
 ## Running it
 
-On a Linux host with `ffmpeg` (built with libzimg for `zscale`), `rclone`, and
-`curl`. On Ubuntu 24.04: `apt-get install -y ffmpeg rclone curl`.
+On a Linux host with `ffmpeg`, `rclone`, and `curl`. The tone-map needs a
+static [BtbN](https://github.com/BtbN/FFmpeg-Builds) ffmpeg build (n7.1+) —
+Ubuntu 24.04's distro ffmpeg 6.1 fails the zscale chain outright ("no path
+between colorspaces" from its zimg). Put the static `ffmpeg`/`ffprobe` first
+on `PATH`; `rclone` and `curl` are fine from `apt-get install -y rclone curl`.
 
 ```bash
 export S3_ENDPOINT=https://us-ord-1.linodeobjects.com
