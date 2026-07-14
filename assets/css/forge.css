@@ -850,6 +850,86 @@ input.forge-input.pl-8 { padding-left: 2rem; }
 }
 
 /* ====================================================================
+   Pipeline stations — the dashboard's per-job station bar. Five time
+   phases (Search/Encode/Verify/Gauge/Swap) + tick marks for the
+   sub-second protocol steps (Lock ahead; Confirm/Cleanup/Unlock behind).
+   Only Encode carries a percentage fill; active timed phases breathe —
+   never a fake 0% bar (type workshop / phase redesign, 2026-07-13).
+   ==================================================================== */
+.forge-stations { display: flex; gap: 3px; align-items: flex-start; }
+.forge-station { flex: 1; min-width: 0; }
+.forge-station-seg {
+    height: 12px;
+    background: var(--forge-well);
+    border: 1px solid var(--forge-rule);
+    position: relative;
+    overflow: hidden;
+}
+.forge-station--done .forge-station-seg {
+    background: rgba(126, 186, 120, 0.13);
+    border-color: rgba(126, 186, 120, 0.35);
+}
+.forge-station--done .forge-station-seg::after {
+    content: "✓";
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 9px;
+    color: var(--forge-oxide);
+}
+.forge-station--active .forge-station-seg { border-color: rgba(255, 122, 26, 0.6); }
+.forge-station--active.forge-station--timed .forge-station-seg {
+    background: linear-gradient(90deg, rgba(204, 79, 0, 0.55), rgba(255, 122, 26, 0.75), rgba(204, 79, 0, 0.55));
+    background-size: 200% 100%;
+    animation: forge-station-breathe 2.6s ease-in-out infinite;
+}
+@keyframes forge-station-breathe {
+    0%, 100% { background-position: 0% 0; opacity: 0.75; }
+    50% { background-position: 100% 0; opacity: 1; }
+}
+.forge-station--off .forge-station-seg { border-style: dashed; opacity: 0.55; }
+.forge-station--off .forge-station-seg::after {
+    content: "–";
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    color: var(--forge-faint);
+}
+.forge-station-fill {
+    height: 100%;
+    min-width: 3px;
+    background: linear-gradient(90deg, var(--forge-ember-deep), var(--forge-ember) 60%, var(--forge-ember-hot));
+    position: relative;
+    transition: width 500ms var(--forge-ease);
+}
+.forge-station-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+    animation: forge-meter-shimmer 2.4s linear infinite;
+}
+.forge-station-lbl { margin-top: 4px; }
+.forge-tick {
+    width: 3px;
+    height: 12px;
+    flex: none;
+    background: var(--forge-well);
+    border: 1px solid var(--forge-rule);
+}
+.forge-tick--lit {
+    background: rgba(126, 186, 120, 0.5);
+    border-color: rgba(126, 186, 120, 0.5);
+}
+@media (prefers-reduced-motion: reduce) {
+    .forge-station--active.forge-station--timed .forge-station-seg,
+    .forge-station-fill::after { animation: none; }
+}
+
+/* ====================================================================
    Toasts — console messages. data-toast-type + role are load-bearing
    for QA (error toasts persist until dismissed BY DESIGN).
    ==================================================================== */

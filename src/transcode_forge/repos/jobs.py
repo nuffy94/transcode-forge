@@ -175,6 +175,7 @@ _VALID_JOB_COLUMNS = frozenset(
         "status",
         "worker_id",
         "progress",
+        "phase",
         "output_size",
         "space_saved",
         "error_message",

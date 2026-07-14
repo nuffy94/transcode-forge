@@ -260,6 +260,7 @@ async def run_pipeline(
                     "CRF search are DISABLED for this encode (pre-VMAF behavior). "
                     "Update the worker image to restore the quality guarantee."
                 )
+
         async def _phase(name: str) -> None:
             if phase_callback is not None:
                 await phase_callback(name)
