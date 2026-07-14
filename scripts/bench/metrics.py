@@ -121,10 +121,22 @@ def _throughput(
 
 
 def _compression_pct(completed: Sequence[JobRow]) -> float | None:
-    """Aggregate space saved as a % of source bytes (size-weighted)."""
-    measured = [row for row in completed if row.get("space_saved") is not None]
-    source = float(sum(row["source_size"] for row in measured))
-    saved = float(sum(row["space_saved"] for row in measured))
+    """Aggregate compression as a % of source bytes (size-weighted).
+
+    Derived from source vs output sizes when both exist — S3 jobs record
+    space_saved=0 by design (masters are never replaced; nothing is
+    "reclaimed"), which made a 66%-compression bench arm report 0.0 here
+    (S4b). space_saved remains the fallback for rows without an
+    output_size (filesystem swaps agree with it anyway)."""
+    saved = 0.0
+    source = 0.0
+    for row in completed:
+        if row.get("output_size") and row.get("source_size"):
+            saved += float(row["source_size"]) - float(row["output_size"])
+            source += float(row["source_size"])
+        elif row.get("space_saved") is not None:
+            saved += float(row["space_saved"])
+            source += float(row["source_size"])
     if not source:
         return None
     return saved / source * 100.0

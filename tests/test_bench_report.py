@@ -147,6 +147,35 @@ async def test_fetch_jobs_excludes_non_terminal(seeded_db_url: str) -> None:
     assert ids == {"j1", "j2", "j3", "j4", "j5", "j6", "j8"}
 
 
+async def test_compression_derived_from_sizes_for_s3_rows(tmp_path: Path) -> None:
+    """Regression (S4b bench): S3 jobs record space_saved=0 — masters are
+    never replaced, nothing is 'reclaimed' — so a 66%-compression GPU arm
+    reported saved% 0.0. Compression must derive from source vs output
+    sizes whenever they exist; space_saved is only the fallback."""
+    from transcode_forge.db import close_db
+
+    db_url = f"sqlite:///{tmp_path / 'r.db'}"
+    db = await init_db(db_url)
+    try:
+        await _insert_job(
+            db,
+            "s3a",
+            backend_used="nvenc",
+            source_size=1_000_000_000,
+            output_size=400_000_000,
+            space_saved=0,
+            achieved_vmaf=95.0,
+            completed_at=_end(600),
+        )
+    finally:
+        await close_db(db)
+
+    rows = await fetch_jobs(db_url)
+    report = build_report(rows)
+    m = report["groups"][0]["metrics"]
+    assert m["compression_pct"] == pytest.approx(60.0)
+
+
 async def test_group_metrics(seeded_db_url: str) -> None:
     rows = await fetch_jobs(seeded_db_url)
     report = build_report(rows)

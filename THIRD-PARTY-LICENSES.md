@@ -39,19 +39,21 @@ nothing from third-party hosts at runtime)
 |------|---------|-------|
 | `tests/qa/vendor/axe.min.js` (axe-core) | MPL-2.0 | Accessibility testing only; not shipped in the running app. |
 
-## Runtime tools (referenced, not redistributed in this repo)
+## Runtime tools (bundled in the published Docker image)
 
-These are installed by the `Dockerfile` / referenced by `docker-compose*.yml`.
-Publishing **this source repository** (install instructions) carries no
-redistribution obligation. Building or pulling a **pre-built image** that
-*bundles* them is the user's responsibility, which is why no public pre-built
-image is distributed from this repo:
+These are installed by the `Dockerfile`. A pre-built image **is** published
+publicly (`ghcr.io/nuffy94/transcode-forge`, on every release tag), so the
+image redistributes these binaries. Transcode Forge invokes ffmpeg as an
+external program (no linking), so its own MIT license is unaffected; the
+GPL components' obligation is source availability, satisfied below:
 
-| Tool | License | Note |
+| Tool | License | Corresponding source |
 |------|---------|------|
-| ffmpeg | LGPL-2.1+ (may include GPL components per build) | Installed via `apt`; called as an external tool. |
-| `intel-media-va-driver-non-free`, `libmfx1` | Proprietary (Intel; Debian non-free) | Optional QSV hardware acceleration. |
-| Redis 7 | RSALv2 + Commons Clause | Pulled as the official `redis:7-alpine` image. |
+| ffmpeg (Debian package) | GPL-2+ build (links GPL x264/x265) | Debian source packages for the pinned base image: <https://snapshot.debian.org/> (`apt source ffmpeg` inside the image resolves the exact version). |
+| ffmpeg static build (VMAF measurement) | GPL-3.0 | Pinned BtbN release — sources published with the same release tag: <https://github.com/BtbN/FFmpeg-Builds/releases> (tag in the `VMAF_FFMPEG_URL` Dockerfile ARG). |
+| `intel-media-va-driver-non-free`, `libmfx1` | Proprietary (Intel; Debian non-free) | Optional QSV hardware acceleration; redistributable per Intel's Debian packaging terms. |
+| Redis 7 | RSALv2 + Commons Clause | Separate official `redis:7-alpine` image — referenced by compose, not bundled in ours. |
+| PostgreSQL 16 | PostgreSQL License | Separate official image — referenced by compose, not bundled in ours. |
 | Python 3.12 base image | PSF License | `python:3.12-slim-bookworm`. |
-| uv | MIT | Pulled from `ghcr.io/astral-sh/uv`. |
+| uv | MIT | Build stage only (`ghcr.io/astral-sh/uv`). |
 

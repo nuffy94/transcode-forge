@@ -15,7 +15,7 @@ cell — e.g. `hevc / qsv / 1080p`. Only terminal jobs (`complete`,
 |---|---|
 | jobs/hr | Completed jobs per encode-hour. Encode-hours = sum of per-job wall clock (`completed_at − started_at`) over completed jobs. |
 | GB-in/hr | Decimal GB (10⁹ bytes) of *source* video processed per encode-hour, completed jobs. This is the number the economics model consumes. |
-| saved % | Aggregate compression: `sum(space_saved) / sum(source_size) × 100` over completed jobs (size-weighted, so one big movie counts more than one small episode). |
+| saved % | Aggregate compression over completed jobs, size-weighted (one big movie counts more than one small episode). Derived from `source_size − output_size` when both exist; `space_saved` is the fallback. The distinction matters for S3 jobs, which record `space_saved = 0` — masters are never replaced, so nothing is "reclaimed" even though the encode compressed. |
 | VMAF mean/min/p5 | Distribution of `achieved_vmaf` over every terminal job that has one — including gate-skipped jobs, whose scores are exactly the interesting ones. |
 | skip % / fail % | Share of the group's terminal jobs that ended `skipped` (size regression or VMAF gate) / `failed`. |
 | wall p50/p90/p95 | Per-job wall-clock percentiles in seconds, completed jobs. |
