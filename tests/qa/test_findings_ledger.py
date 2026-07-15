@@ -17,7 +17,8 @@ LEDGER = Path(__file__).resolve().parents[2] / "qa" / "findings.yml"
 STATUSES = {"unverified", "new", "verified", "open", "fixed", "codified", "wontfix"}
 SEVERITIES = {"high", "medium", "low"}
 ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)+$")
-FIRST_SEEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} / S\d+$")
+# Provenance is a numbered QA scenario (S4) or a kebab op-label (concurrency-bench).
+FIRST_SEEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} / (S\d+|[a-z][a-z0-9-]+)$")
 
 
 def _entries() -> list[dict]:
@@ -34,7 +35,7 @@ def test_ledger_entries_are_well_formed() -> None:
         assert not re.search(r"\d{4}-\d{2}-\d{2}", str(entry["id"])), f"{eid}: id is run-dated"
         assert entry.get("title"), f"{eid}: missing title"
         assert FIRST_SEEN_RE.match(str(entry.get("first_seen", ""))), (
-            f"{eid}: first_seen must look like '2026-07-05 / S4'"
+            f"{eid}: first_seen must look like '2026-07-05 / S4' or '2026-07-14 / op-label'"
         )
         assert entry.get("severity") in SEVERITIES, f"{eid}: bad severity"
         assert entry.get("status") in STATUSES, f"{eid}: unknown status {entry.get('status')!r}"
