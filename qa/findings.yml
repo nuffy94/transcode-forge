@@ -381,3 +381,54 @@
     environment", a first S3 scan failing is the expected new-user path —
     the one moment a reason is most needed. Pairs with
     activity-failed-scans-not-surfaced (where the failure shows at all).
+
+# Worker-resilience findings from the 2026-07-14/15 GPU concurrency bench —
+# all surfaced live by us-sea's flaky network acting as a chaos monkey.
+# Backend/worker, not L3 QA sweeps. Full context:
+# plans/linode-deploy-staged/BENCH-RESULTS-CONCURRENCY.md.
+
+- id: worker-exits-on-transient-claim-timeout
+  title: Worker process exits on a transient claim/registration ConnectTimeout instead of retrying
+  first_seen: 2026-07-14 / concurrency-bench
+  severity: high
+  status: verified
+  note: >-
+    Surfaced live by us-sea's flaky network during the GPU concurrency
+    bench (first crash of the op). Some worker HTTP paths back off on
+    failure ("Claim failed — backing off"), but at least one path lets
+    httpx.ConnectTimeout propagate out of the main loop and kill the
+    process; the worker StackScript unit had no Restart=, so the node then
+    sat dead until a manual restart. Fix in two layers: systemd
+    Restart=always in the worker unit (deployment mitigation) AND a
+    catch-all retry/backoff wrapping the claim+register loop so a transient
+    network blip can never terminate the agent (code fix).
+
+- id: worker-completion-report-single-shot-strands-job
+  title: A single failed complete/register_derivative POST after a successful pipeline strands the job as 'transcoding' forever
+  first_seen: 2026-07-14 / concurrency-bench
+  severity: high
+  status: verified
+  note: >-
+    Surfaced by the same chaos-monkey network. After a fully successful
+    pipeline (LOCK..SWAP..CLEANUP done, original already replaced), the
+    completion report is single-shot: one failed
+    register_derivative/complete POST abandons the job. It stays
+    'transcoding' owned by a still-live worker and the S3 derivative is
+    orphaned. Self-healing exists only via worker-death sweeps
+    (requeue_stale_jobs) or re-registration release, so a job whose worker
+    never dies never heals — only /audit/integrity even reports it. Fix:
+    retry the completion report with backoff, plus a scheduler-side
+    progress-staleness sweep that reclaims stuck 'transcoding' jobs
+    independent of worker liveness.
+
+- id: worker-error-logs-drop-exception-text
+  title: 'Worker error logs drop the exception text for httpx timeouts ("Claim failed:  — backing off")'
+  first_seen: 2026-07-14 / concurrency-bench
+  severity: low
+  status: verified
+  note: >-
+    str(httpx.ConnectTimeout) is the empty string, so the worker's error
+    lines render as "Claim failed:  — backing off" and "Unexpected worker
+    error: " with no cause — which actively slowed diagnosis of the two
+    bugs above during the bench. One-line fix: log repr(exc) or
+    exc.__class__.__name__ instead of str(exc).
