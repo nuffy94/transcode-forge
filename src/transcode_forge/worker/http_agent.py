@@ -97,6 +97,10 @@ class HttpWorkerAgent:
                 host=self.host,
                 capabilities=self.capabilities.encoders,
                 supported_codecs=self.capabilities.supported_codecs,
+                # This build understands jobs.target_height (encoder scale,
+                # VERIFY height pin, gauge-at-target) — advertise it so the
+                # scheduler's claim filter hands us downscale jobs.
+                supports_downscale=True,
                 ffmpeg_version=self.capabilities.ffmpeg_version,
                 max_concurrent=self.settings.worker_max_concurrent,
             )
@@ -396,6 +400,7 @@ class HttpWorkerAgent:
                     ),
                     crf_search=self.settings.crf_search_enabled,
                     content="anime" if media_type == "anime" else None,
+                    target_height=job.target_height,
                     progress_callback=on_progress,
                     phase_callback=on_phase,
                 )
@@ -539,16 +544,19 @@ class HttpWorkerAgent:
         target codec/resolution/audio + target VMAF. Recipe details
         (backend/crf/preset) deliberately don't participate — any worker's
         gate-passing encode satisfies the same goal."""
-        from transcode_forge.models.derivative import compute_derivative_key
+        from transcode_forge.models.derivative import (
+            compute_derivative_key,
+            target_resolution_for,
+        )
 
         return compute_derivative_key(
             source_path=job.source_path,
             source_resolution=job.source_resolution or "",
             source_audio_codec=getattr(job, "source_audio_codec", "") or "",
-            # No rescaling / audio transcoding in the pipeline: the target
-            # keeps the source resolution and copies audio streams.
-            target_resolution=getattr(job, "target_resolution", "")
-            or (job.source_resolution or ""),
+            # Height-keyed for downscale jobs (shared rule — the scheduler's
+            # register-derivative row uses the same helper). Audio streams
+            # are always copied.
+            target_resolution=target_resolution_for(job.target_height, job.source_resolution),
             target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
             target_codec=job.target_codec or "hevc",
             target_vmaf=job.target_vmaf,

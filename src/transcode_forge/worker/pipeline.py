@@ -162,6 +162,7 @@ async def run_pipeline(
     vmaf_safety_perc5: float = 85.0,
     crf_search: bool = False,
     content: str | None = None,
+    target_height: int | None = None,
     progress_callback: Callable[[float, float | None], Any] | None = None,
     phase_callback: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
@@ -185,6 +186,11 @@ async def run_pipeline(
         crf_search: Search samples for the largest quality value that
             meets target_vmaf before the full encode.
         content: Optional content hint forwarded to the builder ('anime').
+        target_height: Downscale height (plans/downscale-shrink-spec.md).
+            The encode gets `scale=-2:H`, VERIFY pins the output height,
+            and the gauge scores at the TARGET resolution (downscaled
+            lanczos reference, target-height model). None = keep source
+            resolution — pre-feature behavior, byte-identical.
         progress_callback: Async callable(progress, speed) for progress updates.
         phase_callback: Async callable(phase) fired at each JobPhase
             transition (search/encode/verify/gauge/swap) for the UI.
@@ -214,7 +220,7 @@ async def run_pipeline(
     # with 'Current pixel format is unsupported' and the whole job retries.
     # Probe once and downgrade to the software encoder instead of the
     # retry loop.
-    if backend == "qsv" or target_vmaf is not None:
+    if backend == "qsv" or target_vmaf is not None or target_height is not None:
         try:
             src_probe = await ffprobe(src)
             source_height = src_probe.height or None
@@ -227,6 +233,26 @@ async def run_pipeline(
                 backend = "cpu"
         except ProbeError as e:
             logger.warning("Could not probe source: %s", e)
+
+    # Defense in depth: the scheduler validates strictly-downward heights at
+    # queue time, but this pipeline replaces originals — never trust a job
+    # row with an upscale/no-op scale. An unknowable source height (probe
+    # failed) fails CLOSED for downscale jobs: an obedient upscale would
+    # pass VERIFY (which pins output == target, knowing nothing of the
+    # source), and after CLEANUP there is no backup left to recover.
+    if target_height is not None:
+        if source_height is None:
+            raise PipelineError(
+                "TRANSCODE",
+                "Downscale requested but the source height could not be probed —"
+                " refusing to encode blind (the upscale guard cannot run)",
+            )
+        if source_height <= target_height:
+            raise PipelineError(
+                "TRANSCODE",
+                f"Refusing non-downward scale: source is {source_height}p,"
+                f" requested target is {target_height}p",
+            )
 
     # The SEARCH keeps its historical sample bars (target mean, target-2
     # perc5) so its CRF picks don't shift; only the GATE moved to the
@@ -277,6 +303,7 @@ async def run_pipeline(
                     perc5_floor=search_perc5_floor,
                     duration=source_duration,
                     height=source_height,
+                    target_height=target_height,
                 )
                 if search is not None:
                     quality = search.quality
@@ -295,7 +322,13 @@ async def run_pipeline(
         # Step 2: TRANSCODE
         await _phase(JobPhase.ENCODE)
         cmd = build_encode_command(
-            codec, backend, str(src), str(tmp_path), quality, content=content
+            codec,
+            backend,
+            str(src),
+            str(tmp_path),
+            quality,
+            content=content,
+            target_height=target_height,
         )
         result = await run_encode(
             cmd,
@@ -308,7 +341,9 @@ async def run_pipeline(
 
         # Step 3: VERIFY
         await _phase(JobPhase.VERIFY)
-        await _verify_output(tmp_path, source_duration, expected_codec=codec)
+        await _verify_output(
+            tmp_path, source_duration, expected_codec=codec, expected_height=target_height
+        )
         logger.info("[VERIFY] Output verified: codec=%s, duration OK", codec)
 
         # Step 4: COMPARE — size first, then the quality gate.
@@ -334,7 +369,9 @@ async def run_pipeline(
         if target_vmaf is not None and vmaf_available:
             try:
                 await _phase(JobPhase.GAUGE)
-                score = await measure_vmaf(src, tmp_path, height=source_height)
+                score = await measure_vmaf(
+                    src, tmp_path, height=source_height, target_height=target_height
+                )
                 vmaf_mean, vmaf_perc5 = score.mean, score.perc5
             except VmafUnavailableError:
                 logger.warning(
@@ -372,7 +409,9 @@ async def run_pipeline(
 
         # Step 6: CONFIRM
         try:
-            await _verify_output(src, source_duration, expected_codec=codec)
+            await _verify_output(
+                src, source_duration, expected_codec=codec, expected_height=target_height
+            )
             logger.info("[CONFIRM] Final file verified")
         except (PipelineError, ProbeError) as e:
             # Rollback: restore backup
@@ -443,6 +482,7 @@ async def _verify_output(
     expected_duration: float,
     *,
     expected_codec: str = "hevc",
+    expected_height: int | None = None,
     deep_check: bool = True,
 ) -> None:
     """Verify transcoded output via ffprobe + (optionally) a decode sample.
@@ -451,6 +491,9 @@ async def _verify_output(
     container metadata is intact. The deep-check pass actually runs
     frames through the decoder at three offsets (start / middle /
     end), which catches the rest. Add ~3-5s per encode.
+
+    expected_height (downscale jobs): `scale=-2:H` fixes the height
+    exactly (only the width is auto-rounded), so the check is exact.
     """
     if not await asyncio.to_thread(path.exists):
         raise PipelineError("VERIFY", f"Output file does not exist: {path}")
@@ -466,6 +509,12 @@ async def _verify_output(
     if probe.video_codec != expected_codec:
         raise PipelineError(
             "VERIFY", f"Output codec is '{probe.video_codec}', expected '{expected_codec}'"
+        )
+
+    if expected_height is not None and probe.height != expected_height:
+        raise PipelineError(
+            "VERIFY",
+            f"Output height is {probe.height}, expected the downscale target {expected_height}",
         )
 
     duration_diff = abs(probe.duration - expected_duration)

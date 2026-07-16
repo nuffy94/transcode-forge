@@ -63,6 +63,7 @@ class WorkerHttpClient:
         host: str,
         capabilities: list[str],
         supported_codecs: list[str] | None = None,
+        supports_downscale: bool = False,
         ffmpeg_version: str | None,
         max_concurrent: int,
     ) -> dict[str, Any]:
@@ -73,6 +74,7 @@ class WorkerHttpClient:
                 "host": host,
                 "capabilities": capabilities,
                 "supported_codecs": supported_codecs or ["hevc"],
+                "supports_downscale": supports_downscale,
                 "ffmpeg_version": ffmpeg_version,
                 "max_concurrent": max_concurrent,
             },

@@ -83,6 +83,16 @@ def map_quality(codec: str, backend: str, quality: int) -> int:
     return max(lo, min(hi, quality + offset))
 
 
+def _scale_args(target_height: int | None) -> list[str]:
+    """`-vf scale=-2:H` when the job carries a downscale: height fixed,
+    width auto and always even, aspect preserved. Software scale feeds all
+    three backends — frames pass through system memory in every builder
+    here (hardware vpp_qsv/scale_cuda is a later optimization, not v1)."""
+    if target_height is None:
+        return []
+    return ["-vf", f"scale=-2:{target_height}"]
+
+
 # Shared tail: copy audio/subs, keep every stream, newline-terminated
 # progress on stderr (default rolling stats use \r which readline() never
 # returns until the process exits).
@@ -101,7 +111,11 @@ _COMMON_TAIL = [
 
 
 def build_hevc_cpu_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """Software x265. Preset slow: this is a replace-the-original archival
     encode — quality-per-byte beats throughput. 10-bit output kills banding
@@ -118,6 +132,7 @@ def build_hevc_cpu_command(
         "-preset",
         "slow",
         *x265_params,
+        *_scale_args(target_height),
         "-pix_fmt",
         "yuv420p10le",
         *_COMMON_TAIL,
@@ -126,7 +141,11 @@ def build_hevc_cpu_command(
 
 
 def build_hevc_qsv_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """Intel QSV HEVC. Decodes via QSV to system memory (no
     -hwaccel_output_format qsv) so the 8→10-bit p010le conversion happens
@@ -151,6 +170,7 @@ def build_hevc_qsv_command(
         "1",
         "-low_power",
         "0",
+        *_scale_args(target_height),
         "-pix_fmt",
         "p010le",
         *_COMMON_TAIL,
@@ -159,7 +179,11 @@ def build_hevc_qsv_command(
 
 
 def build_hevc_nvenc_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """NVIDIA NVENC HEVC — the modern VBR+cq/p7/10-bit recipe. -b:v 0 makes
     -cq the sole rate control (true constant quality)."""
@@ -181,6 +205,7 @@ def build_hevc_nvenc_command(
         "vbr",
         "-b:v",
         "0",
+        *_scale_args(target_height),
         "-pix_fmt",
         "p010le",
         *_COMMON_TAIL,
@@ -189,7 +214,11 @@ def build_hevc_nvenc_command(
 
 
 def build_av1_cpu_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """SVT-AV1 — the real AV1 path for the CPU fleet. tune=0 (VQ mode),
     scm=0 (film content, not screen content)."""
@@ -205,6 +234,7 @@ def build_av1_cpu_command(
         "6",
         "-svtav1-params",
         "tune=0:scm=0",
+        *_scale_args(target_height),
         "-pix_fmt",
         "yuv420p10le",
         *_COMMON_TAIL,
@@ -213,7 +243,11 @@ def build_av1_cpu_command(
 
 
 def build_av1_nvenc_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """NVIDIA NVENC AV1 (Ada / RTX 40xx+)."""
     return [
@@ -236,6 +270,7 @@ def build_av1_nvenc_command(
         "0",
         "-multipass",
         "fullres",
+        *_scale_args(target_height),
         "-pix_fmt",
         "p010le",
         *_COMMON_TAIL,
@@ -244,7 +279,11 @@ def build_av1_nvenc_command(
 
 
 def build_av1_qsv_command(
-    input_path: str, output_path: str, quality: int, content: str | None = None
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """Intel QSV AV1 (Arc / gen12+). Detection-gated seam — no such
     hardware in the current fleet, but the builder is real."""
@@ -262,6 +301,7 @@ def build_av1_qsv_command(
         str(map_quality("av1", "qsv", quality)),
         "-preset",
         "veryslow",
+        *_scale_args(target_height),
         "-pix_fmt",
         "p010le",
         *_COMMON_TAIL,
@@ -289,6 +329,7 @@ def build_encode_command(
     quality: int,
     *,
     content: str | None = None,
+    target_height: int | None = None,
 ) -> list[str]:
     """Build the ffmpeg command for the given (codec, backend) pair.
 
@@ -297,6 +338,8 @@ def build_encode_command(
         backend: Hardware axis ('cpu' | 'qsv' | 'nvenc').
         quality: Reference-scale quality (x265-CRF-like); mapped per encoder.
         content: Optional content hint ('anime' enables x265 aq-mode=3).
+        target_height: Downscale height (`scale=-2:H`); None = keep source
+            resolution (pre-feature identical).
     """
     builder = ENCODER_BUILDERS.get((codec, backend))
     if builder is None:
@@ -304,7 +347,7 @@ def build_encode_command(
             f"Unknown (codec, backend) pair: ({codec}, {backend})."
             f" Valid: {sorted(ENCODER_BUILDERS.keys())}"
         )
-    return builder(input_path, output_path, quality, content)
+    return builder(input_path, output_path, quality, content, target_height)
 
 
 def parse_progress(line: str, total_duration: float) -> float | None:
