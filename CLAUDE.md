@@ -197,6 +197,10 @@ Worker-side:
 - `TF_WORKER_TOKEN` — bearer token issued from the scheduler UI.
 - `TF_WORKER_NAME`, `TF_PREFERRED_BACKEND` (old `TF_PREFERRED_ENCODER`
   is a deprecated alias), `TF_PATH_MAP` — per-worker.
+- `TF_WORKER_STATE_DIR` — durable worker state (the milestone outbox:
+  undelivered terminal reports). Empty → `<scratch root>/state`, which
+  every scratch cleanup path spares. Docker workers should mount it so
+  delivery survives container recreation.
 - `TF_VMAF_FFMPEG` — ffmpeg binary used for VMAF measurement only (the
   Docker image bundles a static libvmaf build; distro ffmpeg lacks the
   filter). Missing libvmaf → gate skipped with a loud warning.

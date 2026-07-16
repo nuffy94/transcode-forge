@@ -22,12 +22,14 @@ from transcode_forge.models.job import Job
 from transcode_forge.models.library import StorageBackendType
 from transcode_forge.worker.hardware import HardwareCapabilities, detect_capabilities
 from transcode_forge.worker.http_client import WorkerHttpClient
+from transcode_forge.worker.outbox import Outbox
 from transcode_forge.worker.pipeline import (
     PipelineError,
     SizeRegressionError,
     VmafGateError,
     run_pipeline,
 )
+from transcode_forge.worker.reliability import Backoff, ErrorClass, classify_error
 from transcode_forge.worker.storage.filesystem import (
     recover_orphaned_backups,
     recover_source_path,
@@ -60,6 +62,16 @@ class HttpWorkerAgent:
         scratch_root = Path(settings.scratch_dir or "/tmp/transcode-scratch")
         self.scratch_manager = ScratchManager(scratch_root)
 
+        # Milestone outbox (worker-resilience spec D1): undelivered
+        # terminal reports live here, under a dir every scratch cleanup
+        # path spares. TF_WORKER_STATE_DIR overrides for installs whose
+        # scratch is ephemeral but that still want restart-proof delivery.
+        state_root = (
+            Path(settings.worker_state_dir) if settings.worker_state_dir else scratch_root / "state"
+        )
+        self.outbox = Outbox(state_root / "outbox")
+        self._claim_backoff = Backoff(base=2.0, cap=60.0)
+
     async def start(self) -> None:
         logging.basicConfig(
             level=getattr(logging, self.settings.log_level.upper(), logging.INFO),
@@ -91,25 +103,53 @@ class HttpWorkerAgent:
                 "cannot run here. Update the worker image to restore it."
             )
 
-        try:
-            registration = await self._client.register(
-                name=self.worker_name,
-                host=self.host,
-                capabilities=self.capabilities.encoders,
-                supported_codecs=self.capabilities.supported_codecs,
-                # This build understands jobs.target_height (encoder scale,
-                # VERIFY height pin, gauge-at-target) — advertise it so the
-                # scheduler's claim filter hands us downscale jobs.
-                supports_downscale=True,
-                ffmpeg_version=self.capabilities.ffmpeg_version,
-                max_concurrent=self.settings.worker_max_concurrent,
-            )
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Registration rejected: %s — check TF_WORKER_TOKEN and TF_SERVER_URL",
-                e.response.text,
-            )
-            raise
+        # Drain undelivered reports from a previous life BEFORE
+        # re-registering: registration releases this worker's active jobs
+        # server-side, so a finished-but-unreported job must land its
+        # report first or the release would requeue (and re-run) finished
+        # work. The token is already bound to our worker identity, so
+        # delivery needs no fresh registration. Best effort — anything
+        # still undelivered retries at the job loop's claim fence.
+        if self.outbox.pending_job_ids():
+            logger.info("Draining outbox from a previous run before registering")
+            if not await self._drain_outbox():
+                logger.warning("Outbox still has undelivered reports — they retry before any claim")
+
+        # Registration retries forever on transport/5xx (a scheduler
+        # restart must never kill fleet nodes) with a loud periodic ERROR;
+        # a 4xx refusal (revoked token, bad request) is an operator
+        # problem and exits loudly — systemd Restart=always is the second
+        # belt, so even that never turns into a silently dead node.
+        reg_backoff = Backoff(base=2.0, cap=60.0)
+        attempt = 0
+        while True:
+            try:
+                registration = await self._client.register(
+                    name=self.worker_name,
+                    host=self.host,
+                    capabilities=self.capabilities.encoders,
+                    supported_codecs=self.capabilities.supported_codecs,
+                    # This build understands jobs.target_height (encoder scale,
+                    # VERIFY height pin, gauge-at-target) — advertise it so the
+                    # scheduler's claim filter hands us downscale jobs.
+                    supports_downscale=True,
+                    ffmpeg_version=self.capabilities.ffmpeg_version,
+                    max_concurrent=self.settings.worker_max_concurrent,
+                )
+                break
+            except Exception as e:
+                if classify_error(e) is ErrorClass.TERMINAL:
+                    logger.error(
+                        "Registration REJECTED (%r) — check TF_WORKER_TOKEN and "
+                        "TF_SERVER_URL; exiting",
+                        e,
+                    )
+                    raise
+                attempt += 1
+                delay = reg_backoff.next_delay()
+                log = logger.error if attempt % 10 == 0 else logger.warning
+                log("Registration attempt %d failed (%r) — retrying in %.1fs", attempt, e, delay)
+                await asyncio.sleep(delay)
         self.worker_id = registration["worker_id"]
         logger.info("Registered as worker_id=%s", self.worker_id)
 
@@ -182,44 +222,66 @@ class HttpWorkerAgent:
         # treat the worker as dead) for the entire tail of the encode.
         while not self._shutting_down or self._current_job_id is not None:
             status = "busy" if self._current_job_id else "online"
+            # While a job's terminal report is still undelivered, keep
+            # NAMING that job: the reconciliation sweep (PR A) requeues a
+            # live worker's job when its heartbeat disowns it past grace —
+            # a delivery merely delayed by an outage must not read as
+            # abandonment, or the sweep would re-run finished work.
+            named_job = self._current_job_id or self.outbox.oldest_pending_job_id()
             try:
                 await self._client.heartbeat(
                     worker_id=self.worker_id,
                     status=status,
-                    current_job_id=self._current_job_id,
+                    current_job_id=named_job,
                 )
-            except (httpx.HTTPError, OSError) as e:
-                logger.warning("Heartbeat failed (will retry): %s", e)
+            except Exception as e:
+                logger.warning("Heartbeat failed (will retry): %r", e)
             await asyncio.sleep(self.settings.heartbeat_interval)
 
     async def _job_loop(self) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
         while not self._shutting_down:
+            # The whole iteration is fenced: no network fault, malformed
+            # claim payload, or unexpected bug may exit this loop. A worker
+            # process exits on SIGTERM/SIGINT and nothing else (spec D2).
             try:
+                # Outbox fence: drain undelivered reports BEFORE claiming
+                # any new work. Finished work's report outranks new work —
+                # and a pending entry for a retried job id must resolve
+                # before that job could ever be re-claimed here (a stale
+                # attempt-1 report landing on attempt-2 is the
+                # successful-job-marked-failed lie).
+                if not await self._drain_outbox():
+                    await asyncio.sleep(self._claim_backoff.next_delay())
+                    continue
                 job_dict = await self._client.claim_job(worker_id=self.worker_id)
-            except (httpx.HTTPError, OSError) as e:
-                logger.warning("Claim failed: %s — backing off", e)
-                await asyncio.sleep(5)
-                continue
-            if not job_dict:
-                await asyncio.sleep(2)
-                continue
-            job = Job.model_validate(job_dict)
-            # Claim-time extras (library backend, media type, VMAF floors)
-            # ride on private attrs outside the validated model.
-            for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
-                if extra in job_dict:
-                    object.__setattr__(job, extra, job_dict[extra])
-            # Scheduler-stamped safety floors; a pre-decoupling scheduler
-            # doesn't send them, so fall back to this worker's env defaults.
-            # The legacy _vmaf_min_floor stamp is deliberately ignored — it
-            # carries the old target-coupled bar this design retired.
-            await self._process_job(
-                job,
-                safety_mean=job_dict.get("_vmaf_safety_mean", self.settings.vmaf_safety_mean),
-                safety_perc5=job_dict.get("_vmaf_safety_perc5", self.settings.vmaf_safety_perc5),
-            )
+                self._claim_backoff.reset()
+                if not job_dict:
+                    await asyncio.sleep(2)
+                    continue
+                job = Job.model_validate(job_dict)
+                # Claim-time extras (library backend, media type, VMAF floors)
+                # ride on private attrs outside the validated model.
+                for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
+                    if extra in job_dict:
+                        object.__setattr__(job, extra, job_dict[extra])
+                # Scheduler-stamped safety floors; a pre-decoupling scheduler
+                # doesn't send them, so fall back to this worker's env defaults.
+                # The legacy _vmaf_min_floor stamp is deliberately ignored — it
+                # carries the old target-coupled bar this design retired.
+                await self._process_job(
+                    job,
+                    safety_mean=job_dict.get("_vmaf_safety_mean", self.settings.vmaf_safety_mean),
+                    safety_perc5=job_dict.get(
+                        "_vmaf_safety_perc5", self.settings.vmaf_safety_perc5
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Job loop iteration failed: %r — backing off", e)
+                await asyncio.sleep(self._claim_backoff.next_delay())
 
     def _resolve_backend(self, codec: str) -> str | None:
         """Best backend for the job's codec — preferred if capable, else
@@ -246,10 +308,13 @@ class HttpWorkerAgent:
             # drifted (driver died between register and claim), fail loudly
             # rather than encoding with the wrong codec.
             logger.error("No backend for codec %s — failing job %s", codec, job.id)
-            await self._client.failed(
-                job_id=job.id,
-                error_message=f"Worker has no backend capable of encoding {codec}",
-                retry_count=job.retry_count + 1,
+            await self._deliver(
+                job.id,
+                "failed",
+                {
+                    "error_message": f"Worker has no backend capable of encoding {codec}",
+                    "retry_count": job.retry_count + 1,
+                },
             )
             self._current_job_id = None
             return
@@ -304,11 +369,14 @@ class HttpWorkerAgent:
                     ),
                 }
                 logger.warning("Declining job %s (%s): %s", job.id, recovery, source_ref)
-                await self._client.failed(
-                    job_id=job.id,
-                    error_message=messages[recovery],
-                    # None of these are the file's fault — never burn a retry.
-                    retry_count=job.retry_count,
+                await self._deliver(
+                    job.id,
+                    "failed",
+                    {
+                        "error_message": messages[recovery],
+                        # None of these are the file's fault — never burn a retry.
+                        "retry_count": job.retry_count,
+                    },
                 )
                 self._current_job_id = None
                 await storage.cleanup(job)
@@ -318,12 +386,15 @@ class HttpWorkerAgent:
 
         try:
             source_path_local = await storage.fetch(source_ref)
-        except (OSError, Exception) as e:
-            logger.error("Failed to fetch source for job %s: %s", job.id, e)
-            await self._client.failed(
-                job_id=job.id,
-                error_message=f"Failed to fetch source: {e}",
-                retry_count=job.retry_count + 1,
+        except Exception as e:
+            logger.error("Failed to fetch source for job %s: %r", job.id, e)
+            await self._deliver(
+                job.id,
+                "failed",
+                {
+                    "error_message": f"Failed to fetch source: {e!r}",
+                    "retry_count": job.retry_count + 1,
+                },
             )
             self._current_job_id = None
             return
@@ -335,11 +406,14 @@ class HttpWorkerAgent:
             dedup_result = await self._try_dedup(job, storage)
             if dedup_result:
                 # Job was marked COMPLETE via dedup. Report completion with reused output size.
-                await self._client.complete(
-                    job_id=job.id,
-                    output_size=int(dedup_result["output_size"]),
-                    space_saved=0,  # S3 doesn't reclaim space; derivative is new.
-                    source_size=int(job.source_size or 0),
+                await self._deliver(
+                    job.id,
+                    "complete",
+                    {
+                        "output_size": int(dedup_result["output_size"]),
+                        "space_saved": 0,  # S3 doesn't reclaim space; derivative is new.
+                        "source_size": int(job.source_size or 0),
+                    },
                 )
                 logger.info(
                     "Job %s complete via dedup (reused %s)",
@@ -420,38 +494,40 @@ class HttpWorkerAgent:
                 space_saved=space_saved,
             )
 
-            # For S3, register the derivative on the scheduler side.
+            # The outcome is DECIDED here — everything below is delivery,
+            # and delivery goes through the outbox (journal first, then
+            # attempt): a lost POST delays the report, never changes it.
+            # For S3 the register_derivative → complete order is a
+            # contract; appending both preserves it — the drain stops a
+            # job's chain on a retryable failure and never reorders.
             if is_s3:
                 derivative_key = self._derivative_key_for(job, source_path_local)
+                await self._deliver(
+                    job.id,
+                    "register_derivative",
+                    {
+                        "derivative_key": derivative_key,
+                        "output_size": int(commit_result.output_size),
+                        "achieved_vmaf": result.get("vmaf_mean"),
+                        "resolved_crf": result.get("resolved_crf"),
+                        "backend_used": result.get("backend", backend),
+                    },
+                )
 
-                try:
-                    await self._client.register_derivative(
-                        job_id=job.id,
-                        derivative_key=derivative_key,
-                        output_size=int(commit_result.output_size),
-                        achieved_vmaf=result.get("vmaf_mean"),
-                        resolved_crf=result.get("resolved_crf"),
-                        backend_used=result.get("backend", backend),
-                    )
-                    logger.info("Derivative registered on scheduler: %s", derivative_key)
-                except (httpx.HTTPError, OSError) as e:
-                    logger.error(
-                        "Failed to register derivative (S3 file may be orphaned): %s",
-                        e,
-                    )
-                    raise
-
-            await self._client.complete(
-                job_id=job.id,
-                output_size=int(commit_result.output_size),
-                space_saved=int(commit_result.space_saved),
-                source_size=int(result["source_size"]),
-                achieved_vmaf=result.get("vmaf_mean"),
-                achieved_vmaf_perc5=result.get("vmaf_perc5"),
-                predicted_vmaf_mean=result.get("predicted_vmaf_mean"),
-                predicted_vmaf_perc5=result.get("predicted_vmaf_perc5"),
-                resolved_crf=result.get("resolved_crf"),
-                backend_used=result.get("backend", backend),
+            await self._deliver(
+                job.id,
+                "complete",
+                {
+                    "output_size": int(commit_result.output_size),
+                    "space_saved": int(commit_result.space_saved),
+                    "source_size": int(result["source_size"]),
+                    "achieved_vmaf": result.get("vmaf_mean"),
+                    "achieved_vmaf_perc5": result.get("vmaf_perc5"),
+                    "predicted_vmaf_mean": result.get("predicted_vmaf_mean"),
+                    "predicted_vmaf_perc5": result.get("predicted_vmaf_perc5"),
+                    "resolved_crf": result.get("resolved_crf"),
+                    "backend_used": result.get("backend", backend),
+                },
             )
             logger.info(
                 "Job %s complete — saved %d bytes",
@@ -469,49 +545,61 @@ class HttpWorkerAgent:
                     self._pipeline_task.cancel()
                 raise
             logger.warning("Job %s aborted by shutdown", job.id)
+            # The entry is journaled either way; the timeout only bounds
+            # the opportunistic send so shutdown stays snappy — an
+            # unsent abort report survives to the next boot's drain.
             try:
                 await asyncio.wait_for(
-                    self._client.failed(
-                        job_id=job.id,
-                        error_message="Aborted by worker shutdown",
-                        # A shutdown abort is not the file's fault — never
-                        # burn a retry on it.
-                        retry_count=job.retry_count,
+                    self._deliver(
+                        job.id,
+                        "failed",
+                        {
+                            "error_message": "Aborted by worker shutdown",
+                            # A shutdown abort is not the file's fault —
+                            # never burn a retry on it.
+                            "retry_count": job.retry_count,
+                        },
                     ),
-                    timeout=5.0,
+                    timeout=10.0,
                 )
-            except (TimeoutError, httpx.HTTPError, OSError):
-                logger.error("Could not report job %s abort to scheduler", job.id)
+            except TimeoutError:
+                logger.warning("Abort report for job %s journaled but not yet sent", job.id)
         except VmafGateError as e:
-            await self._client.skipped(
-                job_id=job.id,
-                reason="below_vmaf_floor",
-                error_message=str(e),
-                achieved_vmaf=e.vmaf_mean,
-                achieved_vmaf_perc5=e.vmaf_perc5,
-                predicted_vmaf_mean=e.predicted_vmaf_mean,
-                predicted_vmaf_perc5=e.predicted_vmaf_perc5,
-                resolved_crf=e.resolved_crf,
-                backend_used=e.backend,
+            await self._deliver(
+                job.id,
+                "skipped",
+                {
+                    "reason": "below_vmaf_floor",
+                    "error_message": str(e),
+                    "achieved_vmaf": e.vmaf_mean,
+                    "achieved_vmaf_perc5": e.vmaf_perc5,
+                    "predicted_vmaf_mean": e.predicted_vmaf_mean,
+                    "predicted_vmaf_perc5": e.predicted_vmaf_perc5,
+                    "resolved_crf": e.resolved_crf,
+                    "backend_used": e.backend,
+                },
             )
             logger.info("Job %s skipped (below VMAF floor): %s", job.id, e)
         except SizeRegressionError as e:
-            await self._client.skipped(
-                job_id=job.id,
-                reason="size_regression",
-                error_message=str(e),
-                predicted_vmaf_mean=e.predicted_vmaf_mean,
-                predicted_vmaf_perc5=e.predicted_vmaf_perc5,
-                resolved_crf=e.resolved_crf,
-                backend_used=e.backend,
+            await self._deliver(
+                job.id,
+                "skipped",
+                {
+                    "reason": "size_regression",
+                    "error_message": str(e),
+                    "predicted_vmaf_mean": e.predicted_vmaf_mean,
+                    "predicted_vmaf_perc5": e.predicted_vmaf_perc5,
+                    "resolved_crf": e.resolved_crf,
+                    "backend_used": e.backend,
+                },
             )
             logger.info("Job %s skipped (size regression)", job.id)
         except PipelineError as e:
             new_retry = job.retry_count + 1
-            await self._client.failed(
-                job_id=job.id,
-                error_message=str(e),
-                retry_count=new_retry,
+            await self._deliver(
+                job.id,
+                "failed",
+                {"error_message": str(e), "retry_count": new_retry},
             )
             logger.warning("Job %s failed (attempt %d): %s", job.id, new_retry, e)
         except Exception as e:
@@ -519,19 +607,100 @@ class HttpWorkerAgent:
             # agent restarts, re-registers (which releases the job), and the
             # next worker hits the same bug: a fleet-wide crash-loop.
             logger.exception("Unexpected error processing job %s", job.id)
-            try:
-                await self._client.failed(
-                    job_id=job.id,
-                    error_message=f"Unexpected worker error: {e}",
-                    retry_count=job.retry_count + 1,
-                )
-            except (httpx.HTTPError, OSError):
-                logger.error("Could not report job %s failure to scheduler", job.id)
+            await self._deliver(
+                job.id,
+                "failed",
+                {
+                    "error_message": f"Unexpected worker error: {e!r}",
+                    "retry_count": job.retry_count + 1,
+                },
+            )
         finally:
             self._pipeline_task = None
             self._current_job_id = None
             self._current_progress = 0.0
             await storage.cleanup(job)
+
+    # ── Milestone delivery (spec D1) ──────────────────────────────────
+
+    async def _deliver(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
+        """Journal a milestone report, then attempt delivery now.
+
+        Never raises: a report-path failure may DELAY delivery (the entry
+        stays journaled and is drained before the next claim) but can
+        never change a decided outcome or crash the job loop. The old
+        inline client calls turned a lost /complete response into a
+        FAILED report on a successful, already-swapped encode — that
+        whole class dies at this seam.
+        """
+        try:
+            self.outbox.append(job_id, kind, payload)
+        except OSError:
+            # The state disk refused the journal — degrade to one direct
+            # send so reporting doesn't silently stop with the disk.
+            logger.exception("Outbox append failed for job %s — attempting direct delivery", job_id)
+            try:
+                await self._send_report(job_id, kind, payload)
+            except Exception as e:
+                logger.error("Direct delivery of %s for job %s failed: %r", kind, job_id, e)
+            return
+        try:
+            await self._drain_outbox()
+        except Exception as e:
+            logger.error("Outbox drain failed: %r", e)
+
+    async def _drain_outbox(self) -> bool:
+        """One delivery pass over the outbox. True = empty afterwards.
+
+        Per-job chains are ordered: a RETRYABLE failure blocks the rest of
+        that job's chain (an S3 complete never overtakes its
+        register_derivative); other jobs' chains continue. A TERMINAL
+        refusal (4xx — ownership moved to another worker, job deleted,
+        conflicting outcome already recorded) discards the entry with a
+        WARN: the scheduler's copy of reality won.
+        """
+        blocked: set[str] = set()
+        for entry in self.outbox.entries():
+            if entry.job_id in blocked:
+                continue
+            try:
+                await self._send_report(entry.job_id, entry.kind, entry.payload)
+            except Exception as e:
+                if classify_error(e) is ErrorClass.TERMINAL:
+                    logger.warning(
+                        "Outbox: scheduler refused %s for job %s (%r) — discarding, "
+                        "its copy of reality wins",
+                        entry.kind,
+                        entry.job_id,
+                        e,
+                    )
+                    self.outbox.delete(entry)
+                else:
+                    logger.warning(
+                        "Outbox: delivery of %s for job %s failed (%r) — will retry (attempt %d)",
+                        entry.kind,
+                        entry.job_id,
+                        e,
+                        entry.attempts + 1,
+                    )
+                    self.outbox.bump_attempts(entry)
+                    blocked.add(entry.job_id)
+                continue
+            self.outbox.delete(entry)
+        return not self.outbox.entries()
+
+    async def _send_report(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
+        """One delivery attempt of one milestone report (raises on failure)."""
+        if kind == "complete":
+            await self._client.complete(job_id=job_id, **payload)
+        elif kind == "skipped":
+            await self._client.skipped(job_id=job_id, **payload)
+        elif kind == "failed":
+            await self._client.failed(job_id=job_id, **payload)
+        elif kind == "register_derivative":
+            await self._client.register_derivative(job_id=job_id, **payload)
+        else:
+            raise ValueError(f"Unknown milestone kind: {kind!r}")
 
     def _translate_path(self, path: str) -> str:
         for linux_prefix, local_prefix in self.settings.path_map.items():

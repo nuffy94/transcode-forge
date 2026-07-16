@@ -132,20 +132,26 @@ def test_scratch_orphan_cleanup(scratch_manager: ScratchManager) -> None:
 def test_scratch_manager_cleanup_on_shutdown(
     scratch_manager: ScratchManager, tmp_path: Path
 ) -> None:
-    """Test cleanup_on_shutdown() removes the scratch root."""
+    """cleanup_on_shutdown() removes per-job dirs but never the root —
+    the durable state dir (milestone outbox) lives under it by default
+    and must outlive the process (worker-resilience spec D1)."""
 
     async def _test() -> None:
-        # Create some job directories.
+        # Create some job directories, plus durable state that must survive.
         (scratch_manager.scratch_root / "job1_abc").mkdir(parents=True, exist_ok=True)
         (scratch_manager.scratch_root / "job2_xyz").mkdir(parents=True, exist_ok=True)
+        outbox_dir = scratch_manager.scratch_root / "state" / "outbox"
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        entry = outbox_dir / "0000000001-job1-complete.json"
+        entry.write_text("{}", encoding="utf-8")
 
-        assert scratch_manager.scratch_root.exists()
-
-        # Call cleanup_on_shutdown.
         await scratch_manager.cleanup_on_shutdown()
 
-        # Scratch root should be gone.
-        assert not scratch_manager.scratch_root.exists()
+        # Job dirs gone; the root and the journaled report survive.
+        assert not (scratch_manager.scratch_root / "job1_abc").exists()
+        assert not (scratch_manager.scratch_root / "job2_xyz").exists()
+        assert scratch_manager.scratch_root.exists()
+        assert entry.exists()
 
     asyncio.run(_test())
 

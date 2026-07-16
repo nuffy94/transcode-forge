@@ -44,13 +44,22 @@ def _raise_for_status(r: httpx.Response) -> None:
 
 
 class WorkerHttpClient:
-    def __init__(self, base_url: str, token: str, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         if not token:
             raise ValueError("worker token is required (set TF_WORKER_TOKEN)")
+        # `transport` is a test seam: the hostile-scheduler tier drives the
+        # real agent against an in-process fault-injecting ASGI app.
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
+            transport=transport,
         )
 
     async def aclose(self) -> None:
