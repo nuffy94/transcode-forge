@@ -137,7 +137,7 @@ class TestMeasureVmafErrors:
 def _fake_curve(quality_to_vmaf):
     """Build an _evaluate_quality stand-in from a {quality: (mean, perc5)} map."""
 
-    async def evaluate(samples, codec, backend, quality, *, height, work_dir):
+    async def evaluate(samples, codec, backend, quality, *, height, target_height=None, work_dir):
         return quality_to_vmaf[quality]
 
     return evaluate

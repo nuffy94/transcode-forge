@@ -8,12 +8,13 @@ means the next change is a one-file fix.
 from transcode_forge.scanner.probe import ProbeResult
 
 
-def make_probe(codec: str = "hevc") -> ProbeResult:
-    """A 1080p hevc-ish probe result for pipeline tests."""
+def make_probe(codec: str = "hevc", height: int = 1080) -> ProbeResult:
+    """An hevc-ish probe result for pipeline tests (1080p default)."""
+    width = {2160: 3840, 1080: 1920, 720: 1280}.get(height, 1920)
     return ProbeResult(
         video_codec=codec,
-        width=1920,
-        height=1080,
+        width=width,
+        height=height,
         bitrate=5_000_000,
         duration=3600.0,
         file_size=5000,

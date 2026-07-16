@@ -86,10 +86,66 @@ class QualitySearchResult:
 
 
 def select_model(height: int | None) -> str:
-    """Pick the resolution-matched VMAF model for a source height."""
+    """Pick the resolution-matched VMAF model for the height being scored."""
     if height is not None and height >= VMAF_4K_MIN_HEIGHT:
         return VMAF_MODEL_4K
     return VMAF_MODEL_HD
+
+
+def build_gauge_graph(
+    *,
+    model: str,
+    log_path: str,
+    n_subsample: int,
+    n_threads: int,
+    reference_scale_height: int | None = None,
+) -> str:
+    """The gauge's filter graph — the ONE place the scoring contract lives.
+
+    libvmaf: first input = distorted, second = reference. Both sides are
+    normalized to the same 10-bit format before scoring so an 8-bit source
+    vs 10-bit encode doesn't fail the filter.
+
+    Both sides are also rebased onto one shared synthetic timeline
+    (settb + setpts=N*100000: 10fps in µs ticks, integer-exact) so
+    framesync pairs frames by INDEX, not timestamp. Timestamp pairing
+    is fragile: a source muxed on a different ms-rounding grid than
+    ffmpeg's (1-2ms apart) pairs frame N against ref frame N-1 for
+    much of the file — a real 480p episode gauged 75.33/2.67 against
+    its true 97.25/95.98 and was falsely skipped. The encode path
+    never resamples frames (no fps/-r/vsync in encoder.py), so equal
+    index means the same picture. Known trade-off: if a damaged
+    source ever makes the decoder drop a frame mid-encode, index
+    pairing misaligns the whole tail instead of re-locking — that
+    reads as a very low score and the gate SKIPs (original kept,
+    fail-safe). Debugging note: that failure looks exactly like this
+    desync did; compare nb_read_frames on both files first.
+
+    reference_scale_height (downscale jobs): the REFERENCE chain gains a
+    pinned-lanczos scale to the target height — the gate then asks "did
+    the encode add damage beyond the downscale asked for?" against the
+    best possible rendition at the delivered resolution
+    (plans/downscale-shrink-spec.md). Pinning the scaler keeps scores
+    identical across workers whatever their ffmpeg's default. Scaling
+    never drops frames, so the index-pairing contract is untouched.
+
+    Pinned byte-for-byte by golden tests in test_downscale_worker.py —
+    any change here is a scoring-behavior change and must update the
+    goldens in the same commit, with data.
+    """
+    ref_scale = (
+        f",scale=-2:{reference_scale_height}:flags=lanczos"
+        if reference_scale_height is not None
+        else ""
+    )
+    return (
+        "[0:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[dis];"
+        f"[1:v]settb=AVTB,setpts=N*100000{ref_scale},format=yuv420p10le[ref];"
+        "[dis][ref]libvmaf="
+        f"model=version={model}"
+        f":log_fmt=json:log_path={log_path}"
+        f":n_subsample={n_subsample}:n_threads={n_threads}"
+    )
 
 
 def _pool(scores: list[float]) -> VmafScore:
@@ -127,6 +183,7 @@ async def measure_vmaf(
     encoded: str | Path,
     *,
     height: int | None = None,
+    target_height: int | None = None,
     n_subsample: int = VMAF_SUBSAMPLE,
     n_threads: int | None = None,
 ) -> VmafScore:
@@ -134,6 +191,11 @@ async def measure_vmaf(
 
     Frame scores are pooled in Python (mean / perc5 / min) from the JSON
     log so the gate can insist on worst-scene quality, not just the mean.
+
+    height is the SOURCE height. For a downscale job, pass target_height:
+    the reference is downscaled to it inside the graph (pinned lanczos)
+    and the model follows the TARGET height — scoring happens at the
+    delivered resolution (plans/downscale-shrink-spec.md).
 
     n_threads defaults to the machine's core count — libvmaf's own default
     (0) means NO threading, which silently ran every gauge single-threaded
@@ -143,35 +205,16 @@ async def measure_vmaf(
         VmafUnavailableError: If ffmpeg lacks the libvmaf filter.
         VmafError: On measurement failure.
     """
-    model = select_model(height)
+    model = select_model(target_height if target_height is not None else height)
     threads = n_threads if n_threads is not None else (os.cpu_count() or 1)
     with tempfile.TemporaryDirectory(prefix="tf-vmaf-") as tmp:
         log_path = Path(tmp) / "vmaf.json"
-        # libvmaf: first input = distorted, second = reference. Both sides
-        # are normalized to the same 10-bit format before scoring so an
-        # 8-bit source vs 10-bit encode doesn't fail the filter.
-        #
-        # Both sides are also rebased onto one shared synthetic timeline
-        # (settb + setpts=N*100000: 10fps in µs ticks, integer-exact) so
-        # framesync pairs frames by INDEX, not timestamp. Timestamp pairing
-        # is fragile: a source muxed on a different ms-rounding grid than
-        # ffmpeg's (1-2ms apart) pairs frame N against ref frame N-1 for
-        # much of the file — a real 480p episode gauged 75.33/2.67 against
-        # its true 97.25/95.98 and was falsely skipped. The encode path
-        # never resamples frames (no fps/-r/vsync in encoder.py), so equal
-        # index means the same picture. Known trade-off: if a damaged
-        # source ever makes the decoder drop a frame mid-encode, index
-        # pairing misaligns the whole tail instead of re-locking — that
-        # reads as a very low score and the gate SKIPs (original kept,
-        # fail-safe). Debugging note: that failure looks exactly like this
-        # desync did; compare nb_read_frames on both files first.
-        graph = (
-            "[0:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[dis];"
-            "[1:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[ref];"
-            "[dis][ref]libvmaf="
-            f"model=version={model}"
-            f":log_fmt=json:log_path={log_path.as_posix()}"
-            f":n_subsample={n_subsample}:n_threads={threads}"
+        graph = build_gauge_graph(
+            model=model,
+            log_path=log_path.as_posix(),
+            n_subsample=n_subsample,
+            n_threads=threads,
+            reference_scale_height=target_height,
         )
         cmd = [
             VMAF_FFMPEG,
@@ -276,20 +319,30 @@ async def _evaluate_quality(
     quality: int,
     *,
     height: int | None,
+    target_height: int | None = None,
     work_dir: Path,
 ) -> tuple[float, float]:
     """Encode every sample at `quality`, measure VMAF, return
-    (mean of means, min of perc5s) — worst-sample-pessimistic on purpose."""
+    (mean of means, min of perc5s) — worst-sample-pessimistic on purpose.
+
+    Downscale jobs carry target_height through both halves: the sample
+    encodes get the scale filter and the sample gauges score against the
+    downscaled reference — the search optimizes quality-at-target,
+    consistent with the full-file gate."""
     means: list[float] = []
     perc5s: list[float] = []
     for sample in samples:
         out = work_dir / f"{sample.stem}_q{quality}{sample.suffix}"
-        cmd = build_encode_command(codec, backend, str(sample), str(out), quality)
+        cmd = build_encode_command(
+            codec, backend, str(sample), str(out), quality, target_height=target_height
+        )
         result = await run_encode(cmd, total_duration=SAMPLE_SECONDS)
         if not result.success:
             raise VmafError(f"Sample encode failed at q={quality}: {result.error_message}")
         # Samples are short — score every frame.
-        score = await measure_vmaf(sample, out, height=height, n_subsample=1)
+        score = await measure_vmaf(
+            sample, out, height=height, target_height=target_height, n_subsample=1
+        )
         means.append(score.mean)
         perc5s.append(score.perc5)
     return (sum(means) / len(means), min(perc5s))
@@ -304,6 +357,7 @@ async def find_quality_for_target(
     perc5_floor: float,
     duration: float,
     height: int | None = None,
+    target_height: int | None = None,
 ) -> QualitySearchResult | None:
     """Binary-search the largest reference quality (smallest file) whose
     sample encodes still meet mean ≥ target_vmaf AND perc5 ≥ perc5_floor.
@@ -324,7 +378,13 @@ async def find_quality_for_target(
 
         async def meets(q: int) -> tuple[bool, float, float]:
             mean, perc5 = await _evaluate_quality(
-                samples, codec, backend, q, height=height, work_dir=work_dir
+                samples,
+                codec,
+                backend,
+                q,
+                height=height,
+                target_height=target_height,
+                work_dir=work_dir,
             )
             ok = mean >= target_vmaf and perc5 >= perc5_floor
             logger.info(
