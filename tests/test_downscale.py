@@ -241,15 +241,22 @@ async def test_register_persists_supports_downscale(client: AsyncClient, app):
 
 
 async def test_pending_downscale_flags_missing_capable_worker(client: AsyncClient, app):
-    """G: a pending downscale job with no advertising worker online says so
-    on the queue page (the expected state between the scheduler deploy and
-    the fleet's worker upgrade) — and the hint clears once one joins."""
+    """G: with workers ONLINE but none advertising supports_downscale, a
+    pending downscale job says so on the queue page (the expected state
+    between the scheduler deploy and the fleet's worker upgrade). With the
+    fleet fully offline the row falls back to the generic awaiting-capacity
+    copy instead (the codec hint's rule — an empty fleet isn't a downscale
+    problem), and the hint clears once an upgraded worker joins."""
     await _seed_downscale_job(app)
     html = (await client.get("/partials/jobs")).text
-    assert "downscale-capable" in html
+    assert "downscale-capable" not in html  # zero workers online ≠ downscale gap
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
+        await register_worker(client, c, "old-fleet", ["hevc"])
+        html = (await client.get("/partials/jobs")).text
+        assert "downscale-capable" in html
+
         await register_worker(client, c, "upgraded", ["hevc"], supports_downscale=True)
     html = (await client.get("/partials/jobs")).text
     assert "downscale-capable" not in html

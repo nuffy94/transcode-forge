@@ -68,7 +68,7 @@
                 {% elif job.status in ('pending', 'queued') %}
                     {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
                     <span class="font-mono text-2xs italic uppercase tracking-stamp text-forge-brass" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }} — the job waits until one joins.">Needs {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
-                    {% elif job.target_height and not downscale_online %}
+                    {% elif online_codecs and job.target_height and not downscale_online %}
                     <span class="font-mono text-2xs italic uppercase tracking-stamp text-forge-brass" title="No online worker supports resolution downscaling yet — the job waits until an upgraded worker joins.">Needs downscale-capable worker</span>
                     {% else %}
                     <span class="font-mono text-2xs text-forge-mute italic uppercase tracking-stamp">{% if job.status == 'pending' %}Awaiting capacity{% else %}In library queue{% endif %}</span>

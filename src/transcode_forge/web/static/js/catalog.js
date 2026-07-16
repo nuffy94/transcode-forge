@@ -46,6 +46,20 @@ function selectedHeight() {
     return Number(document.getElementById('queue-resolution')?.value) || null;
 }
 
+/* A downscale pick must never outlive the surface it was made on — a
+ * hidden selector silently driving the destructive dial is how a plain
+ * "Queue" click would replace originals with downscaled encodes. Called
+ * whenever the selector's surface hides (movies: selection cleared and
+ * the bulk bar with it; TV: leaving the files tab). */
+function resetResolutionSelector(reload) {
+    const sel = document.getElementById('queue-resolution');
+    if (!sel || !sel.value) return;
+    sel.value = '';
+    const warn = document.getElementById('resolution-warning');
+    if (warn) warn.style.display = 'none';
+    if (reload) reload();
+}
+
 /* Client mirror of the queue endpoint's validity matrix (api/routes/media.py
  * — the source of truth; the server skip-counts anything stale here). With a
  * downscale selected, already-HEVC/AV1 files become queueable (same-codec
@@ -253,6 +267,9 @@ function updateBulkBar() {
     const count = mv.selected.size;
     setText('bulk-count', count);
     bar.style.display = count > 0 ? 'inline-flex' : 'none';
+    // Bar hidden = the downscale pick is invisible; drop it and re-render
+    // so per-row Queue buttons fall back to the no-downscale rule.
+    if (count === 0) resetResolutionSelector(() => loadMovies(mv.page));
 }
 
 function setText(id, value) {
@@ -402,6 +419,9 @@ function switchTvView(view) {
     document.getElementById('files-view').classList.toggle('hidden', view === 'shows');
     document.getElementById('tab-shows').classList.toggle('is-active', view === 'shows');
     document.getElementById('tab-files').classList.toggle('is-active', view !== 'shows');
+    // The resolution selector lives on the files tab; leaving it must not
+    // let a stale downscale pick ride the by-show "Queue N" buttons.
+    if (view !== 'files') resetResolutionSelector();
     if (view === 'files') loadTvFiles();
 }
 
