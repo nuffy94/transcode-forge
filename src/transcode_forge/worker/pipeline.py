@@ -236,13 +236,23 @@ async def run_pipeline(
 
     # Defense in depth: the scheduler validates strictly-downward heights at
     # queue time, but this pipeline replaces originals — never trust a job
-    # row with an upscale/no-op scale.
-    if target_height is not None and source_height is not None and source_height <= target_height:
-        raise PipelineError(
-            "TRANSCODE",
-            f"Refusing non-downward scale: source is {source_height}p,"
-            f" requested target is {target_height}p",
-        )
+    # row with an upscale/no-op scale. An unknowable source height (probe
+    # failed) fails CLOSED for downscale jobs: an obedient upscale would
+    # pass VERIFY (which pins output == target, knowing nothing of the
+    # source), and after CLEANUP there is no backup left to recover.
+    if target_height is not None:
+        if source_height is None:
+            raise PipelineError(
+                "TRANSCODE",
+                "Downscale requested but the source height could not be probed —"
+                " refusing to encode blind (the upscale guard cannot run)",
+            )
+        if source_height <= target_height:
+            raise PipelineError(
+                "TRANSCODE",
+                f"Refusing non-downward scale: source is {source_height}p,"
+                f" requested target is {target_height}p",
+            )
 
     # The SEARCH keeps its historical sample bars (target mean, target-2
     # perc5) so its CRF picks don't shift; only the GATE moved to the

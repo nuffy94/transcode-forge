@@ -33,6 +33,17 @@ class Derivative(BaseModel):
     created_at: str
 
 
+def target_resolution_for(target_height: int | None, source_resolution: str | None) -> str:
+    """The derivative's target_resolution: height-keyed for downscale jobs
+    ("1080p") so different heights are different derivatives; otherwise the
+    source resolution (the pipeline never rescales without target_height).
+
+    ONE home on purpose — the worker's key builder (http_agent) and the
+    scheduler's register-derivative row (worker_api) both call this, so the
+    stored row can never drift from the key it describes."""
+    return f"{target_height}p" if target_height else (source_resolution or "")
+
+
 def compute_derivative_key(
     *,
     source_path: str,

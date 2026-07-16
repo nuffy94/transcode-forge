@@ -196,6 +196,41 @@ async def test_pipeline_refuses_upscale_even_if_job_row_lies(tmp_path):
     assert source.read_bytes() == b"x" * 10000
 
 
+async def test_pipeline_fails_closed_when_source_height_unknowable(tmp_path):
+    """V: with a downscale requested, a failed pre-flight probe must fail
+    CLOSED. Proceeding would run the upscale guard on nothing — and an
+    obedient upscale passes VERIFY (which pins output == target, knowing
+    nothing of the source), swaps, and post-CLEANUP there is no backup.
+    Found by the PR #70 review with a live repro."""
+    from transcode_forge.scanner.probe import ProbeError
+    from transcode_forge.worker.pipeline import PipelineError, run_pipeline
+
+    source = tmp_path / "test.mkv"
+    source.write_bytes(b"x" * 10000)
+
+    async def probe_fails(path):
+        raise ProbeError("ffprobe timed out")
+
+    with (
+        patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
+        patch("transcode_forge.worker.pipeline.ffprobe", side_effect=probe_fails),
+        patch("transcode_forge.worker.pipeline._decode_check"),
+    ):
+        with pytest.raises(PipelineError) as exc_info:
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="j1",
+                worker_id="w1",
+                target_height=1080,
+            )
+    assert exc_info.value.step == "TRANSCODE"
+    assert source.read_bytes() == b"x" * 10000  # original untouched
+
+
 async def test_pipeline_downscale_happy_path_wires_everything(tmp_path):
     """W: target_height reaches the encoder command (scale filter), the
     gauge (target_height kwarg + source height for context), and the
@@ -341,6 +376,29 @@ async def test_crf_search_forwards_target_height(tmp_path):
     gauge_kwargs = [c["gauge"] for c in eval_calls if "gauge" in c]
     assert encode_cmds and all(any("scale=-2:1080" in arg for arg in cmd) for cmd in encode_cmds)
     assert gauge_kwargs and all(k.get("target_height") == 1080 for k in gauge_kwargs)
+
+
+def test_target_resolution_rule_has_one_home():
+    """W: the height→resolution rule is a single shared helper — the worker
+    key builder and the scheduler's register-derivative row both import it,
+    so the stored row can never drift from the key it describes."""
+    import inspect
+
+    from transcode_forge.models.derivative import target_resolution_for
+
+    assert target_resolution_for(1080, "3840x2160") == "1080p"
+    assert target_resolution_for(720, None) == "720p"
+    assert target_resolution_for(None, "3840x2160") == "3840x2160"
+    assert target_resolution_for(None, None) == ""
+
+    # Both call sites use the helper, not a re-implementation.
+    from transcode_forge.api.routes import worker_api
+    from transcode_forge.worker import http_agent
+
+    assert "target_resolution_for" in inspect.getsource(worker_api.register_derivative)
+    assert "target_resolution_for" in inspect.getsource(
+        http_agent.HttpWorkerAgent._derivative_key_for
+    )
 
 
 def test_derivative_key_forks_by_target_height():

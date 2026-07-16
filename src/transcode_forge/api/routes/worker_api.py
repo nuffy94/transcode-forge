@@ -652,13 +652,13 @@ async def register_derivative(
 
     # Extract the job fields needed for derivative registration. The key
     # is goal-keyed; backend/crf/preset are recipe attributes on the row.
+    from transcode_forge.models.derivative import target_resolution_for
+
     source_resolution = getattr(job, "source_resolution", "") or None
     source_audio_codec = getattr(job, "source_audio_codec", "") or None
-    # Height-keyed for downscale jobs — must mirror the worker's
-    # _derivative_key_for so the row describes the key it's stored under.
-    target_resolution = (
-        f"{job.target_height}p" if job.target_height else (job.source_resolution or "")
-    )
+    # Height-keyed for downscale jobs — the SAME helper the worker's key
+    # builder uses, so the row always describes the key it's stored under.
+    target_resolution = target_resolution_for(job.target_height, job.source_resolution)
     target_audio_codec = getattr(job, "target_audio_codec", "") or "copy"
     crf = body.resolved_crf if body.resolved_crf is not None else job.quality_value
     preset = getattr(job, "preset", "") or ""

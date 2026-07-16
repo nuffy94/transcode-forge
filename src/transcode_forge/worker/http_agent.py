@@ -544,18 +544,19 @@ class HttpWorkerAgent:
         target codec/resolution/audio + target VMAF. Recipe details
         (backend/crf/preset) deliberately don't participate — any worker's
         gate-passing encode satisfies the same goal."""
-        from transcode_forge.models.derivative import compute_derivative_key
+        from transcode_forge.models.derivative import (
+            compute_derivative_key,
+            target_resolution_for,
+        )
 
         return compute_derivative_key(
             source_path=job.source_path,
             source_resolution=job.source_resolution or "",
             source_audio_codec=getattr(job, "source_audio_codec", "") or "",
-            # A downscale job's goal is height-keyed ("1080p") so different
-            # heights are different derivatives; otherwise the target keeps
-            # the source resolution. Audio streams are always copied.
-            target_resolution=(
-                f"{job.target_height}p" if job.target_height else (job.source_resolution or "")
-            ),
+            # Height-keyed for downscale jobs (shared rule — the scheduler's
+            # register-derivative row uses the same helper). Audio streams
+            # are always copied.
+            target_resolution=target_resolution_for(job.target_height, job.source_resolution),
             target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
             target_codec=job.target_codec or "hevc",
             target_vmaf=job.target_vmaf,
