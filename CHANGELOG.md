@@ -4,6 +4,49 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-16
+
+### Added
+- **Resolution downscale — the third size dial** (codec → quality →
+  resolution). The Movies/TV bulk bars gain a resolution selector
+  (keep / 1080p / 720p; strictly below the source height — never an
+  upscale or a no-op). The encode scales with `scale=-2:H` (aspect
+  preserved, width always even) and VERIFY pins the output height
+  exactly. The quality gate scores **at the target resolution**: the
+  reference is the source downscaled with pinned lanczos inside the
+  measurement graph and the VMAF model follows the target height, so the
+  gate asks "did the encode add damage beyond the downscale you asked
+  for?" — the absolute safety floors keep their meaning unchanged. The
+  CRF search optimizes quality-at-target the same way. Downscale
+  replaces the original on filesystem libraries (the UI says so
+  plainly); S3 libraries keep their master untouched and derivative
+  keys fork by height. (#69, #70)
+- **Same-codec shrink.** Already-HEVC/AV1 files become queueable when —
+  and only when — a downscale is selected: hevc→hevc / av1→av1 by
+  default, an explicit codec pick wins, and av1 never converts to hevc.
+  (#69)
+- **Safe mixed-fleet rollout.** Workers advertise `supports_downscale`
+  at registration (migration 0012) and only upgraded workers can claim
+  downscale jobs; pending ones show "Needs downscale-capable worker"
+  until one is online. Deploy the scheduler first, upgrade workers
+  whenever — old workers keep converting h264 exactly as before. (#69,
+  #70)
+
+### Changed
+- **The VMAF measurement graph is now a pinned contract.** The gauge's
+  filter graph comes from one pure function guarded by byte-for-byte
+  golden tests — a scoring-behavior change now fails CI instead of
+  shipping silently. No-downscale scores are bit-identical to 0.9.8.
+  (#70)
+
+### Fixed
+- Pre-release hardening from the adversarial review of #69/#70: downscale
+  jobs fail closed when the source height can't be probed (the upscale
+  guard never runs blind); a resolution pick can no longer survive its
+  selector being hidden and silently ride other queue buttons (it resets
+  whenever its surface hides); and the pending-downscale hint no longer
+  misattributes a fully-offline fleet as a capability gap.
+
 ## [0.9.8] - 2026-07-14
 
 ### Fixed
