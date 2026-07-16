@@ -186,7 +186,13 @@ class TestWorkerAgentS3Failures:
         agent._client.register_derivative.assert_not_awaited()
         assert agent._current_job_id is None
 
-    async def test_register_derivative_failure_fails_job_not_worker(self, agent: HttpWorkerAgent):
+    async def test_register_derivative_failure_journals_not_fails(self, agent: HttpWorkerAgent):
+        """The upload succeeded and the outcome is COMPLETE — a failed
+        registration POST is a DELIVERY problem, not an outcome change
+        (worker-resilience spec D1). Both reports wait in the outbox,
+        register strictly ahead of complete, and the job is never lied
+        into FAILED. (Pre-outbox, this exact scenario reported FAILED on
+        a successful encode.)"""
         scripted = _ScriptedClient()
         job = _make_s3_job()
         agent._client.register_derivative.side_effect = httpx.HTTPError("500 from scheduler")
@@ -200,13 +206,10 @@ class TestWorkerAgentS3Failures:
         ):
             await agent._process_job(job)
 
-        # The upload succeeded but registration failed — the job ends FAILED
-        # (the S3 object may be orphaned; the job stays retryable), and
-        # /complete is never reported for an unregistered derivative.
-        agent._client.register_derivative.assert_awaited_once()
-        agent._client.failed.assert_awaited_once()
-        assert agent._client.failed.await_args.kwargs["job_id"] == job.id
-        agent._client.complete.assert_not_awaited()
+        agent._client.register_derivative.assert_awaited()  # attempted, refused
+        agent._client.failed.assert_not_awaited()  # the outcome never flips
+        agent._client.complete.assert_not_awaited()  # never overtakes register
+        assert [e.kind for e in agent.outbox.entries()] == ["register_derivative", "complete"]
         assert agent._current_job_id is None
 
     async def test_dedup_hit_completes_without_encoding(self, agent: HttpWorkerAgent):

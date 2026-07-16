@@ -37,6 +37,13 @@ class ScratchManager:
     # This prevents us from filling the disk completely.
     DISK_MARGIN_BYTES = 100 * 1024 * 1024  # 100 MB
 
+    # Non-job entries that must survive EVERY cleanup path: the worker's
+    # durable state (milestone outbox — undelivered terminal reports)
+    # defaults to <scratch_root>/state. Eating it on shutdown/orphan
+    # cleanup would silently lose finished work's reports — the exact
+    # failure the outbox exists to prevent (worker-resilience spec D1).
+    RESERVED_DIRS = ("state",)
+
     def __init__(self, scratch_root: Path | str) -> None:
         """Initialize the scratch manager.
 
@@ -118,7 +125,7 @@ class ScratchManager:
         deleted_count = 0
 
         for job_dir in self.scratch_root.glob("*_*"):
-            if not job_dir.is_dir():
+            if not job_dir.is_dir() or job_dir.name in self.RESERVED_DIRS:
                 continue
 
             try:
@@ -137,20 +144,24 @@ class ScratchManager:
             logger.info("Orphan cleanup removed %d directories", deleted_count)
 
     async def cleanup_on_shutdown(self) -> None:
-        """Clean up all scratch directories on worker shutdown.
+        """Clean up per-job scratch directories on worker shutdown.
 
         Called from http_agent._cleanup() to ensure no stale files remain
-        after an unclean shutdown.
+        after an unclean shutdown. Deliberately deletes JOB directories,
+        never the whole root: the durable state dir (outbox) lives under
+        the root by default and must outlive the process — an undelivered
+        completion report is the one thing a restart exists to save.
         """
         logger.info("Scratch cleanup on shutdown...")
-        try:
-            await asyncio.to_thread(shutil.rmtree, self.scratch_root)
-            logger.info("Scratch root cleared: %s", self.scratch_root)
-        except FileNotFoundError:
-            # Already deleted — no-op
-            pass
-        except OSError as e:
-            logger.warning("Error during scratch cleanup on shutdown: %s", e)
+        for job_dir in self.scratch_root.glob("*_*"):
+            if not job_dir.is_dir() or job_dir.name in self.RESERVED_DIRS:
+                continue
+            try:
+                await asyncio.to_thread(shutil.rmtree, job_dir)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning("Error removing scratch directory %s: %s", job_dir, e)
 
     def _get_free_space(self) -> int:
         """Get free disk space in bytes at the scratch root.

@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     # Defaults to a temp directory; should be fast local storage with ample space.
     scratch_dir: str = ""
 
+    # Durable worker state (the milestone outbox — undelivered terminal
+    # reports). Empty → <scratch root>/state, which every scratch cleanup
+    # path explicitly spares. Docker workers should mount this dir (the
+    # compose files ship a named volume) so delivery also survives
+    # container recreation, not just process restarts.
+    worker_state_dir: str = ""
+
     @model_validator(mode="after")
     def _validate_vmaf_floor_pair(self) -> "Settings":
         """Fail fast on an impossible gate: per-frame perc5 can never exceed
