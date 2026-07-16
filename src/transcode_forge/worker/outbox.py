@@ -50,7 +50,11 @@ class Outbox:
     """A directory of undelivered milestone reports.
 
     Single-writer by construction (one agent process, one job at a time);
-    no locking. Durability is honest, not heroic: entries survive process
+    no locking. File I/O is deliberately synchronous on the event loop:
+    entries are tiny JSON and the claim fence keeps the journal to a
+    handful of files, so the simplicity of never reasoning about
+    interleaved async writes beats the microseconds a thread hop would
+    save. Durability is honest, not heroic: entries survive process
     restarts and scheduler outages on any worker whose state dir is real
     storage; a Docker worker additionally survives container recreation
     only if the compose file mounts the state dir (release note says so).

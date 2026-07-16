@@ -10,9 +10,13 @@ Classification:
 - RETRYABLE — transport-level failures (timeouts, connection errors,
   protocol hiccups) and 5xx: the scheduler may recover; the request may
   never have arrived.
-- TERMINAL — 4xx: the scheduler received and REFUSED the request
-  (auth, ownership moved, validation). Retrying the same request can
-  never succeed; the caller's context decides what refusal means.
+- AUTH — 401: the CREDENTIAL was refused, which says nothing about the
+  job the report describes. A revoked/rotated token must never cost a
+  finished job its report — callers keep the work and scream.
+- TERMINAL — other 4xx: the scheduler received and REFUSED the request
+  (ownership moved, job gone, conflicting outcome, validation).
+  Retrying the same request can never succeed; the caller's context
+  decides what refusal means.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import httpx
 
 class ErrorClass(StrEnum):
     RETRYABLE = "retryable"
+    AUTH = "auth"
     TERMINAL = "terminal"
 
 
@@ -36,7 +41,10 @@ def classify_error(exc: BaseException) -> ErrorClass:
     capped backoff than drop a report that had a chance.
     """
     if isinstance(exc, httpx.HTTPStatusError):
-        if 400 <= exc.response.status_code < 500:
+        status = exc.response.status_code
+        if status == 401:
+            return ErrorClass.AUTH
+        if 400 <= status < 500:
             return ErrorClass.TERMINAL
         return ErrorClass.RETRYABLE
     return ErrorClass.RETRYABLE

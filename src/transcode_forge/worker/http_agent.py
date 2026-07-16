@@ -12,6 +12,7 @@ import asyncio
 import logging
 import signal
 import socket
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,14 @@ from transcode_forge.worker.storage.filesystem import (
 from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
+
+
+class DrainResult(StrEnum):
+    """Outcome of one outbox drain pass."""
+
+    EMPTY = "empty"  # everything delivered or terminally settled
+    BLOCKED = "blocked"  # retryable failures remain — try again later
+    AUTH_BLOCKED = "auth_blocked"  # entries kept behind a refused credential
 
 
 class HttpWorkerAgent:
@@ -103,17 +112,9 @@ class HttpWorkerAgent:
                 "cannot run here. Update the worker image to restore it."
             )
 
-        # Drain undelivered reports from a previous life BEFORE
-        # re-registering: registration releases this worker's active jobs
-        # server-side, so a finished-but-unreported job must land its
-        # report first or the release would requeue (and re-run) finished
-        # work. The token is already bound to our worker identity, so
-        # delivery needs no fresh registration. Best effort — anything
-        # still undelivered retries at the job loop's claim fence.
-        if self.outbox.pending_job_ids():
-            logger.info("Draining outbox from a previous run before registering")
-            if not await self._drain_outbox():
-                logger.warning("Outbox still has undelivered reports — they retry before any claim")
+        await self._drain_before_register()
+        if self._shutting_down:
+            return
 
         # Registration retries forever on transport/5xx (a scheduler
         # restart must never kill fleet nodes) with a loud periodic ERROR;
@@ -221,14 +222,17 @@ class HttpWorkerAgent:
         # signal — otherwise the scheduler shows "heartbeat lost" (and may
         # treat the worker as dead) for the entire tail of the encode.
         while not self._shutting_down or self._current_job_id is not None:
-            status = "busy" if self._current_job_id else "online"
-            # While a job's terminal report is still undelivered, keep
-            # NAMING that job: the reconciliation sweep (PR A) requeues a
-            # live worker's job when its heartbeat disowns it past grace —
-            # a delivery merely delayed by an outage must not read as
-            # abandonment, or the sweep would re-run finished work.
-            named_job = self._current_job_id or self.outbox.oldest_pending_job_id()
+            # The whole iteration is fenced (spec D2) — even the outbox
+            # read below can raise (a stale state-dir mount) and a disk
+            # hiccup must not take the gather() and the job loop with it.
             try:
+                status = "busy" if self._current_job_id else "online"
+                # While a job's terminal report is still undelivered, keep
+                # NAMING that job: the reconciliation sweep (PR A) requeues a
+                # live worker's job when its heartbeat disowns it past grace —
+                # a delivery merely delayed by an outage must not read as
+                # abandonment, or the sweep would re-run finished work.
+                named_job = self._current_job_id or self.outbox.oldest_pending_job_id()
                 await self._client.heartbeat(
                     worker_id=self.worker_id,
                     status=status,
@@ -252,7 +256,7 @@ class HttpWorkerAgent:
                 # before that job could ever be re-claimed here (a stale
                 # attempt-1 report landing on attempt-2 is the
                 # successful-job-marked-failed lie).
-                if not await self._drain_outbox():
+                if await self._drain_outbox() is not DrainResult.EMPTY:
                     await asyncio.sleep(self._claim_backoff.next_delay())
                     continue
                 job_dict = await self._client.claim_job(worker_id=self.worker_id)
@@ -623,6 +627,56 @@ class HttpWorkerAgent:
 
     # ── Milestone delivery (spec D1) ──────────────────────────────────
 
+    async def _drain_before_register(self) -> None:
+        """Deliver every journaled report from a previous life BEFORE
+        re-registering, retrying until the outbox settles.
+
+        Registration releases this worker's active jobs server-side, so a
+        finished-but-unreported job would be requeued — and its later
+        delivery refused as ownership-moved and discarded. One badly-timed
+        scheduler blip at worker restart would silently lose finished work
+        (the review-confirmed CRITICAL); a single best-effort pass is not
+        enough. The deliberate cost: a worker with a stuck outbox stays
+        UNREGISTERED (invisible) through a long scheduler outage — it
+        couldn't claim anything anyway (the job loop's fence), and
+        invisibility beats silent data loss.
+
+        AUTH-blocked entries end the wait: registration will hit the same
+        credential wall and exit loudly, and the entries stay journaled
+        for the next boot. The token is already bound to our worker
+        identity, so delivery itself needs no fresh registration.
+        """
+        drain_backoff = Backoff(base=1.0, cap=60.0)
+        attempt = 0
+        announced = False
+        while not self._shutting_down:
+            try:
+                result = await self._drain_outbox()
+            except Exception as e:
+                result = DrainResult.BLOCKED
+                logger.error("Outbox drain failed: %r", e)
+            if result is DrainResult.EMPTY:
+                return
+            if result is DrainResult.AUTH_BLOCKED:
+                logger.error(
+                    "Outbox delivery is blocked on credentials — proceeding to "
+                    "registration, which will surface the same auth failure loudly"
+                )
+                return
+            if not announced:
+                logger.info("Draining outbox from a previous run before registering")
+                announced = True
+            attempt += 1
+            delay = drain_backoff.next_delay()
+            log = logger.error if attempt % 10 == 0 else logger.warning
+            log(
+                "Outbox still has undelivered reports (attempt %d) — retrying in "
+                "%.1fs before registering",
+                attempt,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
     async def _deliver(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
         """Journal a milestone report, then attempt delivery now.
 
@@ -649,25 +703,47 @@ class HttpWorkerAgent:
         except Exception as e:
             logger.error("Outbox drain failed: %r", e)
 
-    async def _drain_outbox(self) -> bool:
-        """One delivery pass over the outbox. True = empty afterwards.
+    async def _drain_outbox(self) -> DrainResult:
+        """One delivery pass over the outbox.
 
         Per-job chains are ordered: a RETRYABLE failure blocks the rest of
         that job's chain (an S3 complete never overtakes its
         register_derivative); other jobs' chains continue. A TERMINAL
-        refusal (4xx — ownership moved to another worker, job deleted,
-        conflicting outcome already recorded) discards the entry with a
-        WARN: the scheduler's copy of reality won.
+        refusal (ownership moved to another worker, job deleted,
+        conflicting outcome already recorded) discards the entry — the
+        scheduler's copy of reality won — at WARN, or at ERROR for a 422,
+        which would mean a version-skew/validation bug ate a real report
+        and someone must hear about it. An AUTH refusal (401) KEEPS the
+        entry and screams: a revoked token says nothing about the job's
+        outcome, and losing a finished job's report to a credential
+        rotation is worse than a loudly stuck outbox.
         """
         blocked: set[str] = set()
+        auth_blocked = False
         for entry in self.outbox.entries():
             if entry.job_id in blocked:
                 continue
             try:
                 await self._send_report(entry.job_id, entry.kind, entry.payload)
             except Exception as e:
-                if classify_error(e) is ErrorClass.TERMINAL:
-                    logger.warning(
+                cls = classify_error(e)
+                if cls is ErrorClass.AUTH:
+                    logger.error(
+                        "Outbox: delivery of %s for job %s refused by AUTH (%r) — "
+                        "keeping the entry; fix TF_WORKER_TOKEN",
+                        entry.kind,
+                        entry.job_id,
+                        e,
+                    )
+                    self.outbox.bump_attempts(entry)
+                    blocked.add(entry.job_id)
+                    auth_blocked = True
+                elif cls is ErrorClass.TERMINAL:
+                    is_validation = (
+                        isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 422
+                    )
+                    log = logger.error if is_validation else logger.warning
+                    log(
                         "Outbox: scheduler refused %s for job %s (%r) — discarding, "
                         "its copy of reality wins",
                         entry.kind,
@@ -687,7 +763,9 @@ class HttpWorkerAgent:
                     blocked.add(entry.job_id)
                 continue
             self.outbox.delete(entry)
-        return not self.outbox.entries()
+        if not self.outbox.entries():
+            return DrainResult.EMPTY
+        return DrainResult.AUTH_BLOCKED if auth_blocked else DrainResult.BLOCKED
 
     async def _send_report(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
         """One delivery attempt of one milestone report (raises on failure)."""
