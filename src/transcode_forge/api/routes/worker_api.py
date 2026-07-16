@@ -163,7 +163,7 @@ class CompleteRequest(BaseModel):
     predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
     predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
 
 
 # Worker-reported error messages can embed ffmpeg stderr; cap what we
@@ -194,7 +194,7 @@ class SkippedRequest(BaseModel):
     predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
     predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
 
 
 class CheckDerivativeRequest(BaseModel):
@@ -209,7 +209,7 @@ class RegisterDerivativeRequest(BaseModel):
     # register-derivative, so the job row doesn't have these yet).
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu)$")
+    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
 
 
 # ── Routes ────────────────────────────────────────────────────────────

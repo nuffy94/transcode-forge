@@ -32,7 +32,7 @@
             <p class="font-mono text-2xs text-forge-mute mt-0.5">{{ worker.host }}</p>
         </div>
         {% if worker.capabilities %}
-        <span class="forge-pill {% if 'qsv' in worker.capabilities or 'nvenc' in worker.capabilities %}forge-pill--running{% else %}forge-pill--pending{% endif %}">
+        <span class="forge-pill {% if 'qsv' in worker.capabilities or 'nvenc' in worker.capabilities or 'quadra' in worker.capabilities %}forge-pill--running{% else %}forge-pill--pending{% endif %}">
             {{ worker.capabilities[0]|upper }}
         </span>
         {% endif %}

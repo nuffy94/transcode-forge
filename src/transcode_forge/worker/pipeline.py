@@ -171,7 +171,7 @@ async def run_pipeline(
     Args:
         source_path: Path to the original media file.
         codec: Target codec ('hevc' | 'av1').
-        backend: Hardware axis ('qsv' | 'nvenc' | 'cpu').
+        backend: Hardware axis ('qsv' | 'nvenc' | 'cpu' | 'quadra').
         quality: Reference-scale quality (mapped per encoder); with
             crf_search this is the fallback, not the primary knob.
         source_duration: Duration of source file in seconds.

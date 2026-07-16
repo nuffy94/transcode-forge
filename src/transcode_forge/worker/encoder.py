@@ -67,6 +67,11 @@ _QUALITY_MAP: dict[tuple[str, str], tuple[int, int, int]] = {
     ("av1", "cpu"): (7, 0, 63),
     ("av1", "nvenc"): (6, 0, 51),
     ("av1", "qsv"): (4, 1, 51),
+    # quadra offsets are PLACEHOLDERS (0) until the S4c calibration pass
+    # (plans/vpu-bench-spec.md, Phase 2 step 1) — do NOT trust quality
+    # parity with x265 before then.
+    ("hevc", "quadra"): (0, 0, 51),
+    ("av1", "quadra"): (0, 0, 51),
 }
 
 
@@ -309,6 +314,58 @@ def build_av1_qsv_command(
     ]
 
 
+def build_hevc_quadra_command(
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
+) -> list[str]:
+    """NETINT Quadra ASIC HEVC (h265_ni_quadra_enc). The encode runs fully
+    off-CPU on the T1U; frames pass through system memory like every builder
+    here. CRF rate control via the encoder's xcoder-params bag."""
+    return [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-c:v",
+        "h265_ni_quadra_enc",
+        "-xcoder-params",
+        f"crf={map_quality('hevc', 'quadra', quality)}",
+        *_scale_args(target_height),
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
+def build_av1_quadra_command(
+    input_path: str,
+    output_path: str,
+    quality: int,
+    content: str | None = None,
+    target_height: int | None = None,
+) -> list[str]:
+    """NETINT Quadra ASIC AV1. 10-bit output is requested like everywhere
+    else; whether Quadra AV1 accepts p010le is probe-gated in hardware.py —
+    if the silicon can't, the pair is simply never advertised."""
+    return [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-c:v",
+        "av1_ni_quadra_enc",
+        "-xcoder-params",
+        f"crf={map_quality('av1', 'quadra', quality)}",
+        *_scale_args(target_height),
+        "-pix_fmt",
+        "p010le",
+        *_COMMON_TAIL,
+        output_path,
+    ]
+
+
 # Two-axis lookup: (codec, backend) → builder. Adding VP9/AV2 later is a
 # new codec value plus builder entries here — nothing structural.
 ENCODER_BUILDERS: dict[tuple[str, str], Callable[..., list[str]]] = {
@@ -318,6 +375,8 @@ ENCODER_BUILDERS: dict[tuple[str, str], Callable[..., list[str]]] = {
     ("av1", "cpu"): build_av1_cpu_command,
     ("av1", "nvenc"): build_av1_nvenc_command,
     ("av1", "qsv"): build_av1_qsv_command,
+    ("hevc", "quadra"): build_hevc_quadra_command,
+    ("av1", "quadra"): build_av1_quadra_command,
 }
 
 
@@ -335,7 +394,7 @@ def build_encode_command(
 
     Args:
         codec: Target codec ('hevc' | 'av1').
-        backend: Hardware axis ('cpu' | 'qsv' | 'nvenc').
+        backend: Hardware axis ('cpu' | 'qsv' | 'nvenc' | 'quadra').
         quality: Reference-scale quality (x265-CRF-like); mapped per encoder.
         content: Optional content hint ('anime' enables x265 aq-mode=3).
         target_height: Downscale height (`scale=-2:H`); None = keep source
