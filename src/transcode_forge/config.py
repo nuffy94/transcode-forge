@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     worker_max_concurrent: int = Field(default=1, ge=1, le=4)
     preferred_backend: str = Field(
         default="auto",
-        pattern=r"^(auto|qsv|nvenc|cpu)$",
+        pattern=r"^(auto|qsv|nvenc|cpu|quadra)$",
         validation_alias=AliasChoices("tf_preferred_backend", "tf_preferred_encoder"),
     )
     path_map: dict[str, str] = Field(default_factory=dict)

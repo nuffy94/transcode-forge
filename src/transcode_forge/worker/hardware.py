@@ -1,10 +1,11 @@
 """Hardware acceleration detection — runs once at worker startup.
 
-Capability is detected as (codec, backend) pairs: which of the six real
-encoders (libx265, libsvtav1, hevc_qsv, av1_qsv, hevc_nvenc, av1_nvenc)
-actually work on this node. Hardware probes do a real 10-bit test encode —
-the pipeline outputs 10-bit everywhere, so an encoder that can't take
-p010le (e.g. hevc_qsv on Skylake) is not usable and must not be advertised.
+Capability is detected as (codec, backend) pairs: which of the real
+encoders (libx265, libsvtav1, hevc_qsv, av1_qsv, hevc_nvenc, av1_nvenc,
+h265_ni_quadra_enc, av1_ni_quadra_enc) actually work on this node.
+Hardware probes do a real 10-bit test encode — the pipeline outputs 10-bit
+everywhere, so an encoder that can't take p010le (e.g. hevc_qsv on
+Skylake) is not usable and must not be advertised.
 """
 
 import asyncio
@@ -23,8 +24,13 @@ _ENCODER_NAMES: dict[tuple[str, str], str] = {
     ("av1", "qsv"): "av1_qsv",
     ("hevc", "nvenc"): "hevc_nvenc",
     ("av1", "nvenc"): "av1_nvenc",
+    ("hevc", "quadra"): "h265_ni_quadra_enc",
+    ("av1", "quadra"): "av1_ni_quadra_enc",
 }
 
+# quadra is deliberately NOT in the auto-priority order: it is only used
+# when a worker sets TF_PREFERRED_BACKEND=quadra (where an ASIC slots for
+# mixed fleets is a later decision, not v1).
 _BACKEND_PRIORITY = ("qsv", "nvenc", "cpu")
 
 
@@ -159,6 +165,26 @@ async def detect_nvenc(encoder: str = "hevc_nvenc", *, encoder_list: str | None 
     return False
 
 
+async def detect_quadra(
+    encoder: str = "h265_ni_quadra_enc", *, encoder_list: str | None = None
+) -> bool:
+    """Check if a NETINT Quadra encoder works, including 10-bit input.
+
+    The ni encoders only exist in NETINT's patched ffmpeg build, and the
+    test encode only succeeds when a Quadra device answers — so a stock
+    worker (or a NETINT build with no card) never advertises quadra."""
+    listed = encoder_list if encoder_list is not None else await _list_encoders()
+    if encoder not in listed:
+        logger.info("%s not found in ffmpeg build", encoder)
+        return False
+    code, output = await _run_probe(_test_encode_cmd([], encoder), timeout=15.0)
+    if code == 0:
+        logger.info("Quadra (%s) detected and working", encoder)
+        return True
+    logger.info("%s listed but 10-bit test encode failed: %s", encoder, output[:200])
+    return False
+
+
 async def detect_capabilities() -> HardwareCapabilities:
     """Detect all (codec, backend) capabilities for this node.
 
@@ -180,6 +206,8 @@ async def detect_capabilities() -> HardwareCapabilities:
         ("av1", "qsv"): detect_qsv("av1_qsv", encoder_list=encoder_list),
         ("hevc", "nvenc"): detect_nvenc("hevc_nvenc", encoder_list=encoder_list),
         ("av1", "nvenc"): detect_nvenc("av1_nvenc", encoder_list=encoder_list),
+        ("hevc", "quadra"): detect_quadra("h265_ni_quadra_enc", encoder_list=encoder_list),
+        ("av1", "quadra"): detect_quadra("av1_ni_quadra_enc", encoder_list=encoder_list),
     }
     results = await asyncio.gather(*hw_probes.values())
     pairs.extend(pair for pair, ok in zip(hw_probes.keys(), results, strict=True) if ok)
@@ -196,6 +224,8 @@ async def detect_capabilities() -> HardwareCapabilities:
         backends.insert(0, "qsv")
     if any(b == "nvenc" for _, b in pairs):
         backends.insert(0 if "qsv" not in backends else 1, "nvenc")
+    if any(b == "quadra" for _, b in pairs):
+        backends.insert(backends.index("cpu"), "quadra")
 
     caps = HardwareCapabilities(
         encoders=backends,
