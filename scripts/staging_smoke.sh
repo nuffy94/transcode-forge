@@ -13,15 +13,21 @@
 # Human-triggered by design: needs real ffmpeg time and a real file. Not CI.
 #
 # Usage:
-#   ./scripts/staging_smoke.sh /path/to/real-clip.mkv [hevc|av1]
+#   ./scripts/staging_smoke.sh /path/to/real-clip.mkv [hevc|av1] [1080|720]
+#
+# The optional third arg queues a DOWNSCALE job (target_height) — the
+# source must be strictly taller than the target or the queue endpoint
+# skip-counts it. A release that touches the downscale/gauge path must
+# smoke with a real downscale job, not just a plain conversion.
 #
 # Requirements: Linux/macOS, Docker + Compose, curl, jq, python3.
 # Walkthrough version (manual, same stack): docs/STAGING.md.
 
 set -euo pipefail
 
-FILE="${1:?usage: staging_smoke.sh /path/to/file.mkv [hevc|av1]}"
+FILE="${1:?usage: staging_smoke.sh /path/to/file.mkv [hevc|av1] [1080|720]}"
 CODEC="${2:-hevc}"
+HEIGHT="${3:-}"  # optional downscale target
 PORT="${TF_STAGING_PORT:-8001}"
 BASE="http://127.0.0.1:${PORT}"
 COMPOSE=(docker compose -f docker-compose.staging.yml --env-file .env.staging)
@@ -106,9 +112,11 @@ wait_for 180 "file to be cataloged" bash -c \
 FILE_ID=$(api GET "/api/media/movies?search=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))' "$BASENAME")" | jq -re '.data[0].id')
 SRC_SIZE=$(stat -c %s "$MEDIA_DIR/movies/$BASENAME" 2>/dev/null || stat -f %z "$MEDIA_DIR/movies/$BASENAME")
 
-say "6/8 queue for $CODEC"
-QUEUED=$(api POST /api/media/queue "{\"file_ids\": [\"$FILE_ID\"], \"codec\": \"$CODEC\"}" | jq -re '.queued')
-[ "$QUEUED" = "1" ] || fail "expected queued=1, got $QUEUED (already queued? not h264?)"
+say "6/8 queue for $CODEC${HEIGHT:+ @ ${HEIGHT}p downscale}"
+BODY="{\"file_ids\": [\"$FILE_ID\"], \"codec\": \"$CODEC\"}"
+[ -n "$HEIGHT" ] && BODY="{\"file_ids\": [\"$FILE_ID\"], \"codec\": \"$CODEC\", \"target_height\": $HEIGHT}"
+QUEUED=$(api POST /api/media/queue "$BODY" | jq -re '.queued')
+[ "$QUEUED" = "1" ] || fail "expected queued=1, got $QUEUED (already queued? not h264? downscale target not below source height?)"
 JOB_ID=$(api GET "/api/jobs?per_page=200" \
     | jq -re --arg f "$BASENAME" '.data[] | select(.source_path | endswith($f)) | .id' | head -1)
 [ -n "$JOB_ID" ] || fail "queued job not found in /api/jobs"
@@ -134,6 +142,12 @@ case "$STATUS" in
         NEW_SIZE=$(stat -c %s "$MEDIA_DIR/movies/$BASENAME" 2>/dev/null || stat -f %z "$MEDIA_DIR/movies/$BASENAME")
         [ "$SAVED" -gt 0 ] || fail "complete but space_saved=$SAVED"
         [ "$NEW_SIZE" -lt "$SRC_SIZE" ] || fail "complete but the file on disk did not shrink ($SRC_SIZE -> $NEW_SIZE)"
+        if [ -n "$HEIGHT" ] && command -v ffprobe >/dev/null; then
+            GOT_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height \
+                -of csv=p=0 "$MEDIA_DIR/movies/$BASENAME")
+            [ "$GOT_H" = "$HEIGHT" ] || fail "complete but swapped file is ${GOT_H}p, expected ${HEIGHT}p"
+            echo "downscale verified on disk: ${GOT_H}p"
+        fi
         echo "PASS: real encode swapped in place ($SRC_SIZE -> $NEW_SIZE bytes, saved $SAVED)"
         ;;
     skipped)
