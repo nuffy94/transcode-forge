@@ -42,9 +42,19 @@ def test_builder_resolves_ni_quadra_encoder(codec, expected_encoder):
 
 @pytest.mark.parametrize("codec", ["hevc", "av1"])
 def test_quadra_output_is_10bit(codec):
-    """D4: quadra encodes request 10-bit output like every other backend."""
+    """D4: quadra encodes request 10-bit output like every other backend
+    (yuv420p10le — the planar layout NETINT's own examples feed)."""
     cmd = build_encode_command(codec, "quadra", "in.mkv", "out.mkv", quality=20)
-    assert "p010le" in cmd
+    assert "yuv420p10le" in cmd
+
+
+@pytest.mark.parametrize("codec", ["hevc", "av1"])
+def test_quadra_crf_mode_disables_default_rc(codec):
+    """D4: RcEnable=0 must ride with crf= — without it the encoder's
+    default rate controller runs and the crf value is silently ignored."""
+    cmd = build_encode_command(codec, "quadra", "in.mkv", "out.mkv", quality=20)
+    params = cmd[cmd.index("-xcoder-params") + 1]
+    assert "RcEnable=0" in params.split(":")
 
 
 def test_quadra_downscale_passes_through():

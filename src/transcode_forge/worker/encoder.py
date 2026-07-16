@@ -323,7 +323,8 @@ def build_hevc_quadra_command(
 ) -> list[str]:
     """NETINT Quadra ASIC HEVC (h265_ni_quadra_enc). The encode runs fully
     off-CPU on the T1U; frames pass through system memory like every builder
-    here. CRF rate control via the encoder's xcoder-params bag."""
+    here. RcEnable=0 is required for CRF — without it the default rate
+    controller runs and crf= is ignored (NETINT capped-CRF app note)."""
     return [
         "ffmpeg",
         "-i",
@@ -331,10 +332,10 @@ def build_hevc_quadra_command(
         "-c:v",
         "h265_ni_quadra_enc",
         "-xcoder-params",
-        f"crf={map_quality('hevc', 'quadra', quality)}",
+        f"RcEnable=0:crf={map_quality('hevc', 'quadra', quality)}",
         *_scale_args(target_height),
         "-pix_fmt",
-        "p010le",
+        "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
     ]
@@ -347,9 +348,9 @@ def build_av1_quadra_command(
     content: str | None = None,
     target_height: int | None = None,
 ) -> list[str]:
-    """NETINT Quadra ASIC AV1. 10-bit output is requested like everywhere
-    else; whether Quadra AV1 accepts p010le is probe-gated in hardware.py —
-    if the silicon can't, the pair is simply never advertised."""
+    """NETINT Quadra ASIC AV1 — 10-bit is supported (AV1 Main, 8+10-bit
+    per the T1U datasheet), so the pipeline's 10-bit norm holds here too.
+    RcEnable=0 required for CRF, same as the HEVC builder."""
     return [
         "ffmpeg",
         "-i",
@@ -357,10 +358,10 @@ def build_av1_quadra_command(
         "-c:v",
         "av1_ni_quadra_enc",
         "-xcoder-params",
-        f"crf={map_quality('av1', 'quadra', quality)}",
+        f"RcEnable=0:crf={map_quality('av1', 'quadra', quality)}",
         *_scale_args(target_height),
         "-pix_fmt",
-        "p010le",
+        "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
     ]
