@@ -48,6 +48,9 @@ async def _make_agent(
     agent.capabilities = HardwareCapabilities(
         encoders=["cpu"], pairs=[("hevc", "cpu")], ffmpeg_version="7.1", os_platform="Linux"
     )
+    # Match the machine identity registered below — the token-reuse guard
+    # 409s a re-registration whose name/host differ from the live binding.
+    agent.host = "h"
     # Tests drive loops directly — keep backoffs near-zero so injected
     # failures don't stretch the suite's wall clock.
     agent._claim_backoff = Backoff(base=0.001, cap=0.005)
@@ -421,6 +424,51 @@ async def test_auth_refusal_keeps_the_entry_and_screams(client: AsyncClient, app
     ):
         await agent._drain_before_register()  # returns via the AUTH path
     assert agent.outbox.pending_job_ids() == {job.id}  # journaled for next boot
+
+
+# ── Contract 12 (verify regression) — a revoked token dies LOUDLY ───────────
+
+
+async def test_registration_exits_loudly_on_revoked_token(client: AsyncClient, app, tmp_path):
+    """The verify pass caught this regression: carving AUTH out of
+    TERMINAL made the registration loop retry a 401 forever — an
+    invisible zombie instead of a loud death. Any non-RETRYABLE refusal
+    must raise out of _register_with_retry (Restart=always is the second
+    belt, and an operator revoking a token deserves the 'it visibly
+    died' signal)."""
+    import httpx
+
+    agent, hostile = await _make_agent(client, app, tmp_path, "zombie-node")
+    await agent._client.aclose()
+    agent._client = WorkerHttpClient(
+        "http://test", "revoked-token", transport=ASGITransport(app=hostile)
+    )
+
+    with (
+        patch(
+            "transcode_forge.worker.http_agent.Backoff",
+            lambda **_kw: Backoff(base=0.001, cap=0.002),
+        ),
+        pytest.raises(httpx.HTTPStatusError) as exc_info,
+    ):
+        async with asyncio.timeout(5):  # loop-forever would trip this
+            await agent._register_with_retry()
+    assert exc_info.value.response.status_code == 401
+
+
+async def test_registration_survives_transport_faults(client: AsyncClient, app, tmp_path):
+    """The other half of the registration policy: transport/5xx retry
+    forever — a scheduler restart must never kill fleet nodes."""
+    agent, hostile = await _make_agent(client, app, tmp_path, "patient-node")
+    hostile.inject("register", "timeout", "500")
+
+    with patch(
+        "transcode_forge.worker.http_agent.Backoff",
+        lambda **_kw: Backoff(base=0.001, cap=0.002),
+    ):
+        reg = await agent._register_with_retry()
+    assert reg["worker_id"] == agent.worker_id  # same identity, re-registered
+    assert hostile.hit_count("register") == 3  # 2 faults absorbed + 1 success
 
 
 # ── Unit: reliability primitives ────────────────────────────────────────────
