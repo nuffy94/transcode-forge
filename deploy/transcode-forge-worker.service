@@ -17,7 +17,11 @@ EnvironmentFile=-/etc/default/transcode-forge-worker
 
 ExecStart=/opt/transcode-forge/.venv/bin/python -m transcode_forge.worker
 
-Restart=on-failure
+# always, not on-failure: crash classes we haven't met yet must not turn
+# into silently dead fleet nodes (worker-resilience spec D5). The worker
+# exits deliberately only on SIGTERM/SIGINT or a rejected token — and a
+# rejected token restarting loudly every 10s is an alert, not a problem.
+Restart=always
 RestartSec=10
 
 # Graceful shutdown: send SIGTERM, wait up to 5 min for the current

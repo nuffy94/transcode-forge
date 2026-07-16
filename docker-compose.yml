@@ -84,10 +84,14 @@ services:
   #     TF_WORKER_TOKEN: "${TF_WORKER_TOKEN:?set in .env after issuing a token}"
   #     TF_WORKER_NAME: "local-qsv"
   #     TF_PREFERRED_BACKEND: "auto"
+  #     TF_WORKER_STATE_DIR: "/var/lib/transcode-forge"
   #   volumes:
   #     # Workers do the writes — RW mount.
   #     - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:rw"
   #     - "${TF_LIBRARY_TV:-./media/tv}:/media/tv:rw"
+  #     # Durable worker state (milestone outbox): a named volume so
+  #     # undelivered terminal reports survive container recreation.
+  #     - "worker-state:/var/lib/transcode-forge"
   #   devices:
   #     - /dev/dri:/dev/dri
   #   depends_on:
