@@ -28,16 +28,21 @@ class HostileScheduler:
         self.app = app
         self._faults: dict[str, list[str]] = {}
         self._hits: Counter[str] = Counter()
-        self._watched: set[str] = set()
+        # A list, not a set: if two registered parts match one request,
+        # first-registered wins deterministically (a set's iteration
+        # order would make that flaky).
+        self._watched: list[str] = []
 
     def inject(self, path_part: str, *faults: str) -> None:
         """Queue faults ('500' or 'timeout') for requests matching path_part."""
-        self._watched.add(path_part)
+        if path_part not in self._watched:
+            self._watched.append(path_part)
         self._faults.setdefault(path_part, []).extend(faults)
 
     def watch(self, path_part: str) -> None:
         """Count requests matching path_part without injecting faults."""
-        self._watched.add(path_part)
+        if path_part not in self._watched:
+            self._watched.append(path_part)
 
     def hit_count(self, path_part: str) -> int:
         return self._hits[path_part]

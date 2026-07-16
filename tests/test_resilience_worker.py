@@ -21,7 +21,7 @@ from transcode_forge.config import Settings
 from transcode_forge.models.job import JobStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.worker.hardware import HardwareCapabilities
-from transcode_forge.worker.http_agent import HttpWorkerAgent
+from transcode_forge.worker.http_agent import DrainResult, HttpWorkerAgent
 from transcode_forge.worker.http_client import WorkerHttpClient
 from transcode_forge.worker.outbox import Outbox
 from transcode_forge.worker.reliability import Backoff, ErrorClass, classify_error
@@ -166,7 +166,7 @@ async def test_completion_outlives_scheduler_flap(client: AsyncClient, app, tmp_
     # Scheduler "recovers": the drain (as the job loop's fence runs it)
     # retries until the outbox is settled.
     for _ in range(5):
-        if await agent._drain_outbox():
+        if await agent._drain_outbox() is DrainResult.EMPTY:
             break
     final = await job_repo.get_job(app.state.db, job.id)
     assert final.status == JobStatus.COMPLETE
@@ -209,7 +209,7 @@ async def test_restart_drains_before_register_and_claim(client: AsyncClient, app
 
     hostile1.watch("claim-job")
     claims_before = hostile1.hit_count("claim-job")
-    assert await agent2._drain_outbox() is True
+    assert await agent2._drain_outbox() is DrainResult.EMPTY
 
     final = await job_repo.get_job(app.state.db, job.id)
     assert final.status == JobStatus.COMPLETE  # finished work survived the crash
@@ -238,7 +238,7 @@ async def test_duplicate_delivery_settles_cleanly(client: AsyncClient, app, tmp_
         "complete",
         {"output_size": 5_000, "space_saved": 5_000, "source_size": 10_000},
     )
-    assert await agent._drain_outbox() is True  # 204 → settled, no exception
+    assert await agent._drain_outbox() is DrainResult.EMPTY  # 204 → settled, no exception
     assert (await job_repo.get_job(app.state.db, job.id)).status == JobStatus.COMPLETE
 
 
@@ -259,7 +259,7 @@ async def test_ownership_moved_discards_with_warn(client: AsyncClient, app, tmp_
     # The reconciliation sweep (or an operator) requeues the job.
     await job_repo.update_job(app.state.db, job.id, status=JobStatus.QUEUED, worker_id=None)
 
-    assert await agent._drain_outbox() is True
+    assert await agent._drain_outbox() is DrainResult.EMPTY
     assert agent.outbox.pending_job_ids() == set()
     assert "its copy of reality wins" in caplog.text
     final = await job_repo.get_job(app.state.db, job.id)
@@ -288,12 +288,12 @@ async def test_s3_complete_never_overtakes_register(client: AsyncClient, app, tm
         {"output_size": 5_000, "space_saved": 0, "source_size": 10_000},
     )
 
-    assert await agent._drain_outbox() is False  # register blocked (fault 1)
-    assert await agent._drain_outbox() is False  # still blocked (fault 2)
+    assert await agent._drain_outbox() is DrainResult.BLOCKED  # register blocked (fault 1)
+    assert await agent._drain_outbox() is DrainResult.BLOCKED  # still blocked (fault 2)
     assert hostile.hit_count("complete") == 0  # complete never attempted
     assert len(agent.outbox.entries()) == 2
 
-    assert await agent._drain_outbox() is True  # recovered: both land, in order
+    assert await agent._drain_outbox() is DrainResult.EMPTY  # recovered: both land, in order
     assert hostile.hit_count("complete") == 1
     final = await job_repo.get_job(app.state.db, job.id)
     assert final.status == JobStatus.COMPLETE
@@ -334,7 +334,7 @@ async def test_stale_entry_never_lands_on_reclaimed_job(client: AsyncClient, app
     )
 
     # The job loop's fence: drain MUST settle before any claim.
-    assert await agent._drain_outbox() is True  # 403 → discarded
+    assert await agent._drain_outbox() is DrainResult.EMPTY  # 403 → discarded
 
     reclaimed = await agent._client.claim_job(worker_id=agent.worker_id)
     assert reclaimed is not None and reclaimed["id"] == job.id
@@ -343,22 +343,101 @@ async def test_stale_entry_never_lands_on_reclaimed_job(client: AsyncClient, app
     assert current.error_message is None  # stale attempt-1 report never applied
 
 
+# ── Contract 10 (review CRITICAL) — startup drain BLOCKS until settled ──────
+
+
+async def test_startup_drain_retries_until_settled_before_register(
+    client: AsyncClient, app, tmp_path
+):
+    """A scheduler blip at exactly worker-restart must not lose finished
+    work: registration's job-release would requeue the finished job and
+    the late delivery would be 403-discarded. The pre-register drain
+    therefore RETRIES until the outbox settles — one best-effort pass
+    (the reviewed bug) is not a guarantee."""
+    agent, hostile = await _make_agent(client, app, tmp_path, "blip-node")
+    job = await _queue_and_claim(client, app, agent, "blip")
+    hostile.inject("complete", "timeout")  # life 1: delivery lost
+    p1, p2, p3 = _pipeline_patches(agent)
+    with p1, p2, p3:
+        await agent._process_job(job)
+    assert agent.outbox.pending_job_ids() == {job.id}
+
+    # Life 2 startup: the scheduler blips for the FIRST drain attempt too,
+    # then recovers. The drain must absorb the blip and settle before
+    # returning — with near-zero backoff so the test stays fast.
+    hostile.inject("complete", "timeout")
+    with patch(
+        "transcode_forge.worker.http_agent.Backoff",
+        lambda **_kw: Backoff(base=0.001, cap=0.002),
+    ):
+        await agent._drain_before_register()
+
+    assert agent.outbox.pending_job_ids() == set()
+    assert (await job_repo.get_job(app.state.db, job.id)).status == JobStatus.COMPLETE
+
+    # NOW registration's release can fire — a COMPLETE job is untouchable.
+    await agent._client.register(
+        name="blip-node",
+        host="h",
+        capabilities=["cpu"],
+        supported_codecs=["hevc"],
+        supports_downscale=True,
+        ffmpeg_version="7.1",
+        max_concurrent=1,
+    )
+    final = await job_repo.get_job(app.state.db, job.id)
+    assert final.status == JobStatus.COMPLETE  # never requeued, never re-run
+
+
+# ── Contract 11 (review HIGH) — a refused credential never eats a report ────
+
+
+async def test_auth_refusal_keeps_the_entry_and_screams(client: AsyncClient, app, tmp_path, caplog):
+    """401 says the CREDENTIAL is bad, nothing about the job's outcome —
+    the entry survives (loudly) instead of being discarded like an
+    ownership move, and the pre-register drain doesn't deadlock on it
+    (registration surfaces the same auth failure and exits loudly)."""
+    agent, hostile = await _make_agent(client, app, tmp_path, "revoked-node")
+    job = await _queue_and_claim(client, app, agent, "revoked")
+    agent.outbox.append(
+        job.id,
+        "complete",
+        {"output_size": 5_000, "space_saved": 5_000, "source_size": 10_000},
+    )
+    # The operator rotates the token mid-flight:
+    await agent._client.aclose()
+    agent._client = WorkerHttpClient(
+        "http://test", "revoked-token", transport=ASGITransport(app=hostile)
+    )
+
+    assert await agent._drain_outbox() is DrainResult.AUTH_BLOCKED
+    assert agent.outbox.pending_job_ids() == {job.id}  # kept, not eaten
+    assert "fix TF_WORKER_TOKEN" in caplog.text
+
+    # The pre-register drain must NOT loop forever behind the bad token.
+    with patch(
+        "transcode_forge.worker.http_agent.Backoff",
+        lambda **_kw: Backoff(base=0.001, cap=0.002),
+    ):
+        await agent._drain_before_register()  # returns via the AUTH path
+    assert agent.outbox.pending_job_ids() == {job.id}  # journaled for next boot
+
+
 # ── Unit: reliability primitives ────────────────────────────────────────────
 
 
 def test_classify_error():
     import httpx
 
-    resp_500 = httpx.Response(500, request=httpx.Request("POST", "http://t/x"))
-    resp_403 = httpx.Response(403, request=httpx.Request("POST", "http://t/x"))
-    assert (
-        classify_error(httpx.HTTPStatusError("x", request=resp_500.request, response=resp_500))
-        is ErrorClass.RETRYABLE
-    )
-    assert (
-        classify_error(httpx.HTTPStatusError("x", request=resp_403.request, response=resp_403))
-        is ErrorClass.TERMINAL
-    )
+    def _status_error(code: int) -> httpx.HTTPStatusError:
+        resp = httpx.Response(code, request=httpx.Request("POST", "http://t/x"))
+        return httpx.HTTPStatusError("x", request=resp.request, response=resp)
+
+    assert classify_error(_status_error(500)) is ErrorClass.RETRYABLE
+    assert classify_error(_status_error(403)) is ErrorClass.TERMINAL
+    assert classify_error(_status_error(409)) is ErrorClass.TERMINAL
+    assert classify_error(_status_error(422)) is ErrorClass.TERMINAL
+    assert classify_error(_status_error(401)) is ErrorClass.AUTH  # credential ≠ outcome
     assert classify_error(httpx.ConnectTimeout("t")) is ErrorClass.RETRYABLE
     assert classify_error(OSError("boom")) is ErrorClass.RETRYABLE
 
