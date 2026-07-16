@@ -231,6 +231,74 @@ async def test_conflicting_terminal_report_is_refused(client: AsyncClient, app):
     assert row["transcode_status"] == "complete"  # not flipped to needs_transcode
 
 
+async def test_partial_failure_rolls_back_terminal_transition(client: AsyncClient, app):
+    """Review-HIGH regression guard: the terminal transition and its side
+    effects are one transaction. If the catalog sync dies mid-request the
+    job must NOT be left terminal — a terminal job 204s every retry, so a
+    missed side effect would be unhealable. Rollback keeps the job
+    non-terminal and the retry redoes everything."""
+    from unittest.mock import patch
+
+    db = app.state.db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        job_id, headers = await _claimed_job(client, app, c, "partial")
+        body = {"output_size": 1000, "space_saved": 9000, "source_size": 10000}
+
+        with patch(
+            "transcode_forge.api.routes.worker_api.media_repo.update_status_by_job",
+            side_effect=RuntimeError("db hiccup"),
+        ):
+            try:
+                await c.post(f"/api/worker/job/{job_id}/complete", json=body, headers=headers)
+            except RuntimeError:
+                pass  # ASGI transport re-raises app exceptions — expected
+
+        job = await job_repo.get_job(db, job_id)
+        assert job.status == JobStatus.TRANSCODING  # rolled back, NOT terminal
+
+        # The retry (healthy side effect) heals everything.
+        r = await c.post(f"/api/worker/job/{job_id}/complete", json=body, headers=headers)
+        assert r.status_code == 204
+
+    job = await job_repo.get_job(db, job_id)
+    assert job.status == JobStatus.COMPLETE
+    async with db.execute(
+        "SELECT transcode_status FROM media_files WHERE file_path = '/media/movies/partial.mkv'"
+    ) as cur:
+        row = await cur.fetchone()
+    assert row["transcode_status"] == "complete"
+
+
+async def test_concurrent_conflicting_reports_single_winner(client: AsyncClient, app):
+    """Review-MEDIUM (TOCTOU) regression guard: two genuinely concurrent
+    conflicting terminal reports → the conditional finalize UPDATE lets
+    exactly one win; the loser gets the defined 409, never a silent
+    overwrite and never two 2xx."""
+    import asyncio
+
+    db = app.state.db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        job_id, headers = await _claimed_job(client, app, c, "race")
+        complete = c.post(
+            f"/api/worker/job/{job_id}/complete",
+            json={"output_size": 1, "space_saved": 1, "source_size": 2},
+            headers=headers,
+        )
+        failed = c.post(
+            f"/api/worker/job/{job_id}/failed",
+            json={"error_message": "x", "retry_count": 0},
+            headers=headers,
+        )
+        r1, r2 = await asyncio.gather(complete, failed)
+
+    assert sorted((r1.status_code, r2.status_code)) == [204, 409]
+    job = await job_repo.get_job(db, job_id)
+    winner = JobStatus.COMPLETE if r1.status_code == 204 else JobStatus.FAILED
+    assert job.status == winner
+
+
 async def test_complete_after_failed_is_refused(client: AsyncClient, app):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:

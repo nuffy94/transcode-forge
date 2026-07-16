@@ -26,7 +26,14 @@ def _row_to_worker(row: aiosqlite.Row) -> Worker:
 
 
 async def upsert_worker(db: DBConnection, worker: Worker) -> None:
-    """Insert or update a worker (heartbeat IS registration)."""
+    """Insert or update a worker (heartbeat IS registration).
+
+    Deliberately does NOT stamp current_job_changed_at even though it
+    resets current_job_id (unlike update_worker_heartbeat, which does):
+    registration already releases the worker's jobs, so there is nothing
+    for the reconciliation sweep to time against a stale value — and a
+    left-over timestamp is either old enough to sweep promptly (correct)
+    or fresh enough that the normal grace applies."""
     now = datetime.now(UTC).isoformat()
     caps_json = json.dumps(worker.capabilities)
     codecs_json = json.dumps(worker.supported_codecs)
@@ -96,23 +103,20 @@ async def update_worker_heartbeat(
     job it names (including to/from NULL) — the reconciliation sweep
     requeues a live worker's job only on a mismatch SUSTAINED past a
     grace window, so the transition timestamp is the load-bearing part
-    (worker-resilience spec D3)."""
+    (worker-resilience spec D3). One conditional UPDATE keeps the
+    steady-state-vs-transition decision atomic under overlapping
+    heartbeats; the OR clause is the portable NULL-safe equality (SQLite
+    has no IS NOT DISTINCT FROM)."""
     now = datetime.now(UTC).isoformat()
-    async with db.execute(
-        "SELECT current_job_id FROM workers WHERE id = ?", (worker_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
-    if row is not None and row["current_job_id"] == current_job_id:
-        await db.execute(
-            "UPDATE workers SET last_heartbeat = ?, status = ?, updated_at = ? WHERE id = ?",
-            (now, status, now, worker_id),
-        )
-    else:
-        await db.execute(
-            "UPDATE workers SET last_heartbeat = ?, status = ?, current_job_id = ?,"
-            " current_job_changed_at = ?, updated_at = ? WHERE id = ?",
-            (now, status, current_job_id, now, now, worker_id),
-        )
+    await db.execute(
+        "UPDATE workers SET last_heartbeat = ?, status = ?,"
+        " current_job_changed_at = CASE"
+        "   WHEN current_job_id = ? OR (current_job_id IS NULL AND ? IS NULL)"
+        "   THEN current_job_changed_at ELSE ? END,"
+        " current_job_id = ?, updated_at = ?"
+        " WHERE id = ?",
+        (now, status, current_job_id, current_job_id, now, current_job_id, now, worker_id),
+    )
     await db.commit()
 
 

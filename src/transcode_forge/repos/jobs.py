@@ -213,6 +213,45 @@ async def update_job(db: DBConnection, job_id: str, **fields: object) -> Job | N
     return await get_job(db, job_id)
 
 
+_TERMINAL_JOB_STATUSES = (
+    JobStatus.COMPLETE.value,
+    JobStatus.SKIPPED.value,
+    JobStatus.FAILED.value,
+    JobStatus.CANCELLED.value,
+)
+
+
+async def finalize_job(
+    db: DBConnection, job_id: str, worker_id: str, status: JobStatus, **fields: object
+) -> bool:
+    """Atomically transition an owned job to a terminal status.
+
+    The single conditional UPDATE is the fence a check-then-act guard
+    cannot be (worker-resilience spec D3): it succeeds only while the job
+    is still non-terminal AND still owned by the reporting worker, so of
+    two concurrent terminal reports exactly one wins — and a report can
+    never stomp a job the reconciliation sweep requeued (worker_id NULL)
+    or another worker re-claimed mid-request. Returns False when the
+    transition lost; the caller re-reads and answers 204/409/403.
+    """
+    invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
+    if invalid_cols:
+        raise ValueError(f"Invalid job column names: {invalid_cols}")
+
+    fields["updated_at"] = datetime.now(UTC).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = [v.value if isinstance(v, JobStatus) else v for v in fields.values()]
+    placeholders_terminal = ",".join("?" * len(_TERMINAL_JOB_STATUSES))
+    cur = await db.execute(
+        f"UPDATE jobs SET status = ?, {set_clause}"
+        " WHERE id = ? AND worker_id = ?"
+        f" AND status NOT IN ({placeholders_terminal})",
+        [status.value, *values, job_id, worker_id, *_TERMINAL_JOB_STATUSES],
+    )
+    await db.commit()
+    return bool(cur.rowcount)
+
+
 async def count_queued_jobs(db: DBConnection) -> int:
     """Count jobs waiting for a worker to claim them.
 
@@ -386,6 +425,15 @@ async def requeue_abandoned_active_jobs(
     quals are re-evaluated against a concurrently-changed row, so a
     terminal report landing at the exact moment of the sweep must flip
     the job OUT of the sweep's reach, never be stomped back to QUEUED.
+
+    Known, accepted race: the workers-side conditions live only in the
+    subquery (they can't be outer quals on a jobs UPDATE), so a
+    corrective heartbeat landing inside this statement's own execution
+    window can lose to the sweep and the job is requeued anyway. That
+    needs a worker that already denied the job for the whole grace to
+    re-name it in a millisecond window; the consequence is bounded — the
+    old worker's late reports 403 (ownership moved) and the .tf_lock
+    keeps the file safe — and it self-heals via re-claim.
     """
     active = (
         JobStatus.TRANSCODING.value,

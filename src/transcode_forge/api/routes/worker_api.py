@@ -119,6 +119,24 @@ def _is_duplicate_terminal_report(job: Job, incoming: JobStatus) -> bool:
     return False
 
 
+async def _answer_lost_finalize(db: DBConnection, job_id: str, incoming: JobStatus) -> None:
+    """finalize_job returned False — some concurrent transition won.
+
+    Re-read and answer exactly like the fast-path guard would have: a
+    duplicate of the winner → 204, a conflicting terminal winner → 409,
+    ownership moved (requeued by the sweep / re-claimed elsewhere) → 403,
+    job deleted → 404. Never an unexplained 5xx: every way to lose the
+    race has a defined at-least-once answer the worker knows how to
+    treat (2xx settle, 4xx discard-with-warn).
+    """
+    job = await job_repo.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _is_duplicate_terminal_report(job, incoming):
+        return
+    raise HTTPException(status_code=403, detail="Job is not assigned to this worker")
+
+
 async def require_worker_token(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -549,26 +567,35 @@ async def complete_job(
     job = await _require_owned_job(db, job_id, token_row)
     if _is_duplicate_terminal_report(job, JobStatus.COMPLETE):
         return
-    await job_repo.update_job(
-        db,
-        job_id,
-        status=JobStatus.COMPLETE,
-        output_size=body.output_size,
-        space_saved=body.space_saved,
-        source_size=body.source_size,
-        achieved_vmaf=body.achieved_vmaf,
-        achieved_vmaf_perc5=body.achieved_vmaf_perc5,
-        predicted_vmaf_mean=body.predicted_vmaf_mean,
-        predicted_vmaf_perc5=body.predicted_vmaf_perc5,
-        resolved_crf=body.resolved_crf,
-        backend_used=body.backend_used,
-        progress=1.0,
-        completed_at=datetime.now(UTC).isoformat(),
-    )
-    # Keep the catalog in step with the outcome — S3 rows can't self-heal
-    # on rescan (the master object is unchanged), so this is their only
-    # path out of 'queued'.
-    await media_repo.update_status_by_job(db, job_id, transcode_status="complete")
+    # One transaction: the terminal transition and its side effects commit
+    # together. A partial write here would be unhealable — the idempotency
+    # guard 204s every retry once the job reads terminal, so nothing would
+    # ever re-run a missed catalog sync.
+    async with db.transaction() as tx:
+        won = await job_repo.finalize_job(
+            tx,
+            job_id,
+            job.worker_id or "",
+            JobStatus.COMPLETE,
+            output_size=body.output_size,
+            space_saved=body.space_saved,
+            source_size=body.source_size,
+            achieved_vmaf=body.achieved_vmaf,
+            achieved_vmaf_perc5=body.achieved_vmaf_perc5,
+            predicted_vmaf_mean=body.predicted_vmaf_mean,
+            predicted_vmaf_perc5=body.predicted_vmaf_perc5,
+            resolved_crf=body.resolved_crf,
+            backend_used=body.backend_used,
+            progress=1.0,
+            completed_at=datetime.now(UTC).isoformat(),
+        )
+        if won:
+            # Keep the catalog in step with the outcome — S3 rows can't
+            # self-heal on rescan (the master object is unchanged), so this
+            # is their only path out of 'queued'.
+            await media_repo.update_status_by_job(tx, job_id, transcode_status="complete")
+    if not won:
+        await _answer_lost_finalize(db, job_id, JobStatus.COMPLETE)
 
 
 @router.post("/worker/job/{job_id}/skipped", status_code=204)
@@ -589,31 +616,39 @@ async def skip_job(
     job = await _require_owned_job(db, job_id, token_row)
     if _is_duplicate_terminal_report(job, JobStatus.SKIPPED):
         return
-    await job_repo.update_job(
-        db,
-        job_id,
-        status=JobStatus.SKIPPED,
-        error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
-        achieved_vmaf=body.achieved_vmaf,
-        achieved_vmaf_perc5=body.achieved_vmaf_perc5,
-        predicted_vmaf_mean=body.predicted_vmaf_mean,
-        predicted_vmaf_perc5=body.predicted_vmaf_perc5,
-        resolved_crf=body.resolved_crf,
-        backend_used=body.backend_used,
-        completed_at=datetime.now(UTC).isoformat(),
-    )
-    await skip_repo.record_skip(
-        db,
-        file_path=job.source_path,
-        library=job.library,
-        codec=job.source_codec,
-        resolution=job.source_resolution,
-        file_size=job.source_size,
-        skip_reason=SkipReason(body.reason),
-    )
-    await media_repo.update_status_by_job(
-        db, job_id, transcode_status="skipped", skip_reason=body.reason
-    )
+    # Same atomicity contract as /complete: transition + skip record +
+    # catalog sync land together or not at all.
+    async with db.transaction() as tx:
+        won = await job_repo.finalize_job(
+            tx,
+            job_id,
+            job.worker_id or "",
+            JobStatus.SKIPPED,
+            error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
+            achieved_vmaf=body.achieved_vmaf,
+            achieved_vmaf_perc5=body.achieved_vmaf_perc5,
+            predicted_vmaf_mean=body.predicted_vmaf_mean,
+            predicted_vmaf_perc5=body.predicted_vmaf_perc5,
+            resolved_crf=body.resolved_crf,
+            backend_used=body.backend_used,
+            completed_at=datetime.now(UTC).isoformat(),
+        )
+        if won:
+            await skip_repo.record_skip(
+                tx,
+                file_path=job.source_path,
+                library=job.library,
+                codec=job.source_codec,
+                resolution=job.source_resolution,
+                file_size=job.source_size,
+                skip_reason=SkipReason(body.reason),
+            )
+            await media_repo.update_status_by_job(
+                tx, job_id, transcode_status="skipped", skip_reason=body.reason
+            )
+    if not won:
+        await _answer_lost_finalize(db, job_id, JobStatus.SKIPPED)
+        return
     logger.info("Job %s skipped by worker: %s (%s)", job_id, body.reason, body.error_message[:120])
 
 
@@ -627,17 +662,22 @@ async def fail_job(
     job = await _require_owned_job(db, job_id, token_row)
     if _is_duplicate_terminal_report(job, JobStatus.FAILED):
         return
-    await job_repo.update_job(
-        db,
-        job_id,
-        status=JobStatus.FAILED,
-        error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN],
-        retry_count=body.retry_count,
-        completed_at=datetime.now(UTC).isoformat(),
-    )
-    # Original kept and re-queueable; the row keeps job_id so the drawer
-    # still surfaces the failed job.
-    await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
+    async with db.transaction() as tx:
+        won = await job_repo.finalize_job(
+            tx,
+            job_id,
+            job.worker_id or "",
+            JobStatus.FAILED,
+            error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN],
+            retry_count=body.retry_count,
+            completed_at=datetime.now(UTC).isoformat(),
+        )
+        if won:
+            # Original kept and re-queueable; the row keeps job_id so the
+            # drawer still surfaces the failed job.
+            await media_repo.update_status_by_job(tx, job_id, transcode_status="needs_transcode")
+    if not won:
+        await _answer_lost_finalize(db, job_id, JobStatus.FAILED)
 
 
 @router.post("/worker/job/{job_id}/register-derivative", status_code=204)
