@@ -87,6 +87,11 @@
             <option value="hevc">→ HEVC</option>
             <option value="av1">→ AV1</option>
         </select>
+        <select id="queue-resolution" class="forge-select" aria-label="Target resolution">
+            <option value="">Resolution: keep</option>
+            <option value="1080">→ 1080p</option>
+            <option value="720">→ 720p</option>
+        </select>
         <button id="bulk-queue" class="forge-btn forge-btn--ember">
             {{ icon('play', 'forge-icon--sm') }}
             <span>Queue selected</span>
@@ -98,6 +103,10 @@
     <p id="codec-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
         {{ icon('alert', 'forge-icon--sm') }}
         AV1: best compression, but older devices/clients may not decode it.
+    </p>
+    <p id="resolution-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
+        {{ icon('alert', 'forge-icon--sm') }}
+        Downscale replaces the original — the higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
     </p>
 </div>
 

@@ -305,11 +305,16 @@ async def jobs_partial(
     )
     # Codecs at least one live worker can encode — pending jobs whose
     # target codec isn't covered get a "waiting for a capable worker" hint.
+    # Same idea for downscale jobs: until an upgraded worker advertising
+    # supports_downscale is online, they pend — say so instead of leaving
+    # the row silent (the expected state mid-fleet-upgrade).
     online_codecs: set[str] = set()
+    downscale_online = False
     workers_list = await worker_repo.list_workers(db)
     for w in workers_list:
         if w.status in ("online", "busy"):
             online_codecs.update(w.supported_codecs)
+            downscale_online = downscale_online or w.supports_downscale
     return _render(
         request,
         "partials/jobs.html",
@@ -321,6 +326,7 @@ async def jobs_partial(
             "sort": sort,
             "dir": dir,
             "online_codecs": online_codecs,
+            "downscale_online": downscale_online,
             "worker_names": {w.id: w.name for w in workers_list},
             "file_ids": await media_repo.ids_by_paths(db, [j.source_path for j in jobs]),
         },

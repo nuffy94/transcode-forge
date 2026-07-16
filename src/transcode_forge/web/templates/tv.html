@@ -97,10 +97,19 @@
                         {{ icon('alert', 'forge-icon--sm') }}
                         AV1: best compression, but older devices/clients may not decode it.
                     </span>
+                    <span id="resolution-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
+                        {{ icon('alert', 'forge-icon--sm') }}
+                        Downscale replaces the original — the higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
+                    </span>
                     <select id="queue-codec" class="forge-select" aria-label="Target codec">
                         <option value="">Codec: default</option>
                         <option value="hevc">&rarr; HEVC</option>
                         <option value="av1">&rarr; AV1</option>
+                    </select>
+                    <select id="queue-resolution" class="forge-select" aria-label="Target resolution">
+                        <option value="">Resolution: keep</option>
+                        <option value="1080">&rarr; 1080p</option>
+                        <option value="720">&rarr; 720p</option>
                     </select>
                     <button id="tv-queue-selected" class="forge-btn forge-btn--ember" disabled>
                         Queue selected

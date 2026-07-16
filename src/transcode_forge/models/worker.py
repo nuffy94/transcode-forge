@@ -25,6 +25,11 @@ class Worker(BaseModel):
     # predating the multi-codec release don't advertise — default to hevc
     # so a rolling update never hands them an AV1 job.
     supported_codecs: list[str] = Field(default_factory=lambda: ["hevc"])
+    # Whether this worker understands jobs.target_height. A worker that
+    # doesn't would encode at source resolution, silently ignoring the
+    # requested downscale — claim filtering keeps such jobs away from it
+    # (same pattern as supported_codecs).
+    supports_downscale: bool = False
     ffmpeg_version: str | None = None
     max_concurrent: int = 1
     status: WorkerStatus = WorkerStatus.OFFLINE

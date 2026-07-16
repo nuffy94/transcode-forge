@@ -33,7 +33,7 @@
          {% if file_ids.get(job.source_path) %}data-file-id="{{ file_ids[job.source_path] }}"{% endif %}>
         <div class="flex items-center gap-2.5 flex-wrap mb-2">
             <span class="text-[13px] font-medium text-forge-paper truncate" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
-            <span class="font-mono text-2xs uppercase text-forge-brass border border-forge-brass/35 bg-forge-brass/5 px-1.5 whitespace-nowrap">{{ job.source_codec }} → {{ job.target_codec }}</span>
+            <span class="font-mono text-2xs uppercase text-forge-brass border border-forge-brass/35 bg-forge-brass/5 px-1.5 whitespace-nowrap">{{ job.source_codec }} → {{ job.target_codec }}{% if job.target_height %} · {{ (job.source_resolution.split('x')[-1] + 'p') if job.source_resolution and 'x' in job.source_resolution else 'src' }}→{{ job.target_height }}p{% endif %}</span>
             <span class="font-mono text-2xs text-forge-mute uppercase tracking-wider">{{ job.library }}</span>
             {% if worker_names.get(job.worker_id) %}
             <span class="font-mono text-2xs text-forge-steel">{{ worker_names[job.worker_id] }}</span>
