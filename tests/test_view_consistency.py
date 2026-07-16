@@ -390,6 +390,59 @@ class TestAuditEndpoint:
         assert data["orphan_active_jobs"][0]["worker_status"] is None
 
 
+class TestQueueableEligibilityConsistency:
+    """The "can this file be queued?" rule renders in four places: the
+    queue endpoint's validity matrix (source of truth), catalog.js
+    canQueue, the tv-episodes partial's per-row button, and the drawer's
+    Queue button (web/routes.py `queueable`).
+
+    The server-rendered surfaces express the NO-downscale rule; the
+    endpoint accepts strictly more when an explicit target_height rides
+    the request. Invariant pinned here: a surface offers Queue IFF a
+    plain (no-downscale) POST would queue that file — and the downscale
+    path unlocks the hevc file both surfaces decline.
+    """
+
+    async def test_drawer_and_episodes_match_endpoint_no_downscale(self, client: AsyncClient, app):
+        from tests.helpers import seed_media_file
+
+        db = app.state.db
+        h264 = await seed_media_file(
+            db, "/media/tv/show/s01e01.mkv", library_id="tv", show_name="Show", season=1, episode=1
+        )
+        hevc = await seed_media_file(
+            db,
+            "/media/tv/show/s01e02.mkv",
+            library_id="tv",
+            codec="hevc",
+            show_name="Show",
+            season=1,
+            episode=2,
+        )
+
+        # Drawer: Queue button IFF h264 (the no-downscale rule).
+        drawer_h264 = (await client.get(f"/partials/file-detail?file_id={h264}")).text
+        drawer_hevc = (await client.get(f"/partials/file-detail?file_id={hevc}")).text
+        assert "Queue transcode" in drawer_h264
+        assert "Queue transcode" not in drawer_hevc
+
+        # Episode rows: same rule, same outcome.
+        episodes = (await client.get("/partials/tv-episodes?show=Show")).text
+        assert f'data-id="{h264}"' in episodes
+        assert f'data-id="{hevc}"' not in episodes
+
+        # Endpoint, no downscale: agrees with both surfaces.
+        resp = await client.post("/api/media/queue", json={"file_ids": [h264, hevc]})
+        assert resp.json() == {"queued": 1, "skipped": 1}
+
+        # Endpoint, with downscale: unlocks exactly the file the surfaces
+        # decline — the documented v1 asymmetry, not silent drift.
+        resp = await client.post(
+            "/api/media/queue", json={"file_ids": [hevc], "target_height": 1080}
+        )
+        assert resp.json() == {"queued": 1, "skipped": 0}
+
+
 class TestEnumCoverage:
     """Every JobStatus value must be filterable through the API and the
     partial. If someone adds a new status to the enum but forgets to

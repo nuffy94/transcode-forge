@@ -246,3 +246,8 @@ QSV that can't encode 10-bit HEVC is not advertised. Per-job backend:
 `TF_PREFERRED_BACKEND` (if it supports the job's codec) > QSV > NVENC >
 CPU; software is the universal per-codec fallback. Workers advertise
 `supported_codecs` at registration and only claim jobs they can encode.
+The same pattern gates resolution downscaling: workers advertise
+`supports_downscale`, and jobs carrying `target_height` (the downscale +
+same-codec-shrink feature, plans/downscale-shrink-spec.md) are only
+claimable by workers that do — an old worker would encode at source
+resolution, silently ignoring the request.

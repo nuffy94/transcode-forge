@@ -124,6 +124,10 @@ class RegisterRequest(BaseModel):
     # Workers predating codec advertisement omit this — default to hevc so
     # a rolling update never hands an old worker an AV1 job.
     supported_codecs: list[str] | None = None
+    # Same rolling-update guard for the downscale feature: a worker that
+    # doesn't advertise it never claims a target_height job (it would
+    # encode at source resolution, silently ignoring the request).
+    supports_downscale: bool = False
     ffmpeg_version: str | None = None
     max_concurrent: int = Field(default=1, ge=1, le=8)
 
@@ -291,6 +295,7 @@ async def register(
         host=body.host,
         capabilities=body.capabilities,
         supported_codecs=body.supported_codecs or ["hevc"],
+        supports_downscale=body.supports_downscale,
         ffmpeg_version=body.ffmpeg_version,
         max_concurrent=body.max_concurrent,
         status=WorkerStatus.ONLINE,
@@ -364,8 +369,11 @@ async def claim_job(
 
     worker = await worker_repo.get_worker(db, body.worker_id)
     supported_codecs = worker.supported_codecs if worker else ["hevc"]
+    supports_downscale = worker.supports_downscale if worker else False
 
-    job = await job_repo.claim_next_job(db, body.worker_id, supported_codecs)
+    job = await job_repo.claim_next_job(
+        db, body.worker_id, supported_codecs, supports_downscale=supports_downscale
+    )
     if job is not None:
         # claim_next_job returns ASSIGNED; bump it to TRANSCODING here so the
         # job doesn't sit in ASSIGNED for the whole encode (which broke any

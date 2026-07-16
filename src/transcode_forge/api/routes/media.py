@@ -1,7 +1,7 @@
 """Media browser + queue-from-selection endpoints."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
@@ -96,6 +96,37 @@ class QueueRequest(BaseModel):
     # (DB override else TF_DEFAULT_CODEC else hevc). AV1 is opt-in via
     # the UI selector, which carries the compatibility warning.
     codec: str | None = Field(default=None, pattern=r"^(hevc|av1)$")
+    # Downscale target (plans/downscale-shrink-spec.md): fixed option list
+    # mirrored by the UI selector. None = keep source resolution — and
+    # today's h264-only eligibility rule.
+    target_height: Literal[1080, 720] | None = None
+
+
+# Statuses that always block queueing (an active job exists). Without a
+# downscale, 'complete' blocks too; WITH one it's the whole point — an
+# already-HEVC/AV1 file (which the scanner catalogs as complete/skipped)
+# is exactly what the same-codec shrink exists for.
+_IN_FLIGHT = ("queued", "transcoding")
+
+
+def _downscale_codec(source_codec: str, explicit: str | None, h264_default: str) -> str | None:
+    """The queue validity matrix, downscale side: resolve the job's target
+    codec, or None when this (source, picked) combination must be skipped.
+
+    Same-codec shrink rides the downscale: with no explicit pick an
+    hevc/av1 source keeps its codec (never silently converted by the
+    global default). An explicit pick wins, except av1 → hevc (a codec
+    downgrade). Other sources stay out, matching the h264-only rule's
+    conservatism; h264 → h264 stays out by construction (the pickable
+    codecs are hevc/av1 — the product's purpose is getting OFF h264).
+    """
+    if source_codec == "h264":
+        return h264_default
+    if source_codec == "hevc":
+        return explicit or "hevc"
+    if source_codec == "av1":
+        return None if explicit == "hevc" else "av1"
+    return None
 
 
 @router.post("/media/queue")
@@ -121,17 +152,31 @@ async def queue_selected_files(
     # Batch the lookups up front — one query each — instead of ~4 per file.
     by_id = {m["id"]: m for m in await media_repo.get_by_ids(db, body.file_ids)}
 
-    # First pass: codec/status filter, collect candidates + their paths.
+    # First pass: the queue validity matrix — per-file eligibility plus the
+    # resolved target codec (a downscale batch can mix h264/hevc/av1
+    # sources, each landing on its own codec).
     candidates: list[dict[str, Any]] = []
+    resolved_codecs: dict[str, str] = {}
     for file_id in body.file_ids:
         mf = by_id.get(file_id)
-        if (
-            not mf
-            or mf["video_codec"] != "h264"
-            or mf["transcode_status"] in ("queued", "transcoding", "complete")
-        ):
+        if not mf or mf["transcode_status"] in _IN_FLIGHT:
             skipped += 1
             continue
+        resolved: str | None
+        if body.target_height is None:
+            # Today's rule, unchanged: h264 sources only; 'complete' blocks.
+            if mf["video_codec"] != "h264" or mf["transcode_status"] == "complete":
+                skipped += 1
+                continue
+            resolved = target_codec
+        else:
+            # A downscale must be strictly downward — unknown dimensions
+            # can't prove that, and a no-op scale is never queued.
+            resolved = _downscale_codec(mf["video_codec"], body.codec, target_codec)
+            if resolved is None or not mf["height"] or mf["height"] <= body.target_height:
+                skipped += 1
+                continue
+        resolved_codecs[mf["id"]] = resolved
         candidates.append(mf)
 
     paths = [m["file_path"] for m in candidates]
@@ -167,7 +212,8 @@ async def queue_selected_files(
                 source_bitrate=mf["bitrate"],
                 source_duration=mf["duration"],
                 source_size=mf["file_size"],
-                target_codec=target_codec,
+                target_codec=resolved_codecs[mf["id"]],
+                target_height=body.target_height,
                 quality_value=presets.get(mf["library_id"], 21),
                 target_vmaf=target_vmaf,
                 status=JobStatus.QUEUED,

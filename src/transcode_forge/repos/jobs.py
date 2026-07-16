@@ -42,8 +42,9 @@ async def create_job(db: DBConnection, job: Job) -> str:
         """INSERT INTO jobs (
             id, source_path, library, source_codec, source_resolution,
             source_bitrate, source_duration, source_size, target_codec,
-            quality_value, target_vmaf, status, retry_count, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            target_height, quality_value, target_vmaf, status, retry_count,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.id,
             job.source_path,
@@ -54,6 +55,7 @@ async def create_job(db: DBConnection, job: Job) -> str:
             job.source_duration,
             job.source_size,
             job.target_codec,
+            job.target_height,
             job.quality_value,
             job.target_vmaf,
             job.status.value,
@@ -318,7 +320,11 @@ async def requeue_orphan_active_jobs(
 
 
 async def claim_next_job(
-    db: DBConnection, worker_id: str, supported_codecs: list[str] | None = None
+    db: DBConnection,
+    worker_id: str,
+    supported_codecs: list[str] | None = None,
+    *,
+    supports_downscale: bool = False,
 ) -> Job | None:
     """Atomically claim the next pending/queued job this worker can encode.
 
@@ -331,17 +337,21 @@ async def claim_next_job(
     Only jobs whose target_codec the worker advertised are eligible — a
     job with no capable worker simply stays PENDING (never fails at
     claim time). Workers that predate codec advertisement default to hevc.
+    Downscale jobs (target_height set) follow the same rule keyed on
+    supports_downscale: a worker that didn't advertise it would encode at
+    source resolution, silently ignoring the request.
     """
     codecs = supported_codecs or ["hevc"]
     now = datetime.now(UTC).isoformat()
     lock_clause = " FOR UPDATE SKIP LOCKED" if db.dialect == "postgres" else ""
     codec_placeholders = ",".join("?" * len(codecs))
+    downscale_clause = "" if supports_downscale else " AND target_height IS NULL"
     sql = f"""UPDATE jobs
         SET status = ?, worker_id = ?, started_at = ?, updated_at = ?
         WHERE id = (
             SELECT id FROM jobs
             WHERE status IN (?, ?)
-              AND target_codec IN ({codec_placeholders})
+              AND target_codec IN ({codec_placeholders}){downscale_clause}
             ORDER BY created_at ASC
             LIMIT 1{lock_clause}
         )

@@ -98,7 +98,7 @@
                     {% elif j.status == 'queued' %}<span class="forge-pill forge-pill--queued">Queued</span>
                     {% else %}<span class="forge-pill forge-pill--pending">{{ j.status }}</span>
                     {% endif %}
-                    <span class="font-mono text-2xs text-forge-mute uppercase">→ {{ j.target_codec }}</span>
+                    <span class="font-mono text-2xs text-forge-mute uppercase">→ {{ j.target_codec }}{% if j.target_height %} · {{ (j.source_resolution.split('x')[-1] + 'p') if j.source_resolution and 'x' in j.source_resolution else 'src' }}→{{ j.target_height }}p{% endif %}</span>
                     <span class="font-mono text-2xs text-forge-mute ml-auto tabular-nums">{{ j.created_at[:16]|replace('T', ' ') }}</span>
                 </div>
                 <div class="flex items-center gap-3 mt-1 font-mono text-2xs text-forge-mute flex-wrap">

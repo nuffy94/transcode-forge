@@ -55,6 +55,9 @@ class Job(BaseModel):
     source_duration: float | None = None
     source_size: int | None = None
     target_codec: str = "hevc"
+    # Requested downscale height (1080/720 — plans/downscale-shrink-spec.md).
+    # None = keep source resolution; pre-feature jobs behave identically.
+    target_height: int | None = None
     quality_value: int
     # Quality goal (snapshot at queue time) + encode outcome. NULL
     # target_vmaf = no VMAF gate/search — pre-feature jobs behave as before.

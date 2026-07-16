@@ -22,7 +22,7 @@
                 <span class="flex items-center gap-2 font-mono text-2xs uppercase tracking-wider mt-0.5">
                     <span class="text-forge-mute">{{ job.library }}</span>
                     <span class="text-forge-rule-bright">·</span>
-                    <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}</span>
+                    <span class="text-forge-steel">{{ (job.source_codec or 'h264')|upper }} → {{ (job.target_codec or 'hevc')|upper }}{% if job.target_height %} · {{ (job.source_resolution.split('x')[-1] + 'p') if job.source_resolution and 'x' in job.source_resolution else 'src' }}→{{ job.target_height }}p{% endif %}</span>
                 </span>
             </td>
             <td>

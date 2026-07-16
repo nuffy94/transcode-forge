@@ -42,8 +42,36 @@ function emptyState() {
     return tpl ? tpl.innerHTML : '<div class="forge-empty"><p class="forge-empty-title">Nothing here</p></div>';
 }
 
+function selectedHeight() {
+    return Number(document.getElementById('queue-resolution')?.value) || null;
+}
+
+/* A downscale pick must never outlive the surface it was made on — a
+ * hidden selector silently driving the destructive dial is how a plain
+ * "Queue" click would replace originals with downscaled encodes. Called
+ * whenever the selector's surface hides (movies: selection cleared and
+ * the bulk bar with it; TV: leaving the files tab). */
+function resetResolutionSelector(reload) {
+    const sel = document.getElementById('queue-resolution');
+    if (!sel || !sel.value) return;
+    sel.value = '';
+    const warn = document.getElementById('resolution-warning');
+    if (warn) warn.style.display = 'none';
+    if (reload) reload();
+}
+
+/* Client mirror of the queue endpoint's validity matrix (api/routes/media.py
+ * — the source of truth; the server skip-counts anything stale here). With a
+ * downscale selected, already-HEVC/AV1 files become queueable (same-codec
+ * shrink) as long as the scale is strictly downward; av1 → hevc never is. */
 function canQueue(f) {
-    return f.video_codec === 'h264' && !['queued', 'transcoding', 'complete'].includes(f.transcode_status);
+    if (['queued', 'transcoding'].includes(f.transcode_status)) return false;
+    const height = selectedHeight();
+    if (!height) return f.video_codec === 'h264' && f.transcode_status !== 'complete';
+    if (!['h264', 'hevc', 'av1'].includes(f.video_codec)) return false;
+    if (f.video_codec === 'av1' && document.getElementById('queue-codec')?.value === 'hevc') return false;
+    const srcHeight = f.height || Number((f.resolution || '').split('x')[1]) || 0;
+    return srcHeight > height;
 }
 
 function sortIndicator(state, col) {
@@ -69,11 +97,14 @@ function pagerButtons(containerId, current, totalPages, onPageAttr) {
 
 async function postQueue(ids, codecSelectId) {
     const codec = document.getElementById(codecSelectId)?.value || '';
-    const body = JSON.stringify(codec ? { file_ids: ids, codec } : { file_ids: ids });
+    const body = { file_ids: ids };
+    if (codec) body.codec = codec;
+    const height = selectedHeight();
+    if (height) body.target_height = height;
     const resp = await fetch('/api/media/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
+        body: JSON.stringify(body),
     });
     if (!resp.ok) throw new Error(resp.statusText);
     return resp.json();
@@ -236,6 +267,9 @@ function updateBulkBar() {
     const count = mv.selected.size;
     setText('bulk-count', count);
     bar.style.display = count > 0 ? 'inline-flex' : 'none';
+    // Bar hidden = the downscale pick is invisible; drop it and re-render
+    // so per-row Queue buttons fall back to the no-downscale rule.
+    if (count === 0) resetResolutionSelector(() => loadMovies(mv.page));
 }
 
 function setText(id, value) {
@@ -275,6 +309,12 @@ function initMovies() {
         const codec = document.getElementById('queue-codec').value;
         const warn = document.getElementById('codec-warning');
         if (warn) warn.style.display = codec === 'av1' ? 'flex' : 'none';
+        loadMovies(mv.page); // per-row Queue buttons follow the matrix
+    });
+    on('queue-resolution', 'change', () => {
+        const warn = document.getElementById('resolution-warning');
+        if (warn) warn.style.display = selectedHeight() ? 'flex' : 'none';
+        loadMovies(mv.page);
     });
     on('bulk-queue', 'click', async () => {
         if (await queueFiles([...mv.selected], 'file')) {
@@ -340,6 +380,12 @@ function initTv() {
         const codec = document.getElementById('queue-codec').value;
         const warn = document.getElementById('codec-warning');
         if (warn) warn.style.display = codec === 'av1' ? 'inline-flex' : 'none';
+        if (!document.getElementById('files-view').classList.contains('hidden')) loadTvFiles(tv.page);
+    });
+    on('queue-resolution', 'change', () => {
+        const warn = document.getElementById('resolution-warning');
+        if (warn) warn.style.display = selectedHeight() ? 'inline-flex' : 'none';
+        if (!document.getElementById('files-view').classList.contains('hidden')) loadTvFiles(tv.page);
     });
     on('tv-queue-selected', 'click', async () => {
         const ids = [...document.querySelectorAll('.tv-select:checked')].map((cb) => cb.value);
@@ -373,6 +419,9 @@ function switchTvView(view) {
     document.getElementById('files-view').classList.toggle('hidden', view === 'shows');
     document.getElementById('tab-shows').classList.toggle('is-active', view === 'shows');
     document.getElementById('tab-files').classList.toggle('is-active', view !== 'shows');
+    // The resolution selector lives on the files tab; leaving it must not
+    // let a stale downscale pick ride the by-show "Queue N" buttons.
+    if (view !== 'files') resetResolutionSelector();
     if (view === 'files') loadTvFiles();
 }
 
