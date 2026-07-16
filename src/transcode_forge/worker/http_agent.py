@@ -116,41 +116,7 @@ class HttpWorkerAgent:
         if self._shutting_down:
             return
 
-        # Registration retries forever on transport/5xx (a scheduler
-        # restart must never kill fleet nodes) with a loud periodic ERROR;
-        # a 4xx refusal (revoked token, bad request) is an operator
-        # problem and exits loudly — systemd Restart=always is the second
-        # belt, so even that never turns into a silently dead node.
-        reg_backoff = Backoff(base=2.0, cap=60.0)
-        attempt = 0
-        while True:
-            try:
-                registration = await self._client.register(
-                    name=self.worker_name,
-                    host=self.host,
-                    capabilities=self.capabilities.encoders,
-                    supported_codecs=self.capabilities.supported_codecs,
-                    # This build understands jobs.target_height (encoder scale,
-                    # VERIFY height pin, gauge-at-target) — advertise it so the
-                    # scheduler's claim filter hands us downscale jobs.
-                    supports_downscale=True,
-                    ffmpeg_version=self.capabilities.ffmpeg_version,
-                    max_concurrent=self.settings.worker_max_concurrent,
-                )
-                break
-            except Exception as e:
-                if classify_error(e) is ErrorClass.TERMINAL:
-                    logger.error(
-                        "Registration REJECTED (%r) — check TF_WORKER_TOKEN and "
-                        "TF_SERVER_URL; exiting",
-                        e,
-                    )
-                    raise
-                attempt += 1
-                delay = reg_backoff.next_delay()
-                log = logger.error if attempt % 10 == 0 else logger.warning
-                log("Registration attempt %d failed (%r) — retrying in %.1fs", attempt, e, delay)
-                await asyncio.sleep(delay)
+        registration = await self._register_with_retry()
         self.worker_id = registration["worker_id"]
         logger.info("Registered as worker_id=%s", self.worker_id)
 
@@ -624,6 +590,49 @@ class HttpWorkerAgent:
             self._current_job_id = None
             self._current_progress = 0.0
             await storage.cleanup(job)
+
+    async def _register_with_retry(self) -> dict[str, Any]:
+        """Register with the scheduler; retry transport/5xx forever.
+
+        A scheduler restart must never kill fleet nodes, so retryable
+        failures loop with capped backoff and a loud periodic ERROR. Any
+        NON-retryable refusal — 401 revoked token, any other 4xx — is an
+        operator problem and exits loudly; systemd Restart=always is the
+        second belt, so even that never turns into a silently dead node.
+        (Deliberately `is not RETRYABLE`, not an allowlist of terminal
+        classes: a future ErrorClass member must not silently reopen the
+        retry-forever-on-revoked-token gap the verify pass caught here.)
+        """
+        assert self.capabilities is not None  # start() sets it before this
+        reg_backoff = Backoff(base=2.0, cap=60.0)
+        attempt = 0
+        while True:
+            try:
+                return await self._client.register(
+                    name=self.worker_name,
+                    host=self.host,
+                    capabilities=self.capabilities.encoders,
+                    supported_codecs=self.capabilities.supported_codecs,
+                    # This build understands jobs.target_height (encoder scale,
+                    # VERIFY height pin, gauge-at-target) — advertise it so the
+                    # scheduler's claim filter hands us downscale jobs.
+                    supports_downscale=True,
+                    ffmpeg_version=self.capabilities.ffmpeg_version,
+                    max_concurrent=self.settings.worker_max_concurrent,
+                )
+            except Exception as e:
+                if classify_error(e) is not ErrorClass.RETRYABLE:
+                    logger.error(
+                        "Registration REJECTED (%r) — check TF_WORKER_TOKEN and "
+                        "TF_SERVER_URL; exiting",
+                        e,
+                    )
+                    raise
+                attempt += 1
+                delay = reg_backoff.next_delay()
+                log = logger.error if attempt % 10 == 0 else logger.warning
+                log("Registration attempt %d failed (%r) — retrying in %.1fs", attempt, e, delay)
+                await asyncio.sleep(delay)
 
     # ── Milestone delivery (spec D1) ──────────────────────────────────
 
