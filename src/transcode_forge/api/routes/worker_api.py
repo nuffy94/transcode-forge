@@ -96,6 +96,29 @@ async def _require_owned_job(db: DBConnection, job_id: str, token_row: dict[str,
     return job
 
 
+_TERMINAL_STATUSES = frozenset(
+    {JobStatus.COMPLETE, JobStatus.SKIPPED, JobStatus.FAILED, JobStatus.CANCELLED}
+)
+
+
+def _is_duplicate_terminal_report(job: Job, incoming: JobStatus) -> bool:
+    """At-least-once delivery makes duplicate terminal reports normal
+    (worker-resilience spec D3): the SAME outcome again is acknowledged as
+    a no-op 204 — so a retrying worker can settle its outbox — with none
+    of the side effects (media-status sync, skip records) re-fired. A
+    CONFLICTING report on a job already terminal is refused with 409: the
+    first outcome won, and no report-path event may flip it.
+    """
+    if job.status == incoming:
+        return True
+    if job.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is already {job.status.value}; refusing {incoming.value}",
+        )
+    return False
+
+
 async def require_worker_token(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -523,7 +546,9 @@ async def complete_job(
     db: DBConnection = Depends(get_db),
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
-    await _require_owned_job(db, job_id, token_row)
+    job = await _require_owned_job(db, job_id, token_row)
+    if _is_duplicate_terminal_report(job, JobStatus.COMPLETE):
+        return
     await job_repo.update_job(
         db,
         job_id,
@@ -562,6 +587,8 @@ async def skip_job(
     from transcode_forge.repos import skipped as skip_repo
 
     job = await _require_owned_job(db, job_id, token_row)
+    if _is_duplicate_terminal_report(job, JobStatus.SKIPPED):
+        return
     await job_repo.update_job(
         db,
         job_id,
@@ -597,7 +624,9 @@ async def fail_job(
     db: DBConnection = Depends(get_db),
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
-    await _require_owned_job(db, job_id, token_row)
+    job = await _require_owned_job(db, job_id, token_row)
+    if _is_duplicate_terminal_report(job, JobStatus.FAILED):
+        return
     await job_repo.update_job(
         db,
         job_id,

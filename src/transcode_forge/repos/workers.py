@@ -90,13 +90,29 @@ async def update_worker_heartbeat(
     status: str = "online",
     current_job_id: str | None = None,
 ) -> None:
-    """Update heartbeat timestamp and status in the DB."""
+    """Update heartbeat timestamp and status in the DB.
+
+    current_job_changed_at records when the heartbeat last CHANGED which
+    job it names (including to/from NULL) — the reconciliation sweep
+    requeues a live worker's job only on a mismatch SUSTAINED past a
+    grace window, so the transition timestamp is the load-bearing part
+    (worker-resilience spec D3)."""
     now = datetime.now(UTC).isoformat()
-    await db.execute(
-        "UPDATE workers SET last_heartbeat = ?, status = ?,"
-        " current_job_id = ?, updated_at = ? WHERE id = ?",
-        (now, status, current_job_id, now, worker_id),
-    )
+    async with db.execute(
+        "SELECT current_job_id FROM workers WHERE id = ?", (worker_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    if row is not None and row["current_job_id"] == current_job_id:
+        await db.execute(
+            "UPDATE workers SET last_heartbeat = ?, status = ?, updated_at = ? WHERE id = ?",
+            (now, status, now, worker_id),
+        )
+    else:
+        await db.execute(
+            "UPDATE workers SET last_heartbeat = ?, status = ?, current_job_id = ?,"
+            " current_job_changed_at = ?, updated_at = ? WHERE id = ?",
+            (now, status, current_job_id, now, now, worker_id),
+        )
     await db.commit()
 
 

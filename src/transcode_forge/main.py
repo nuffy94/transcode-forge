@@ -152,7 +152,13 @@ ORPHAN_REQUEUE_GRACE_SECONDS = 600
 
 
 async def _orphan_requeue_loop(db: DBConnection) -> None:
-    """Requeue active jobs whose worker died and never came back.
+    """Requeue active jobs their worker will never finish.
+
+    Two invariants, one loop: (1) the worker is dead/offline/missing —
+    the orphan sweep; (2) the worker is ALIVE but its own heartbeat has
+    disowned the job past the reconciliation grace — the abandoned sweep
+    (worker-resilience spec D3; crashed-and-restarted pipeline, or a
+    terminal report lost with its outbox).
 
     Registration releases a worker's jobs when it RE-registers; this loop
     is the fallback for the worker that never does — without it those jobs
@@ -171,6 +177,19 @@ async def _orphan_requeue_loop(db: DBConnection) -> None:
                 )
         except Exception:
             logger.exception("Orphan job requeue failed")
+        try:
+            abandoned = await job_repo.requeue_abandoned_active_jobs(
+                db, grace_seconds=job_repo.ABANDONED_GRACE_SECONDS
+            )
+            for row in abandoned:
+                logger.warning(
+                    "Requeued abandoned job %s (%s) — its live worker has been"
+                    " heartbeating a different job past the reconciliation grace",
+                    row["id"],
+                    row["source_path"],
+                )
+        except Exception:
+            logger.exception("Abandoned job requeue failed")
         await asyncio.sleep(30)
 
 
