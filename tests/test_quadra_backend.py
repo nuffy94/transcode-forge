@@ -215,3 +215,52 @@ async def test_complete_accepts_backend_used_quadra(client: AsyncClient, app):
     final = await job_repo.get_job(app.state.db, job.id)
     assert final.status == JobStatus.COMPLETE
     assert final.backend_used == "quadra"
+
+
+async def test_complete_accepts_unknown_future_backend(client: AsyncClient, app):
+    """Review finding (PR #73): outcome reporting must be maximally
+    accepting on backend names — by report time the transcode is
+    irreversible, so a scheduler older than its workers must never 422 a
+    successful outcome over a name it doesn't know. Shape-checked only."""
+
+    async def _seed() -> Job:
+        job = Job(
+            source_path=f"/m/future-{id(object())}.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+        return job
+
+    ok_job = await _seed()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        headers, worker_id = await register_worker(client, c, "future-node", ["hevc"])
+        await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+        r = await c.post(
+            f"/api/worker/job/{ok_job.id}/complete",
+            json={"output_size": 1, "space_saved": 1, "source_size": 2, "backend_used": "vulkan"},
+            headers=headers,
+        )
+        assert r.status_code == 204
+
+        # Shape violations (not mere unknown names) are still rejected.
+        bad_job = await _seed()
+        await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+        r = await c.post(
+            f"/api/worker/job/{bad_job.id}/complete",
+            json={
+                "output_size": 1,
+                "space_saved": 1,
+                "source_size": 2,
+                "backend_used": "NOT A SLUG",
+            },
+            headers=headers,
+        )
+        assert r.status_code == 422
+
+    final = await job_repo.get_job(app.state.db, ok_job.id)
+    assert final.status == JobStatus.COMPLETE
+    assert final.backend_used == "vulkan"

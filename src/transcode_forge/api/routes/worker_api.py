@@ -163,7 +163,13 @@ class CompleteRequest(BaseModel):
     predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
     predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
+    # Shape check, NOT an allowlist: by the time a worker reports an
+    # outcome the transcode is irreversible — a scheduler rejecting the
+    # report over an unrecognized backend name (version skew) would turn
+    # a SUCCESSFUL job into a reported failure. Same maximally-accepting
+    # principle as error_message below; backend_used is stored/displayed,
+    # never branched on.
+    backend_used: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]+$")
 
 
 # Worker-reported error messages can embed ffmpeg stderr; cap what we
@@ -194,7 +200,8 @@ class SkippedRequest(BaseModel):
     predicted_vmaf_mean: float | None = Field(default=None, ge=0.0, le=100.0)
     predicted_vmaf_perc5: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
+    # Shape check, not allowlist — see CompleteRequest.backend_used.
+    backend_used: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]+$")
 
 
 class CheckDerivativeRequest(BaseModel):
@@ -209,7 +216,8 @@ class RegisterDerivativeRequest(BaseModel):
     # register-derivative, so the job row doesn't have these yet).
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
     resolved_crf: int | None = Field(default=None, ge=0, le=63)
-    backend_used: str | None = Field(default=None, pattern=r"^(qsv|nvenc|cpu|quadra)$")
+    # Shape check, not allowlist — see CompleteRequest.backend_used.
+    backend_used: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]+$")
 
 
 # ── Routes ────────────────────────────────────────────────────────────
