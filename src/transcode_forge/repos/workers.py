@@ -108,10 +108,13 @@ async def update_worker_heartbeat(
     heartbeats; the OR clause is the portable NULL-safe equality (SQLite
     has no IS NOT DISTINCT FROM)."""
     now = datetime.now(UTC).isoformat()
+    # CAST(? AS TEXT) is for asyncpg: a parameter appearing only in
+    # `? IS NULL` has no type context and raises IndeterminateDatatypeError
+    # on Postgres. SQLite accepts the cast unchanged.
     await db.execute(
         "UPDATE workers SET last_heartbeat = ?, status = ?,"
         " current_job_changed_at = CASE"
-        "   WHEN current_job_id = ? OR (current_job_id IS NULL AND ? IS NULL)"
+        "   WHEN current_job_id = ? OR (current_job_id IS NULL AND CAST(? AS TEXT) IS NULL)"
         "   THEN current_job_changed_at ELSE ? END,"
         " current_job_id = ?, updated_at = ?"
         " WHERE id = ?",
