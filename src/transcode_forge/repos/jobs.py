@@ -213,6 +213,45 @@ async def update_job(db: DBConnection, job_id: str, **fields: object) -> Job | N
     return await get_job(db, job_id)
 
 
+_TERMINAL_JOB_STATUSES = (
+    JobStatus.COMPLETE.value,
+    JobStatus.SKIPPED.value,
+    JobStatus.FAILED.value,
+    JobStatus.CANCELLED.value,
+)
+
+
+async def finalize_job(
+    db: DBConnection, job_id: str, worker_id: str, status: JobStatus, **fields: object
+) -> bool:
+    """Atomically transition an owned job to a terminal status.
+
+    The single conditional UPDATE is the fence a check-then-act guard
+    cannot be (worker-resilience spec D3): it succeeds only while the job
+    is still non-terminal AND still owned by the reporting worker, so of
+    two concurrent terminal reports exactly one wins — and a report can
+    never stomp a job the reconciliation sweep requeued (worker_id NULL)
+    or another worker re-claimed mid-request. Returns False when the
+    transition lost; the caller re-reads and answers 204/409/403.
+    """
+    invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
+    if invalid_cols:
+        raise ValueError(f"Invalid job column names: {invalid_cols}")
+
+    fields["updated_at"] = datetime.now(UTC).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = [v.value if isinstance(v, JobStatus) else v for v in fields.values()]
+    placeholders_terminal = ",".join("?" * len(_TERMINAL_JOB_STATUSES))
+    cur = await db.execute(
+        f"UPDATE jobs SET status = ?, {set_clause}"
+        " WHERE id = ? AND worker_id = ?"
+        f" AND status NOT IN ({placeholders_terminal})",
+        [status.value, *values, job_id, worker_id, *_TERMINAL_JOB_STATUSES],
+    )
+    await db.commit()
+    return bool(cur.rowcount)
+
+
 async def count_queued_jobs(db: DBConnection) -> int:
     """Count jobs waiting for a worker to claim them.
 
@@ -309,6 +348,121 @@ async def requeue_orphan_active_jobs(
             now.isoformat(),
             *active,
             *alive,
+            cutoff,
+            *active,
+            cutoff,
+        ),
+    ) as cur:
+        rows = await cur.fetchall()
+    await db.commit()
+    return [dict(r) for r in rows]
+
+
+# The reconciliation grace (worker-resilience spec D3): how long a LIVE
+# worker must have been heartbeating a different (or no) job before an
+# active job assigned to it counts as abandoned. The spec floor is 3
+# heartbeat intervals; 120s = 12 default intervals. Far tighter than the
+# dead-worker 600s is safe here — the evidence is a live worker actively
+# denying the job every ~10s, not mere silence. Shared by the requeue
+# sweep (main.py) and the audit report so they never disagree.
+ABANDONED_GRACE_SECONDS = 120
+
+# The sustained-mismatch condition, shared verbatim by the find/requeue
+# pair below. A worker heartbeating THE job's id never matches, regardless
+# of how stale the job row is — a multi-hour VMAF gauge sends no progress,
+# but its heartbeat names the job the whole time (the long-gauge safety
+# property). current_job_changed_at IS NOT NULL keeps pre-migration rows
+# (no transition observed yet) out of the sweep. j.updated_at is checked
+# too: a claim bumps it, so a just-claimed job is safe even though the
+# worker's previous mismatch (e.g. NULL since its last job) is old.
+_ABANDONED_CONDITION = (
+    "  AND w.status IN ({alive})"
+    "  AND (w.current_job_id IS NULL OR w.current_job_id != j.id)"
+    "  AND w.current_job_changed_at IS NOT NULL"
+    "  AND w.current_job_changed_at < ?"
+    "  AND j.updated_at < ?"
+)
+
+
+async def find_abandoned_active_jobs(
+    db: DBConnection, *, grace_seconds: int = ABANDONED_GRACE_SECONDS
+) -> list[dict[str, object]]:
+    """Find active jobs whose worker is ALIVE but heartbeating a different
+    (or no) current_job_id, sustained past the grace window.
+
+    The live-worker counterpart to find_orphan_active_jobs: the worker
+    crashed mid-pipeline and restarted, or lost its terminal report — its
+    own heartbeat demonstrably disowns the job, yet the job renders as
+    live and the dead-worker sweep will never touch it.
+    """
+    active = (
+        JobStatus.TRANSCODING.value,
+        JobStatus.ASSIGNED.value,
+        JobStatus.VERIFYING.value,
+    )
+    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    cutoff = (datetime.now(UTC) - timedelta(seconds=grace_seconds)).isoformat()
+    condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
+    query = (
+        "SELECT j.id, j.source_path, j.status, j.worker_id, j.started_at, "
+        "       w.current_job_id AS worker_current_job_id "
+        "FROM jobs j JOIN workers w ON w.id = j.worker_id "
+        f"WHERE j.status IN ({','.join('?' * len(active))}) " + condition + " ORDER BY j.started_at"
+    )
+    async with db.execute(query, (*active, *alive, cutoff, cutoff)) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def requeue_abandoned_active_jobs(
+    db: DBConnection, *, grace_seconds: int = ABANDONED_GRACE_SECONDS
+) -> list[dict[str, object]]:
+    """Requeue active jobs their (live) worker has demonstrably abandoned.
+
+    The healing counterpart to find_abandoned_active_jobs — same
+    conditions. The outer status/updated_at re-check mirrors
+    requeue_orphan_active_jobs: under Postgres READ COMMITTED only outer
+    quals are re-evaluated against a concurrently-changed row, so a
+    terminal report landing at the exact moment of the sweep must flip
+    the job OUT of the sweep's reach, never be stomped back to QUEUED.
+
+    Known, accepted race: the workers-side conditions live only in the
+    subquery (they can't be outer quals on a jobs UPDATE), so a
+    corrective heartbeat landing inside this statement's own execution
+    window can lose to the sweep and the job is requeued anyway. That
+    needs a worker that already denied the job for the whole grace to
+    re-name it in a millisecond window; the consequence is bounded — the
+    old worker's late reports 403 (ownership moved) and the .tf_lock
+    keeps the file safe — and it self-heals via re-claim.
+    """
+    active = (
+        JobStatus.TRANSCODING.value,
+        JobStatus.ASSIGNED.value,
+        JobStatus.VERIFYING.value,
+    )
+    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    now = datetime.now(UTC)
+    cutoff = (now - timedelta(seconds=grace_seconds)).isoformat()
+    placeholders_active = ",".join("?" * len(active))
+    condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
+    sql = (
+        "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
+        " progress = 0, phase = NULL, updated_at = ?"
+        " WHERE id IN ("
+        "   SELECT j.id FROM jobs j JOIN workers w ON w.id = j.worker_id"
+        f"  WHERE j.status IN ({placeholders_active})" + condition + " )"
+        f" AND status IN ({placeholders_active})"
+        "  AND updated_at < ?"
+        " RETURNING id, source_path"
+    )
+    async with db.execute(
+        sql,
+        (
+            JobStatus.QUEUED.value,
+            now.isoformat(),
+            *active,
+            *alive,
+            cutoff,
             cutoff,
             *active,
             cutoff,
