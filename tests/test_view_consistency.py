@@ -463,3 +463,19 @@ class TestEnumCoverage:
         assert resp.status_code in (400, 422), (
             "typo'd status should fail validation, not silently return 0 rows"
         )
+
+
+class TestRecentScansSingleSource:
+    """Recent scans (with their FAILED pills) render on /, /queue, and
+    /activity — all three must embed the same partial endpoint, so a
+    failed scan can never be visible on one surface and absent on
+    another (qa ledger: activity-failed-scans-not-surfaced).
+    """
+
+    async def test_every_surface_embeds_the_same_scan_partial(self, client: AsyncClient):
+        for page in ("/", "/queue", "/activity"):
+            resp = await client.get(page)
+            assert resp.status_code == 200
+            assert 'hx-get="/partials/scan-history"' in resp.text, (
+                f"{page} does not embed the shared scan-history partial"
+            )

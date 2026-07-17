@@ -104,7 +104,8 @@
   first_seen: 2026-07-05 / S10
   last_seen: 2026-07-14 / S10
   severity: medium
-  status: unverified
+  status: codified
+  refs: {pr: 82, test: "tests/test_view_consistency.py::TestRecentScansSingleSource"}
   note: >-
     Re-observed with full repro on the 2026-07-14 sweep (S3 library scan
     against a fake bucket). Upgraded low->medium: after the optimistic
@@ -112,6 +113,11 @@
     facet covers scan runs — verified the string never appears there) and
     the only honest surface is the Recent-scans FAILED pill on / and
     /queue, which the Settings-triggered user was never pointed at.
+    Fixed 2026-07-17 (PR 82): /activity's scan facet embeds the same
+    /partials/scan-history partial as / and /queue; the view-consistency
+    guard pins all three surfaces to the one endpoint (observed red
+    before the fix). The no-completion-toast half stays tracked as
+    settings-scan-completion-unconfirmed.
 
 - id: queue-paused-state-indicator-weak
   title: Paused queue's only persistent cue is the button reading RESUME (no banner/tile)
