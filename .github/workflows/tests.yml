@@ -2,9 +2,9 @@ name: tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev, "redesign/**"]
+    branches: [main, "redesign/**"]
 
 jobs:
   test:
@@ -140,3 +140,26 @@ jobs:
 
       - name: Verify committed CSS is fresh
         run: python scripts/build_css.py --check
+
+  image-build:
+    # Prove the production image recipe at PR time: the Dockerfile builds and
+    # its baked-in smoke (encoder presence + every VMAF model the gate can
+    # name, scored on 1080p frames) passes. No push — publishing is
+    # publish.yml's job (tags -> semver + latest, main -> edge). Before this
+    # job, a broken Dockerfile only surfaced at publish time.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
