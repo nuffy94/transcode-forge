@@ -310,7 +310,8 @@ async function addSchedule() {
             body: JSON.stringify({ name, start_hour: start, end_hour: end, days_mask }),
         });
         if (!r.ok) {
-            showToast('Failed to add schedule', 'error');
+            const err = await r.json();
+            showToast(detailText(err, 'Failed to add schedule'), 'error');
             return;
         }
         showToast('Schedule added', 'success');
