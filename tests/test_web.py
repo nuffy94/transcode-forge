@@ -202,6 +202,14 @@ class TestPageRoutes:
         assert "Encode outcomes" in response.text
         assert "Scan skips" in response.text
 
+    async def test_activity_page_surfaces_recent_scans(self, client: AsyncClient):
+        # Failed scans used to be visible only on / and /queue — a scan
+        # kicked off from Settings could fail invisibly (qa ledger:
+        # activity-failed-scans-not-surfaced).
+        response = await client.get("/activity")
+        assert 'hx-get="/partials/scan-history"' in response.text
+        assert "Recent scans" in response.text
+
     async def test_history_redirects_to_activity(self, client: AsyncClient):
         """History merged into Activity — the old URL 301s (asserted via the
         authed client; anonymous requests never reach the route)."""

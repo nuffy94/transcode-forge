@@ -89,6 +89,20 @@
     <!-- ============ Scan skips facet ============ -->
     <div id="skips-view" class="flex flex-col gap-4 {% if view != 'skips' %}hidden{% endif %}">
 
+        <!-- Same partial as / and /queue — a failed scan run must be visible
+             here too, not only where the scan wasn't started from
+             (qa ledger: activity-failed-scans-not-surfaced). -->
+        <section class="forge-panel">
+            <div class="forge-panel-hd">
+                <h2 class="forge-panel-title">Recent scans</h2>
+            </div>
+            <div id="scan-history"
+                 hx-get="/partials/scan-history"
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+            </div>
+        </section>
+
         <div id="skip-stats"
              hx-get="/partials/skip-stats"
              hx-trigger="load, every 30s"
