@@ -1,8 +1,13 @@
 name: publish
 
-# Build and push the container image to GHCR on a version tag.
+# Build and push the container image to GHCR, split by release channel:
+#   push to main      -> :edge                     (integration/soak channel)
+#   tag vX.Y.Z        -> :X.Y.Z, :X.Y, :latest     (the release channel)
+#   workflow_dispatch -> whatever the ref qualifies for (main -> :edge)
+# `:latest` is ONLY ever a tagged release — fresh installs (compose default,
+# StackScripts, README quickstart) resolve to it, so an untagged main build
+# must never shadow it. The fleet itself pins exact versions.
 #   git tag v0.6.0 && git push origin v0.6.0
-# Produces ghcr.io/<owner>/transcode-forge:{0.6.0, 0.6, latest}.
 #
 # amd64 only for now: the Dockerfile installs the Intel QSV media stack
 # (intel-media-va-driver-non-free, libmfx1), which is x86-only. arm64 would
@@ -10,6 +15,7 @@ name: publish
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch: {}
 
@@ -41,7 +47,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=edge,branch=main
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
