@@ -197,7 +197,8 @@
   first_seen: 2026-07-05 / S8
   last_seen: 2026-07-14 / S8
   severity: medium
-  status: unverified
+  status: fixed
+  refs: {pr: 81}
   note: >-
     Re-observed with full repro on the 2026-07-12 release-gate sweep.
     addSchedule() in settings.js is the only handler that hard-codes a
@@ -206,7 +207,9 @@
     end-hour 99) — upgraded low->medium: settings.js:313 discards the
     server's exact user-ready reason while six sibling handlers in the
     same file parse it, and the number input happily displays the
-    out-of-range value as if accepted.
+    out-of-range value as if accepted. Fixed 2026-07-17 (PR 81):
+    addSchedule now parses the body with detailText() like its siblings.
+    The number-input display quirk is browser behavior, out of scope.
 
 - id: settings-library-422-toast-lacks-field-name
   title: Library-create 422 toast shows the raw Pydantic message without naming the offending field

@@ -4,6 +4,58 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The image's measurement ffmpeg now carries the VMAF v1 models**
+  (libvmaf 3.2): the static build is pinned to BtbN autobuild-2026-07-15
+  and the image's build-time smoke verifies the v1 models on 1080p
+  frames (v1's CAMBI banding feature rejects tiny probe frames). The
+  quality gate still scores with the v0 models — nothing changes until
+  the v1 migration's cohort recalibration lands deliberately. (#78)
+- **GHCR release channels.** Every push to main publishes `:edge` (the
+  integration/soak image); `:latest` moves only on `v*` release tags —
+  fresh installs resolving `:latest` (compose default, StackScripts,
+  README) can no longer receive an untagged build. Every PR now also
+  builds the production image (no push) as a CI gate, so a broken
+  Dockerfile surfaces before merge instead of at publish time. The
+  unused `dev` integration branch is retired. (#79)
+
+## [0.11.0] - 2026-07-16
+
+### Added
+- **Finished work can no longer be lost to a scheduler outage.** Workers
+  write every terminal report (complete / skipped / failed) to a durable
+  on-disk outbox before attempting delivery, retry with classified
+  backoff, drain the outbox before registering or claiming new work, and
+  keep naming the job in heartbeats until its report lands — so delayed
+  delivery reads as "still mine," never abandonment. Durable state lives
+  in `TF_WORKER_STATE_DIR` (Docker workers should mount it; the compose
+  example does). A hostile-scheduler test tier pins the behavior against
+  blips, 5xxs, timeouts, token revocation, and restarts mid-delivery.
+  (#76)
+- **Terminal reports are idempotent on the scheduler.** A duplicate
+  report of the same outcome answers 204 and changes nothing; a
+  conflicting terminal report answers 409 — first outcome wins,
+  atomically, with every side effect inside one transaction. A
+  reconciliation sweep requeues jobs whose live worker has stopped
+  claiming them (migration 0013), and `/api/audit/integrity` gains
+  `abandoned_active_jobs`. Deploy the scheduler before the workers.
+  (#74)
+- **NETINT Quadra VPU backend (`quadra`).** Encoder builders, hardware
+  probe, and scheduler support for NETINT's HEVC/AV1 transcoding ASICs —
+  probe-gated, so fleets without the hardware are unaffected. Terminal
+  reports now accept any well-formed `backend_used` name instead of an
+  allowlist, so a newer worker's report can never be rejected after an
+  irreversible swap. (#73)
+
+### Changed
+- Worker systemd units (repo example and StackScript) run with
+  `Restart=always` — a worker that dies on a transient error comes back
+  on its own. (#76)
+- The staging smoke accepts an optional downscale height, exercising the
+  downscale path end-to-end during release gating. (#72)
+
 ## [0.10.0] - 2026-07-16
 
 ### Added
