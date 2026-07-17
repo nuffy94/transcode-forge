@@ -17,23 +17,28 @@ RUN sed -i 's|^Components: main$|Components: main contrib non-free non-free-firm
 # NOT the libvmaf filter (verified on 5.1.8-0+deb12u1). Encodes keep using
 # the distro ffmpeg (QSV driver stack works there); measurement uses this
 # static BtbN build, which links libvmaf with the built-in models
-# (vmaf_v0.6.1 + vmaf_4k_v0.6.1 — no external model files needed).
+# (vmaf_v0.6.1 + vmaf_4k_v0.6.1, and VMAF v1 as of libvmaf 3.2 — no
+# external model files needed). The gate still scores with the v0 models;
+# the v1 models are verified here so the image is ready for the v1
+# migration's cohort recalibration (plans/vmaf-v1-migration-runbook.md).
 # The build fails loudly if either encoder or the scoring path is missing.
+# The smoke uses 1080p frames: the v1 models' CAMBI feature errors on
+# tiny frames (`no feature 'cambi_hrs_1080_…'` on 192x108).
 # PINNED to a dated release (not the rolling "latest"): the binary is GPL —
 # distributing it in the published image requires the corresponding source
 # to stay identifiable (see THIRD-PARTY-LICENSES.md), and pinning also keeps
 # image builds reproducible. Bump deliberately.
-ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-13-14-11/ffmpeg-n7.1.5-2-g998de74adf-linux64-gpl-7.1.tar.xz
+ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-15-14-01/ffmpeg-n7.1.5-2-g998de74adf-linux64-gpl-7.1.tar.xz
 RUN curl -fsSL "$VMAF_FFMPEG_URL" -o /tmp/ffmpeg-static.tar.xz \
     && mkdir -p /opt/ffmpeg-vmaf \
     && tar -xJf /tmp/ffmpeg-static.tar.xz --strip-components=2 -C /opt/ffmpeg-vmaf \
         --wildcards '*/bin/ffmpeg' \
     && rm /tmp/ffmpeg-static.tar.xz \
     && ffmpeg -hide_banner -encoders | grep -q libsvtav1 \
-    && for model in vmaf_v0.6.1 vmaf_4k_v0.6.1; do \
+    && for model in vmaf_v0.6.1 vmaf_4k_v0.6.1 vmaf_v1.0.16_3d0h vmaf_v1.0.16_1d5h_2160; do \
         /opt/ffmpeg-vmaf/ffmpeg -hide_banner -v error \
-            -f lavfi -i "nullsrc=s=192x108:d=0.2" \
-            -f lavfi -i "nullsrc=s=192x108:d=0.2" \
+            -f lavfi -i "nullsrc=s=1920x1080:d=0.2" \
+            -f lavfi -i "nullsrc=s=1920x1080:d=0.2" \
             -lavfi "[0:v]format=yuv420p10le[a];[1:v]format=yuv420p10le[b];[a][b]libvmaf=model=version=$model" \
             -f null - || exit 1; \
     done
