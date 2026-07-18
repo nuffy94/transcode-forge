@@ -712,3 +712,29 @@ class TestTemplatePaginationContract:
                 if int(m.group(1)) > 200:
                     offenders.append(f"{f.name}: per_page={m.group(1)}")
         assert not offenders, f"Templates exceed the API per_page cap: {offenders}"
+
+
+class TestAnimatedPollMorphs:
+    """Pulse-dot partials restart their infinite CSS animations under a
+    plain innerHTML poll swap — the original flicker bug (PR #39) fixed
+    active-transcodes/jobs but left the other animated polls unmorphed
+    (reported live 2026-07-17: "the dashboard still flickers"). Every
+    poll target whose partial renders forge-pulse must morph.
+    """
+
+    async def test_animated_polls_use_morph_swaps(self, client: AsyncClient):
+        surfaces = {
+            "/": ["dashboard-stats", "scheduler-info", "scan-history"],
+            "/queue": ["scan-history"],
+            "/activity": ["scan-history"],
+            "/workers": ["scheduler-info"],
+        }
+        for page, ids in surfaces.items():
+            html = (await client.get(page)).text
+            for el_id in ids:
+                m = re.search(rf'id="{el_id}"[^>]*>', html)
+                assert m, f"{page}: #{el_id} not found"
+                tag = m.group(0)
+                assert 'hx-ext="morph"' in tag and 'hx-swap="morph:innerHTML"' in tag, (
+                    f"{page}: #{el_id} polls without morph — animated content flickers"
+                )

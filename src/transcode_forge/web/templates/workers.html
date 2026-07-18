@@ -32,7 +32,7 @@
                 <h2 class="forge-panel-title">Scheduler</h2>
                 <span class="ml-auto font-mono text-2xs text-forge-mute uppercase tracking-stamp">this host</span>
             </div>
-            <div class="p-3.5" id="scheduler-info" hx-get="/partials/scheduler-info" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
+            <div class="p-3.5" id="scheduler-info" hx-get="/partials/scheduler-info" hx-trigger="load, every 10s" hx-ext="morph" hx-swap="morph:innerHTML"></div>
         </section>
     </div>
 

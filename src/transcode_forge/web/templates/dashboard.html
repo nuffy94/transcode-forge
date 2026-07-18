@@ -20,10 +20,13 @@
     </header>
 
     <!-- KPI strip -->
+    {# morph, not innerHTML: the queued/workers dots pulse forever — a plain
+       swap restarts the animation every poll (same class as the #39 fix). #}
     <section id="dashboard-stats"
              hx-get="/partials/dashboard-stats"
              hx-trigger="load, every 10s"
-             hx-swap="innerHTML">
+             hx-ext="morph"
+             hx-swap="morph:innerHTML">
         <div class="forge-panel grid grid-cols-2 lg:grid-cols-4">
             <div class="p-4 h-24 animate-pulse"></div>
             <div class="p-4 h-24 animate-pulse"></div>
@@ -77,7 +80,8 @@
                 <div class="p-4" id="scheduler-info"
                      hx-get="/partials/scheduler-info"
                      hx-trigger="load, every 15s"
-                     hx-swap="innerHTML">
+                     hx-ext="morph"
+                     hx-swap="morph:innerHTML">
                 </div>
             </section>
 
@@ -88,7 +92,8 @@
                 <div id="scan-history"
                      hx-get="/partials/scan-history"
                      hx-trigger="load, every 30s"
-                     hx-swap="innerHTML">
+                     hx-ext="morph"
+                     hx-swap="morph:innerHTML">
                 </div>
             </section>
         </div>
