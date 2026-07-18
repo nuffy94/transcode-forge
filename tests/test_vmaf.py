@@ -311,7 +311,6 @@ class TestMeasureVmafStreaming:
         assert "-progress" not in cmd
         assert "-nostats" not in cmd
 
-
     async def test_streaming_failure_reports_real_diagnostics(self, tmp_path):
         """Verify-round follow-up: a nonzero exit through the STREAMING
         branch must still surface real ffmpeg error text from the drained
