@@ -1,0 +1,71 @@
+{#
+  Shared progress renderer for an active job — used by the dashboard
+  active-transcodes list AND the queue table (the queue kept the classic
+  meter long after #62/#63 shipped the stations on the dashboard, so six
+  CRF-searching jobs all read "starting 0%" — reported 2026-07-17).
+
+  Jobs with a reported phase render the five-station pipeline bar
+  (Search → Encode → Verify → Gauge → Swap) with tick marks for the
+  sub-second protocol steps; only Encode shows a percentage — the timed
+  phases used to masquerade as a stuck "0%" meter. Jobs without a phase
+  (pre-phase workers) keep the classic meter row.
+
+  data-progress-bar / data-progress-pct / .forge-station[data-station]
+  stay load-bearing for ops.js WS updates (contract C.1) — ops.js finds
+  the row by data-job-id document-wide, so both pages animate live with
+  no page-specific JS. The caller owns the row element and its
+  data-job-id / data-phase attributes.
+
+  show_copy: the dashboard renders the phase sentence under the bar; the
+  queue's table cell skips it (the station labels carry the words).
+#}
+{% macro station_bar(job, pct, show_copy=true) %}
+{% set STATIONS = [
+    ('search', 'Search'), ('encode', 'Encode'), ('verify', 'Verify'),
+    ('gauge', 'Gauge'), ('swap', 'Swap'),
+] %}
+{% set PHASE_COPY = {
+    'search': 'Finding the strongest compression that holds the target',
+    'encode': 'Encoding',
+    'verify': 'Verifying the encode decodes cleanly',
+    'gauge': 'Gauging quality against the original',
+    'swap': 'Swapping into place',
+} %}
+{% set order = ['search', 'encode', 'verify', 'gauge', 'swap'] %}
+{% if job.phase and job.phase in order %}
+{% set cur = order.index(job.phase) %}
+{% set gate_off = job.target_vmaf is none %}
+<div class="forge-stations">
+    <span class="forge-tick forge-tick--lit" role="img" aria-label="Lock — original claimed and protected" title="Lock"></span>
+    {% for key, label in STATIONS %}
+    {% set i = loop.index0 %}
+    {% set off = gate_off and key in ('search', 'gauge') %}
+    {% set state = 'off' if off else ('done' if i < cur else ('active' if i == cur else 'todo')) %}
+    <div class="forge-station forge-station--{{ state }}{% if state == 'active' and key != 'encode' %} forge-station--timed{% endif %}" data-station="{{ key }}">
+        <div class="forge-station-seg">
+            {% if key == 'encode' and state == 'active' %}<div class="forge-station-fill" data-progress-bar style="width: {{ pct }}%;"></div>{% endif %}
+        </div>
+        <div class="forge-station-lbl flex justify-between gap-1 font-mono text-2xs uppercase {% if state == 'active' %}text-forge-ember-hot{% elif state == 'done' %}text-forge-oxide/90{% else %}text-forge-mute{% endif %}">
+            <span>{{ label }}</span>
+            {% if key == 'encode' and state == 'active' %}<span class="tabular-nums font-semibold" data-progress-pct>{% if pct %}{{ pct }}%{% else %}…{% endif %}</span>
+            {% elif off %}<span>off</span>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+    <span class="forge-tick" role="img" aria-label="Confirm — post-swap verification" title="Confirm"></span>
+    <span class="forge-tick" role="img" aria-label="Cleanup — backup removed" title="Cleanup"></span>
+    <span class="forge-tick" role="img" aria-label="Unlock — lock released" title="Unlock"></span>
+</div>
+{% if show_copy %}
+<p class="mt-2 font-mono text-xs text-forge-ember-hot font-semibold">{{ PHASE_COPY.get(job.phase, job.phase) }}{% if job.phase == 'encode' and pct %} — {{ pct }}%{% endif %}</p>
+{% endif %}
+{% else %}
+{# Pre-phase worker (or phase not yet reported): the classic meter. #}
+<div class="flex items-center gap-3">
+    <div class="forge-meter flex-1">
+        <div class="forge-meter-fill" data-progress-bar style="width: {{ pct }}%;"></div>
+    </div>
+    <span class="font-mono text-xs font-semibold {% if pct %}text-forge-ember-hot{% else %}text-forge-mute{% endif %} tabular-nums w-14 text-right" data-progress-pct>{% if pct %}{{ pct }}%{% else %}starting{% endif %}</span>
+</div>
+{% endif %}
+{% endmacro %}

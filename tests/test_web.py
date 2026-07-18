@@ -738,3 +738,50 @@ class TestAnimatedPollMorphs:
                 assert 'hx-ext="morph"' in tag and 'hx-swap="morph:innerHTML"' in tag, (
                     f"{page}: #{el_id} polls without morph — animated content flickers"
                 )
+
+
+class TestQueueStationBars:
+    """The queue table renders the same station bar as the dashboard for
+    phase-reporting jobs (shared _station_bar.html macro) — six
+    CRF-searching jobs all read "starting 0%" on /queue before this
+    (reported live 2026-07-17). Phaseless rows keep the classic meter.
+    """
+
+    async def test_phased_job_renders_stations_in_queue(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/QueueStations.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.0, phase="search")
+
+        resp = await client.get("/partials/jobs?status=transcoding")
+        assert resp.status_code == 200
+        assert 'data-phase="search"' in resp.text
+        assert 'data-station="search"' in resp.text
+        assert "forge-station--active" in resp.text
+        # The old deception is gone: a searching job no longer reads "starting".
+        assert "starting" not in resp.text
+        # The dashboard's phase sentence stays out of the table cell.
+        assert "Finding the strongest compression" not in resp.text
+
+    async def test_phaseless_job_keeps_classic_meter_in_queue(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/QueueOldWorker.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.478)
+
+        resp = await client.get("/partials/jobs?status=transcoding")
+        assert resp.status_code == 200
+        assert "forge-station" not in resp.text
+        assert "forge-meter" in resp.text
+        assert "48%" in resp.text

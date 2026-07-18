@@ -1,8 +1,11 @@
 {% from "partials/_macros.html" import sort_th %}
 {% from "partials/_icons.html" import icon %}
+{% from "partials/_station_bar.html" import station_bar %}
 {#- Data contract (tests/test_view_consistency.py + WS live updates):
-    exactly ONE data-job-id per row; transcoding rows carry exactly one
-    data-progress-bar + data-progress-pct. Keep it that way. -#}
+    exactly ONE data-job-id per row; transcoding rows carry AT MOST one
+    data-progress-bar + data-progress-pct (station rows outside the
+    encode phase carry none — the stations themselves are the display).
+    Keep it that way. -#}
 {% if jobs %}
 <table class="forge-table">
     <thead>
@@ -24,6 +27,7 @@
         {% set pct = (job.progress * 100)|round|int %}
         {% set fid = file_ids.get(job.source_path) %}
         <tr data-job-id="{{ job.id }}"
+            {% if job.phase %}data-phase="{{ job.phase }}"{% endif %}
             {% if fid %}data-file-id="{{ fid }}" class="cursor-pointer {% if job.status == 'transcoding' %}is-active{% endif %}"
             {% elif job.status == 'transcoding' %}class="is-active"{% endif %}>
             <td>
@@ -57,12 +61,7 @@
             </td>
             <td>
                 {% if job.status == 'transcoding' %}
-                <div class="flex items-center gap-3">
-                    <div class="forge-meter flex-1">
-                        <div data-progress-bar class="forge-meter-fill" style="width: {{ pct }}%;"></div>
-                    </div>
-                    <span data-progress-pct class="font-mono font-semibold text-xs {% if pct %}text-forge-ember-hot{% else %}text-forge-mute{% endif %} tabular-nums w-14 text-right">{% if pct %}{{ pct }}%{% else %}starting{% endif %}</span>
-                </div>
+                {{ station_bar(job, pct, show_copy=false) }}
                 {% elif job.status == 'complete' %}
                 <span class="font-mono text-2xs text-forge-oxide uppercase tracking-stamp">Done{% if job.savings_percent %} · −{{ job.savings_percent|round(0)|int }}%{% endif %}</span>
                 {% elif job.status in ('pending', 'queued') %}
