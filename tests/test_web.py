@@ -828,3 +828,15 @@ class TestStationPhaseDetail:
         # Empty suffix span still renders when nothing is reported yet —
         # ops.js needs the live-update target.
         assert "data-phase-detail" in resp.text
+
+
+class TestFloorWarningMarkup:
+    async def test_settings_carries_floor_cross_field_warning(self, client: AsyncClient):
+        # qa ledger settings-vmaf-floor-above-target-silent: a target VMAF
+        # below the perc5 floor aims the search at quality the gate refuses
+        # to keep. The tuning panel now carries the warning (settings.js
+        # toggles visibility on the two inputs).
+        resp = await client.get("/settings")
+        assert resp.status_code == 200
+        assert 'id="tune-floor-warning"' in resp.text
+        assert "below the perc5 safety floor" in resp.text
