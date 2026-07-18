@@ -1139,3 +1139,80 @@ class TestTokenRebindGuard:
         assert takeover.json()["worker_id"] == worker_id  # binding continuity
         worker = await worker_repo.get_worker(app.state.db, worker_id)
         assert (worker.name, worker.host) == ("new-box", "host-b")
+
+
+class TestPhaseProgressDetail:
+    """phase_pct / phase_detail ride the progress POST (station-bar
+    suffixes). Both always overwrite so a stale gauge fraction can't
+    survive into the next phase; old workers omit them and rows stay
+    NULL."""
+
+    async def test_phase_progress_persists_and_clears(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import Job, JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = Job(
+            source_path="/m/phase-progress.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            status=JobStatus.PENDING,
+        )
+        await job_repo.create_job(app.state.db, job)
+        issue = await client.post("/api/worker-tokens", json={"label": "pp"})
+        token = issue.json()["token"]
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers = {"Authorization": f"Bearer {token}"}
+            reg = await c.post(
+                "/api/worker/register",
+                json={
+                    "name": "pp",
+                    "host": "h",
+                    "capabilities": ["cpu"],
+                    "ffmpeg_version": "x",
+                    "max_concurrent": 1,
+                },
+                headers=headers,
+            )
+            worker_id = reg.json()["worker_id"]
+            r = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert r.json()["job"]["id"] == job.id
+
+            # Gauge fraction persists.
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 1.0, "phase": "gauge", "phase_pct": 0.42},
+                headers=headers,
+            )
+            assert r.status_code == 204
+            row = await job_repo.get_job(app.state.db, job.id)
+            assert row is not None
+            assert row.phase_pct == 0.42
+            assert row.phase_detail is None
+
+            # Search label persists; the omitted pct clears the stale fraction.
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 1.0, "phase": "search", "phase_detail": "q3/5"},
+                headers=headers,
+            )
+            assert r.status_code == 204
+            row = await job_repo.get_job(app.state.db, job.id)
+            assert row is not None
+            assert row.phase_detail == "q3/5"
+            assert row.phase_pct is None
+
+            # Oversized labels are rejected, not truncated.
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 1.0, "phase": "search", "phase_detail": "x" * 17},
+                headers=headers,
+            )
+            assert r.status_code == 422

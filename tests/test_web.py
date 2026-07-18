@@ -787,6 +787,49 @@ class TestQueueStationBars:
         assert "48%" in resp.text
 
 
+class TestStationPhaseDetail:
+    """Timed stations show within-phase progress as a suffix: gauge gets a
+    true % (phase_pct), search gets the probe count (phase_detail). Both
+    render through the shared macro on the queue AND dashboard."""
+
+    async def test_gauge_pct_renders_in_queue(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/GaugePct.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=1.0, phase="gauge", phase_pct=0.42
+        )
+        resp = await client.get("/partials/jobs?status=transcoding")
+        assert resp.status_code == 200
+        assert "data-phase-detail>42%" in resp.text
+
+    async def test_search_probe_label_renders_on_dashboard(self, client: AsyncClient, app):
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/SearchProbe.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=0.0, phase="search", phase_detail="q3/5"
+        )
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert "q3/5" in resp.text
+        # Empty suffix span still renders when nothing is reported yet —
+        # ops.js needs the live-update target.
+        assert "data-phase-detail" in resp.text
+
+
 class TestFloorWarningMarkup:
     async def test_settings_carries_floor_cross_field_warning(self, client: AsyncClient):
         # qa ledger settings-vmaf-floor-above-target-silent: a target VMAF

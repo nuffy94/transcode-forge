@@ -77,6 +77,11 @@ class Job(BaseModel):
     # Pipeline phase (JobPhase value) — NULL until a phase-aware worker
     # reports one; the dashboard falls back to the plain meter row.
     phase: str | None = None
+    # Per-phase progress: a 0-1 fraction (gauge) and/or a short label
+    # (search "q3/5") rendered as a suffix on the active station — NULL
+    # until a detail-aware worker reports them.
+    phase_pct: float | None = None
+    phase_detail: str | None = None
     output_size: int | None = None
     space_saved: int | None = None
     error_message: str | None = None

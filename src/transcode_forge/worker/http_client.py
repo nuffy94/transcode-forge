@@ -123,10 +123,20 @@ class WorkerHttpClient:
         progress: float,
         speed: float | None,
         phase: str | None = None,
+        phase_pct: float | None = None,
+        phase_detail: str | None = None,
     ) -> None:
+        # Pre-0.12 schedulers ignore the extra phase_* fields (pydantic
+        # drops unknown keys) — safe against version skew in either order.
         r = await self._client.post(
             f"/api/worker/job/{job_id}/progress",
-            json={"progress": progress, "speed": speed, "phase": phase},
+            json={
+                "progress": progress,
+                "speed": speed,
+                "phase": phase,
+                "phase_pct": phase_pct,
+                "phase_detail": phase_detail,
+            },
         )
         _raise_for_status(r)
 

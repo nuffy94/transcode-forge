@@ -165,6 +165,7 @@ async def run_pipeline(
     target_height: int | None = None,
     progress_callback: Callable[[float, float | None], Any] | None = None,
     phase_callback: Callable[[str], Any] | None = None,
+    phase_progress_callback: Callable[[float | None, str | None], Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the full 8-step transcode pipeline.
 
@@ -291,6 +292,16 @@ async def run_pipeline(
             if phase_callback is not None:
                 await phase_callback(name)
 
+        # Within-phase progress for the timed stations: a fraction (gauge)
+        # or a short label (search probe count) — pure display, best-effort.
+        async def _on_probe(done: int, total: int) -> None:
+            if phase_progress_callback is not None:
+                await phase_progress_callback(None, f"q{done}/{total}")
+
+        async def _on_gauge(frac: float) -> None:
+            if phase_progress_callback is not None:
+                await phase_progress_callback(frac, None)
+
         if crf_search and target_vmaf is not None and vmaf_available:
             await _phase(JobPhase.SEARCH)
             assert search_perc5_floor is not None
@@ -304,6 +315,7 @@ async def run_pipeline(
                     duration=source_duration,
                     height=source_height,
                     target_height=target_height,
+                    on_probe=_on_probe if phase_progress_callback is not None else None,
                 )
                 if search is not None:
                     quality = search.quality
@@ -370,7 +382,12 @@ async def run_pipeline(
             try:
                 await _phase(JobPhase.GAUGE)
                 score = await measure_vmaf(
-                    src, tmp_path, height=source_height, target_height=target_height
+                    src,
+                    tmp_path,
+                    height=source_height,
+                    target_height=target_height,
+                    duration=source_duration,
+                    on_progress=_on_gauge if phase_progress_callback is not None else None,
                 )
                 vmaf_mean, vmaf_perc5 = score.mean, score.perc5
             except VmafUnavailableError:

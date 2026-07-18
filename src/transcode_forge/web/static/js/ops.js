@@ -86,6 +86,19 @@ export function initLiveProgress() {
                     } else st.classList.add('forge-station--todo');
                 });
             }
+            // Within-phase progress on the active timed station (gauge %,
+            // search probe count). The span is server-rendered empty, so
+            // there's always a target; query AFTER the class move above.
+            if (data.phase && data.phase !== 'encode') {
+                const detailEl = row.querySelector('.forge-station--active [data-phase-detail]');
+                if (detailEl) {
+                    if (typeof data.phase_pct === 'number') {
+                        detailEl.textContent = Math.round(data.phase_pct * 100) + '%';
+                    } else if (data.phase_detail) {
+                        detailEl.textContent = data.phase_detail;
+                    }
+                }
+            }
         };
         ws.onclose = () => setTimeout(connect, 5000);
     }

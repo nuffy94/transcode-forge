@@ -208,3 +208,138 @@ class TestQualitySearch:
                 duration=5400.0,
             )
         assert result is None
+
+
+def test_parse_out_time_ms_lines():
+    """The -progress parser: out_time_ms is MICROseconds (ffmpeg quirk);
+    N/A and unrelated lines are None; negative sentinels parse and are
+    skipped by the caller's ms<0 guard."""
+    from transcode_forge.worker.vmaf import _parse_out_time_ms
+
+    assert _parse_out_time_ms(b"out_time_ms=4200000\n") == 4_200_000
+    assert _parse_out_time_ms(b"out_time_ms=N/A\n") is None
+    assert _parse_out_time_ms(b"frame=100\n") is None
+    assert _parse_out_time_ms(b"out_time_us=1\n") is None
+    assert _parse_out_time_ms(b"out_time_ms=-9223372036854775807\n") < 0
+
+
+class TestMeasureVmafStreaming:
+    """The gauge-% streaming path (PR #85). Review CRITICAL: progress and
+    diagnostics must share ONE drained stream (-progress pipe:2 -nostats,
+    the encoder.py pattern) — a second undrained pipe deadlocks ffmpeg
+    once the OS buffer fills, stalling every production gauge."""
+
+    class _FakeStderr:
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+    async def test_streaming_uses_single_stream_and_fires_callbacks(self, tmp_path):
+        captured_args: list = []
+        captured_kwargs: dict = {}
+        fracs: list[float] = []
+
+        fake_stderr = self._FakeStderr(
+            [
+                b"Some ffmpeg banner noise\n",
+                b"frame=1 fps=0 q=-0.0\n",
+                b"out_time_ms=N/A\n",
+                b"out_time_ms=-9223372036854775807\n",
+                b"out_time_ms=30000000\n",  # 30s of 60s -> 0.5
+                b"out_time_ms=30060000\n",  # +0.1% -> throttled, no callback
+                b"out_time_ms=60000000\n",  # 60s -> 1.0
+                b"progress=end\n",
+            ]
+        )
+
+        class Proc:
+            returncode = 0
+            stderr = fake_stderr
+
+            async def wait(self):
+                return 0
+
+        async def fake_exec(*args, **kwargs):
+            captured_args.extend(args)
+            captured_kwargs.update(kwargs)
+            return Proc()
+
+        async def on_progress(frac: float) -> None:
+            fracs.append(frac)
+
+        import asyncio as _asyncio
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafError):  # no log written; cmd + callbacks are the assertions
+                await measure_vmaf(
+                    tmp_path / "a.mkv",
+                    tmp_path / "b.mkv",
+                    duration=60.0,
+                    on_progress=on_progress,
+                )
+
+        cmd = [str(a) for a in captured_args]
+        assert "-progress" in cmd
+        assert cmd[cmd.index("-progress") + 1] == "pipe:2"
+        assert "-nostats" in cmd
+        # ONE live pipe: stdout devnull, stderr piped.
+        assert captured_kwargs.get("stdout") == _asyncio.subprocess.DEVNULL
+        assert captured_kwargs.get("stderr") == _asyncio.subprocess.PIPE
+        # N/A + negative sentinels skipped; 0.1% step throttled.
+        assert fracs == [0.5, 1.0]
+
+    async def test_non_streaming_command_is_unchanged(self, tmp_path):
+        captured: list = []
+
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        async def fake_exec(*args, **kwargs):
+            captured.extend(args)
+            return Proc()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafError):
+                await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+
+        cmd = [str(a) for a in captured]
+        assert "-progress" not in cmd
+        assert "-nostats" not in cmd
+
+    async def test_streaming_failure_reports_real_diagnostics(self, tmp_path):
+        """Verify-round follow-up: a nonzero exit through the STREAMING
+        branch must still surface real ffmpeg error text from the drained
+        tail — including the libvmaf-unavailable sniff."""
+        fake_stderr = self._FakeStderr(
+            [
+                b"out_time_ms=1000000\n",
+                b"[AVFilterGraph] No such filter: 'libvmaf'\n",
+            ]
+        )
+
+        class Proc:
+            returncode = 1
+            stderr = fake_stderr
+
+            async def wait(self):
+                return 1
+
+        async def fake_exec(*args, **kwargs):
+            return Proc()
+
+        async def on_progress(frac: float) -> None:
+            pass
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafUnavailableError):
+                await measure_vmaf(
+                    tmp_path / "a.mkv",
+                    tmp_path / "b.mkv",
+                    duration=60.0,
+                    on_progress=on_progress,
+                )
