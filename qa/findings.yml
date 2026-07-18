@@ -78,7 +78,12 @@
   severity: medium
   status: fixed
   refs: {pr: 86}
-  note: Verified live in the 2026-07-05 manual sweep pass. The misconfig class behind the 93% skip batch. Fixed 2026-07-17 (PR 86): inline warning in the tuning panel toggled live on both inputs (AV1-warning pattern); scale-agnostic, so the VMAF v1 floor recalibration inherits it unchanged.
+  note: >-
+    Verified live in the 2026-07-05 manual sweep pass. The misconfig
+    class behind the 93% skip batch. Fixed 2026-07-17 (PR 86) with an
+    inline warning in the tuning panel toggled live on both inputs
+    (AV1-warning pattern); scale-agnostic, so the VMAF v1 floor
+    recalibration inherits it unchanged.
 
 - id: activity-skipped-vs-discarded-label-split
   title: Same outcome labeled "Skipped" (dashboard/drawer/TV) but "Discarded" (Activity/Stats)
