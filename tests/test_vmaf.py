@@ -310,3 +310,37 @@ class TestMeasureVmafStreaming:
         cmd = [str(a) for a in captured]
         assert "-progress" not in cmd
         assert "-nostats" not in cmd
+
+
+    async def test_streaming_failure_reports_real_diagnostics(self, tmp_path):
+        """Verify-round follow-up: a nonzero exit through the STREAMING
+        branch must still surface real ffmpeg error text from the drained
+        tail — including the libvmaf-unavailable sniff."""
+        fake_stderr = self._FakeStderr(
+            [
+                b"out_time_ms=1000000\n",
+                b"[AVFilterGraph] No such filter: 'libvmaf'\n",
+            ]
+        )
+
+        class Proc:
+            returncode = 1
+            stderr = fake_stderr
+
+            async def wait(self):
+                return 1
+
+        async def fake_exec(*args, **kwargs):
+            return Proc()
+
+        async def on_progress(frac: float) -> None:
+            pass
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(VmafUnavailableError):
+                await measure_vmaf(
+                    tmp_path / "a.mkv",
+                    tmp_path / "b.mkv",
+                    duration=60.0,
+                    on_progress=on_progress,
+                )

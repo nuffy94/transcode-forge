@@ -233,7 +233,7 @@ async def measure_vmaf(
     (0) means NO threading, which silently ran every gauge single-threaded
     fleet-wide until the S4b bench caught it (idle cores during a 4K pass).
 
-    With duration AND on_progress set, ffmpeg runs with `-progress pipe:1`
+    With duration AND on_progress set, ffmpeg runs with `-progress pipe:2`
     and on_progress(fraction) fires on ≥1% steps — the station bar's gauge
     percentage. Without either, behavior is byte-identical to before.
 
