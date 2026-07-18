@@ -166,6 +166,16 @@ function toggleAv1Warning() {
     document.getElementById('tune-av1-warning').style.display = isAv1 ? 'block' : 'none';
 }
 
+function toggleFloorWarning() {
+    /* Target below the perc5 floor = the search aims for quality the gate
+     * refuses to keep — the misconfig class behind a real 93%-skip batch
+     * (qa ledger: settings-vmaf-floor-above-target-silent). */
+    const target = parseFloat(document.getElementById('tune-target-vmaf').value);
+    const perc5 = parseFloat(document.getElementById('tune-vmaf-safety-perc5').value);
+    const bad = Number.isFinite(target) && Number.isFinite(perc5) && target < perc5;
+    document.getElementById('tune-floor-warning').style.display = bad ? 'block' : 'none';
+}
+
 async function loadTuning() {
     try {
         const r = await fetch('/api/settings/tuning');
@@ -176,6 +186,7 @@ async function loadTuning() {
         document.getElementById('tune-vmaf-safety-mean').value = body.data.vmaf_safety_mean || '';
         document.getElementById('tune-vmaf-safety-perc5').value = body.data.vmaf_safety_perc5 || '';
         toggleAv1Warning();
+        toggleFloorWarning();
     } catch {
         /* panel stays at defaults */
     }
@@ -369,6 +380,8 @@ on('lib-backend', 'change', toggleBackendFields);
 on('edit-lib-save', 'click', saveLibrary);
 on('save-tuning-btn', 'click', saveTuning);
 on('tune-default-codec', 'change', toggleAv1Warning);
+on('tune-target-vmaf', 'input', toggleFloorWarning);
+on('tune-vmaf-safety-perc5', 'input', toggleFloorWarning);
 on('add-schedule-btn', 'click', addSchedule);
 
 on('mx-cancel-all', 'click', () =>

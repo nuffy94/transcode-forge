@@ -24,6 +24,9 @@
             <label for="tune-vmaf-safety-perc5" class="forge-stat-label" title="Worst-scenes (5th percentile) refuse-to-keep floor. Must not exceed the mean floor.">Safety floor (perc5)</label>
             <input id="tune-vmaf-safety-perc5" type="number" min="0" max="100" step="0.5" class="forge-input w-20 tabular-nums text-right">
         </div>
+        <p id="tune-floor-warning" class="font-mono text-2xs text-forge-brass leading-relaxed" style="display:none">
+            Target VMAF is below the perc5 safety floor — the search will aim for quality the gate refuses to keep, and encodes will be discarded after running in full. Raise the target or lower the floor.
+        </p>
         <div class="flex justify-between border-b border-forge-rule/60 pb-2">
             <span class="forge-stat-label">Encoder priority</span>
             <span class="text-forge-paper">QSV → NVENC → CPU</span>
