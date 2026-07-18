@@ -163,6 +163,22 @@ def _pool(scores: list[float]) -> VmafScore:
     )
 
 
+# `-progress` key=value lines that aren't out_time_ms — kept out of the
+# diagnostic tail so a failure's stderr excerpt is real error text.
+_PROGRESS_NOISE = (
+    b"frame=",
+    b"fps=",
+    b"stream_",
+    b"bitrate=",
+    b"total_size=",
+    b"out_time",
+    b"dup_frames=",
+    b"drop_frames=",
+    b"speed=",
+    b"progress=",
+)
+
+
 def _parse_out_time_ms(line: bytes) -> int | None:
     """Parse an ffmpeg `-progress` out_time_ms line. The value is
     MICROseconds despite the name (long-standing ffmpeg quirk). Returns
@@ -239,7 +255,11 @@ async def measure_vmaf(
         stream = duration is not None and duration > 0 and on_progress is not None
         cmd = [VMAF_FFMPEG, "-hide_banner", "-i", str(encoded), "-i", str(source)]
         if stream:
-            cmd += ["-progress", "pipe:1"]
+            # Progress and diagnostics share ONE stream (pipe:2) with the
+            # periodic status line silenced — the encoder.py pattern. A
+            # second, undrained pipe deadlocks ffmpeg once the OS buffer
+            # fills (review of PR #85 caught exactly that on pipe:1).
+            cmd += ["-progress", "pipe:2", "-nostats"]
         cmd += ["-lavfi", graph, "-f", "null", "-"]
         try:
             # managed_subprocess kills the child on timeout, cancellation
@@ -247,29 +267,38 @@ async def measure_vmaf(
             # for minutes-to-hours and must never be orphaned.
             async with managed_subprocess(
                 *cmd,
-                stdout=asyncio.subprocess.PIPE if stream else asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             ) as proc:
                 try:
                     if stream:
-                        assert proc.stdout is not None and duration is not None
+                        assert proc.stderr is not None and duration is not None
                         assert on_progress is not None
-                        # Drain -progress lines as they come (also prevents a
-                        # full stdout pipe from stalling ffmpeg).
+                        # Drain the single stream as lines arrive; keep the
+                        # non-progress tail so failures still report real
+                        # ffmpeg diagnostics.
+                        tail: list[bytes] = []
                         async with asyncio.timeout(_SUBPROCESS_TIMEOUT):
                             last = -1.0
                             while True:
-                                line = await proc.stdout.readline()
+                                line = await proc.stderr.readline()
                                 if not line:
                                     break
                                 ms = _parse_out_time_ms(line)
-                                if ms is None or ms < 0:
+                                if ms is None:
+                                    if not line.startswith(_PROGRESS_NOISE):
+                                        tail.append(line)
+                                        if len(tail) > 100:
+                                            del tail[:50]
+                                    continue
+                                if ms < 0:
                                     continue
                                 frac = min(1.0, ms / 1_000_000 / duration)
                                 if frac - last >= 0.01:
                                     last = frac
                                     await on_progress(frac)
-                            _, stderr = await proc.communicate()
+                            await proc.wait()
+                        stderr = b"".join(tail)
                     else:
                         _, stderr = await asyncio.wait_for(
                             proc.communicate(), timeout=_SUBPROCESS_TIMEOUT
