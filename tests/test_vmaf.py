@@ -208,3 +208,16 @@ class TestQualitySearch:
                 duration=5400.0,
             )
         assert result is None
+
+
+def test_parse_out_time_ms_lines():
+    """The -progress parser: out_time_ms is MICROseconds (ffmpeg quirk);
+    N/A and unrelated lines are None; negative sentinels parse and are
+    skipped by the caller's ms<0 guard."""
+    from transcode_forge.worker.vmaf import _parse_out_time_ms
+
+    assert _parse_out_time_ms(b"out_time_ms=4200000\n") == 4_200_000
+    assert _parse_out_time_ms(b"out_time_ms=N/A\n") is None
+    assert _parse_out_time_ms(b"frame=100\n") is None
+    assert _parse_out_time_ms(b"out_time_us=1\n") is None
+    assert _parse_out_time_ms(b"out_time_ms=-9223372036854775807\n") < 0

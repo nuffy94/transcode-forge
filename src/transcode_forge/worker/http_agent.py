@@ -415,6 +415,21 @@ class HttpWorkerAgent:
             except (httpx.HTTPError, OSError):
                 logger.debug("Phase update failed", exc_info=True)
 
+        async def on_phase_progress(pct: float | None, detail: str | None) -> None:
+            # Within-phase progress for the timed stations (gauge %, search
+            # probe count) — display-grade and best-effort like on_progress.
+            try:
+                await self._client.progress(
+                    job_id=job.id,
+                    progress=self._current_progress,
+                    speed=None,
+                    phase=self._current_phase,
+                    phase_pct=pct,
+                    phase_detail=detail,
+                )
+            except (httpx.HTTPError, OSError):
+                logger.debug("Phase-progress update failed", exc_info=True)
+
         media_type = getattr(job, "_media_type", "") or ""
         try:
             if self._abort_requested:
@@ -447,6 +462,7 @@ class HttpWorkerAgent:
                     target_height=job.target_height,
                     progress_callback=on_progress,
                     phase_callback=on_phase,
+                    phase_progress_callback=on_phase_progress,
                 )
             )
             self._pipeline_task = pipeline_task

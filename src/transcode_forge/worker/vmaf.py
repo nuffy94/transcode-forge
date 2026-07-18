@@ -22,8 +22,10 @@ updates safe.
 import asyncio
 import json
 import logging
+import math
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -161,6 +163,18 @@ def _pool(scores: list[float]) -> VmafScore:
     )
 
 
+def _parse_out_time_ms(line: bytes) -> int | None:
+    """Parse an ffmpeg `-progress` out_time_ms line. The value is
+    MICROseconds despite the name (long-standing ffmpeg quirk). Returns
+    None for other lines and for the N/A sentinel."""
+    if not line.startswith(b"out_time_ms="):
+        return None
+    try:
+        return int(line.split(b"=", 1)[1])
+    except ValueError:
+        return None
+
+
 async def has_libvmaf() -> bool:
     """True if the measurement ffmpeg (TF_VMAF_FFMPEG or plain ffmpeg) is
     built with the libvmaf filter."""
@@ -186,6 +200,8 @@ async def measure_vmaf(
     target_height: int | None = None,
     n_subsample: int = VMAF_SUBSAMPLE,
     n_threads: int | None = None,
+    duration: float | None = None,
+    on_progress: Callable[[float], Awaitable[None]] | None = None,
 ) -> VmafScore:
     """Score `encoded` against `source` with the resolution-matched model.
 
@@ -200,6 +216,10 @@ async def measure_vmaf(
     n_threads defaults to the machine's core count — libvmaf's own default
     (0) means NO threading, which silently ran every gauge single-threaded
     fleet-wide until the S4b bench caught it (idle cores during a 4K pass).
+
+    With duration AND on_progress set, ffmpeg runs with `-progress pipe:1`
+    and on_progress(fraction) fires on ≥1% steps — the station bar's gauge
+    percentage. Without either, behavior is byte-identical to before.
 
     Raises:
         VmafUnavailableError: If ffmpeg lacks the libvmaf filter.
@@ -216,32 +236,44 @@ async def measure_vmaf(
             n_threads=threads,
             reference_scale_height=target_height,
         )
-        cmd = [
-            VMAF_FFMPEG,
-            "-hide_banner",
-            "-i",
-            str(encoded),
-            "-i",
-            str(source),
-            "-lavfi",
-            graph,
-            "-f",
-            "null",
-            "-",
-        ]
+        stream = duration is not None and duration > 0 and on_progress is not None
+        cmd = [VMAF_FFMPEG, "-hide_banner", "-i", str(encoded), "-i", str(source)]
+        if stream:
+            cmd += ["-progress", "pipe:1"]
+        cmd += ["-lavfi", graph, "-f", "null", "-"]
         try:
             # managed_subprocess kills the child on timeout, cancellation
             # (worker shutdown), or any error — a full-file VMAF pass runs
             # for minutes-to-hours and must never be orphaned.
             async with managed_subprocess(
                 *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE if stream else asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             ) as proc:
                 try:
-                    _, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=_SUBPROCESS_TIMEOUT
-                    )
+                    if stream:
+                        assert proc.stdout is not None and duration is not None
+                        assert on_progress is not None
+                        # Drain -progress lines as they come (also prevents a
+                        # full stdout pipe from stalling ffmpeg).
+                        async with asyncio.timeout(_SUBPROCESS_TIMEOUT):
+                            last = -1.0
+                            while True:
+                                line = await proc.stdout.readline()
+                                if not line:
+                                    break
+                                ms = _parse_out_time_ms(line)
+                                if ms is None or ms < 0:
+                                    continue
+                                frac = min(1.0, ms / 1_000_000 / duration)
+                                if frac - last >= 0.01:
+                                    last = frac
+                                    await on_progress(frac)
+                            _, stderr = await proc.communicate()
+                    else:
+                        _, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=_SUBPROCESS_TIMEOUT
+                        )
                 except TimeoutError as exc:
                     raise VmafError("VMAF measurement timed out") from exc
         except FileNotFoundError as exc:
@@ -358,6 +390,7 @@ async def find_quality_for_target(
     duration: float,
     height: int | None = None,
     target_height: int | None = None,
+    on_probe: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> QualitySearchResult | None:
     """Binary-search the largest reference quality (smallest file) whose
     sample encodes still meet mean ≥ target_vmaf AND perc5 ≥ perc5_floor.
@@ -372,11 +405,19 @@ async def find_quality_for_target(
     """
     src = Path(source)
     lo, hi = SEARCH_RANGE
+    # Worst-case probe count: the initial low-end check + one per binary
+    # halving. Display-grade ("q3/5"), not a hard bound.
+    expected_probes = 1 + (max(1, math.ceil(math.log2(hi - lo))) if hi > lo else 0)
+    probes_done = 0
     with tempfile.TemporaryDirectory(prefix="tf-crf-search-") as tmp:
         work_dir = Path(tmp)
         samples = await _extract_samples(src, duration, work_dir)
 
         async def meets(q: int) -> tuple[bool, float, float]:
+            nonlocal probes_done
+            probes_done += 1
+            if on_probe is not None:
+                await on_probe(min(probes_done, expected_probes), expected_probes)
             mean, perc5 = await _evaluate_quality(
                 samples,
                 codec,

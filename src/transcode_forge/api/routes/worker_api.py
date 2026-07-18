@@ -189,6 +189,11 @@ class ProgressRequest(BaseModel):
     # Pipeline phase (models.job.JobPhase value); older workers omit it and
     # the job row keeps NULL — the dashboard falls back to the plain meter.
     phase: str | None = None
+    # Per-phase progress detail (gauge fraction / search probe label).
+    # Older workers omit both; each report overwrites both so a stale
+    # value can't survive a phase change.
+    phase_pct: float | None = Field(default=None, ge=0.0, le=1.0)
+    phase_detail: str | None = Field(default=None, max_length=16)
 
 
 class CompleteRequest(BaseModel):
@@ -529,7 +534,16 @@ async def progress(
 ) -> None:
     await _require_owned_job(db, job_id, token_row)
     if body.phase is not None:
-        await job_repo.update_job(db, job_id, progress=body.progress, phase=body.phase)
+        # phase_pct/phase_detail always ride along (None clears) so a
+        # stale gauge % can't survive into the next phase.
+        await job_repo.update_job(
+            db,
+            job_id,
+            progress=body.progress,
+            phase=body.phase,
+            phase_pct=body.phase_pct,
+            phase_detail=body.phase_detail,
+        )
     else:
         await job_repo.update_job(db, job_id, progress=body.progress)
     redis = getattr(request.app.state, "redis", None)
@@ -550,6 +564,8 @@ async def progress(
                         "progress": body.progress,
                         "speed": body.speed,
                         "phase": body.phase,
+                        "phase_pct": body.phase_pct,
+                        "phase_detail": body.phase_detail,
                     }
                 ),
             )
