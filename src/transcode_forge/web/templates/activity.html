@@ -99,7 +99,8 @@
             <div id="scan-history"
                  hx-get="/partials/scan-history"
                  hx-trigger="load, every 30s"
-                 hx-swap="innerHTML">
+                 hx-ext="morph"
+                 hx-swap="morph:innerHTML">
             </div>
         </section>
 
