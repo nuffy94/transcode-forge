@@ -4,7 +4,39 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-07-18
+
+### Added
+- **The queue table shows the station pipeline bar.** The five-station
+  bar (#62/#63) had only ever shipped on the dashboard — the queue kept
+  the classic meter, so a fleet mid-CRF-search read as rows stuck at
+  "starting 0%". Both surfaces now render one shared macro; pre-phase
+  workers keep the classic meter. (#84)
+- **The timed stations show progress, not just presence.** Gauge streams
+  a true percentage from the measurement ffmpeg (the pipeline's longest
+  silent phase — a 40-minute gauge used to be an unchanging highlight)
+  and Search shows its probe count ("q3/5"). Rendered as a suffix on
+  the active station, live over the WebSocket, on the dashboard and the
+  queue. Old workers render exactly as before (migration 0014 is
+  additive; the fields ride the existing progress report). (#85)
+- **Settings warns when the target VMAF sits below the perc5 safety
+  floor** — that misconfiguration aims the CRF search at quality the
+  gate then refuses to keep, discarding full encodes after the fact.
+  (#86)
+
+### Fixed
+- **The dashboard no longer flickers.** Five polled panels carrying
+  infinite pulse-dot animations (stats, scheduler-info on two pages,
+  recent scans on three) still swapped with plain innerHTML, restarting
+  their animations every poll — the same class of bug #39 fixed for the
+  progress bars. All animated polls now morph, with a regression test
+  pinning every animated poll target across all four pages. (#83)
+- Recent scans (with their FAILED pills) now render on the Activity
+  page's scan facet — a scan kicked off from Settings could previously
+  fail invisibly. All three surfaces embed the same partial, pinned by
+  a view-consistency test. (#82)
+- The schedule editor's 422 toast shows the server's precise validation
+  reason instead of a generic "Failed to add schedule". (#81)
 
 ### Changed
 - **The image's measurement ffmpeg now carries the VMAF v1 models**
