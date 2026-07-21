@@ -497,3 +497,20 @@
     "Error initializing output stream" line. Fixed 2026-07-20 with a
     noise-prefix filter on the ring, pinned against the observed spam
     AND against filtering real fatal lines.
+
+- id: skipped-file-size-int32-overflow
+  title: skipped_files.file_size int32 on legacy DBs — >2GiB skip 500s forever, outbox backpressure bricks workers
+  first_seen: 2026-07-20 / homelab-monitoring
+  severity: high
+  status: fixed
+  refs: {pr: 89, test: "tests/test_migrations.py::TestPgOnlyMigrations"}
+  note: >-
+    Found from the infra side (Loki HighErrorLogRate flapping: 18k
+    scheduler errors/6h; worker outbox at attempt 5,176). Root cause:
+    pre-migration-runner installs were stamped v1 without re-running,
+    so the runner's INTEGER->BIGINT adapter never shaped their DDL —
+    fresh installs were always correct. Fixed 2026-07-20: migration
+    0015 (.pg.sql — new dialect-specific mechanism), plus outbox
+    poison-parking (25 attempts -> 10-min slow tick, never dropped,
+    claims resume) so one refused report can never idle a worker for
+    days again. Live DB widened manually by Mason ahead of the deploy.

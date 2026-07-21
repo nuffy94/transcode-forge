@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Skipping a file larger than 2 GiB no longer poisons the scheduler.**
+  Installs that predate the migration runner carried an int32
+  `skipped_files.file_size` (every other size column was already
+  BIGINT); any large skip then failed its report forever — observed as
+  an 18k-errors/6h storm with both Docker workers held idle for two
+  days by outbox backpressure. Migration 0015 widens the column
+  (postgres-only; SQLite integers are already 8-byte, and the runner
+  now supports `.pg.sql` dialect-specific migrations).
+- **A poison report parks instead of bricking the worker.** A report
+  the scheduler persistently refuses with a retryable error stops
+  blocking claims after 25 attempts and retries every 10 minutes — the
+  entry is never dropped, and a loud warning names the condition.
 - **Sources with embedded cover art no longer fail to encode.** `-map 0`
   handed the attached picture (a JPEG "video" stream) to the video
   encoder, which died on its dimensions — the encode command now maps

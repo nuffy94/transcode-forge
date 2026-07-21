@@ -28,11 +28,11 @@ async def _applied_versions(conn: aiosqlite.Connection) -> set[int]:
 class TestDiscover:
     def test_finds_initial_migration(self):
         migrations = discover_migrations()
-        assert any(v == 1 and "initial" in name for v, name, _sql in migrations)
+        assert any(v == 1 and "initial" in name for v, name, _sql, _pg in migrations)
 
     def test_returns_sorted_by_version(self):
         migrations = discover_migrations()
-        versions = [v for v, _, _ in migrations]
+        versions = [v for v, _, _, _ in migrations]
         assert versions == sorted(versions)
 
 
@@ -145,7 +145,7 @@ class TestNeverEditReleasedMigrations:
 
     def test_no_duplicate_versions(self):
         migrations = discover_migrations()
-        versions = [v for v, _, _ in migrations]
+        versions = [v for v, _, _, _ in migrations]
         assert len(versions) == len(set(versions)), "duplicate migration version"
 
 
@@ -209,3 +209,25 @@ async def fresh_sqlite_db(tmp_path: Path):
     conn = await aiosqlite.connect(db_path)
     yield conn
     await conn.close()
+
+
+class TestPgOnlyMigrations:
+    """`NNNN_name.pg.sql` files are postgres-only DDL (ALTER COLUMN TYPE
+    is unparseable by SQLite — and unneeded: its INTEGER is 8-byte).
+    SQLite must record the version WITHOUT executing, so both dialects
+    agree on the schema version."""
+
+    def test_discover_flags_pg_only(self):
+        migrations = discover_migrations()
+        by_version = {v: pg for v, _n, _s, pg in migrations}
+        assert by_version[15] is True  # 0015_skipped_file_size_bigint.pg.sql
+        assert by_version[1] is False
+
+    async def test_sqlite_stamps_pg_only_without_executing(self, tmp_path: Path):
+        import aiosqlite
+
+        async with aiosqlite.connect(tmp_path / "m.db") as conn:
+            await apply_sqlite(conn)
+            cur = await conn.execute("SELECT version FROM schema_migrations")
+            versions = {row[0] for row in await cur.fetchall()}
+        assert 15 in versions

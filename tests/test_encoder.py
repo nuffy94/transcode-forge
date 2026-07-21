@@ -224,7 +224,7 @@ class TestErrorNoiseFilter:
     def test_noise_prefixes_cover_observed_spam(self):
         """The stored error messages that made failures unreadable
         (2026-07-20 review) must be filtered from the diagnostic ring."""
-        from transcode_forge.worker.encoder import _NOISE_PREFIXES
+        from transcode_forge.worker.encoder import _is_noise
 
         observed = [
             "[swscaler @ 0x595bd6167c00] deprecated pixel format used",
@@ -233,11 +233,15 @@ class TestErrorNoiseFilter:
             "Press [q] to stop, [?] for help",
         ]
         for line in observed:
-            assert line.startswith(_NOISE_PREFIXES), line
-        # The actual fatal lines must NOT be filtered.
+            assert _is_noise(line), line
+        # The actual fatal lines must NOT be filtered — including a
+        # genuine swscaler ERROR, which shares the component tag with the
+        # benign deprecation notice (review of #88: match the message,
+        # never the bare tag).
         for line in [
             "Error initializing output stream 0:4 -- Error while opening encoder",
             "[matroska @ 0x5b69dd316cc0] Subtitle codec 0 is not supported.",
             "Could not write header for output file #0",
+            "[swscaler @ 0x1] Unsupported conversion: yuv420p -> nonsense",
         ]:
-            assert not line.startswith(_NOISE_PREFIXES), line
+            assert not _is_noise(line), line
