@@ -6,7 +6,7 @@ description: >-
   Object Storage media plane (LKE block storage is RWO/single-node, so media
   must live in Object Storage).
 type: application
-version: 0.1.7
+version: 0.1.8
 # The image tag default tracks this. Bump both together on release.
-appVersion: "0.13.0"
+appVersion: "0.13.1"
 home: https://github.com/nuffy94/transcode-forge
