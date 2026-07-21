@@ -42,7 +42,12 @@ from typing import Any
 
 from transcode_forge.models.job import JobPhase
 from transcode_forge.scanner.probe import ProbeError, ffprobe
-from transcode_forge.worker.encoder import build_encode_command, map_quality, run_encode
+from transcode_forge.worker.encoder import (
+    build_encode_command,
+    map_quality,
+    run_encode,
+    unmuxable_subtitle_indexes,
+)
 from transcode_forge.worker.proc import managed_subprocess
 from transcode_forge.worker.storage.filesystem import (
     LockHeartbeatGuard,
@@ -333,12 +338,24 @@ async def run_pipeline(
 
         # Step 2: TRANSCODE
         await _phase(JobPhase.ENCODE)
+        # Subtitle streams with no identifiable codec can't be stream-
+        # copied into mkv and fail the whole encode — drop them loudly
+        # instead (the original keeps its tracks; only the encode omits
+        # the broken one).
+        drop_subs = await unmuxable_subtitle_indexes(str(src))
+        if drop_subs:
+            logger.warning(
+                "[TRANSCODE] Dropping unmuxable subtitle stream(s) %s — "
+                "no identifiable codec; matroska cannot copy them",
+                drop_subs,
+            )
         cmd = build_encode_command(
             codec,
             backend,
             str(src),
             str(tmp_path),
             quality,
+            drop_sub_streams=drop_subs,
             content=content,
             target_height=target_height,
         )

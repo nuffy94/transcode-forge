@@ -1,10 +1,11 @@
 """ffmpeg transcoding engine — build commands and parse progress."""
 
 import asyncio
+import json
 import logging
 import re
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,18 @@ _PROGRESS_KEYS = (
     "drop_frames=",
     "speed=",
     "progress=",
+)
+
+# Warning/banner spam that drowned the real error in stored messages —
+# swscaler deprecation chatter (from cover-art JPEG conversion), x265
+# banners, container NUMA noise, ffmpeg's console hint. The fatal line
+# ("Error initializing output stream…") was pushed out of the ring by
+# these, which is why failed jobs read as gibberish (observed 2026-07-20).
+_NOISE_PREFIXES = (
+    "[swscaler",
+    "x265 [info]:",
+    "set_mempolicy:",
+    "Press [q] to stop",
 )
 
 ERROR_LINES_BUFFER = 10
@@ -98,16 +111,27 @@ def _scale_args(target_height: int | None) -> list[str]:
     return ["-vf", f"scale=-2:{target_height}"]
 
 
-# Shared tail: copy audio/subs, keep every stream, newline-terminated
-# progress on stderr (default rolling stats use \r which readline() never
-# returns until the process exits).
+# Shared tail: FIRST real video stream only (0:V:0 — capital V excludes
+# attached cover art, which `-map 0` used to feed to the video encoder,
+# killing the whole encode on the JPEG's dimensions; observed fleet-wide
+# 2026-07-20), all audio/subtitle/attachment streams, unknown-TYPE
+# streams dropped instead of fatal. Copy audio/subs. Newline-terminated
+# progress on stderr (default rolling stats use \r which readline()
+# never returns until the process exits).
 _COMMON_TAIL = [
     "-c:a",
     "copy",
     "-c:s",
     "copy",
     "-map",
-    "0",
+    "0:V:0",
+    "-map",
+    "0:a?",
+    "-map",
+    "0:s?",
+    "-map",
+    "0:t?",
+    "-ignore_unknown",
     "-progress",
     "pipe:2",
     "-nostats",
@@ -390,6 +414,7 @@ def build_encode_command(
     *,
     content: str | None = None,
     target_height: int | None = None,
+    drop_sub_streams: Sequence[int] = (),
 ) -> list[str]:
     """Build the ffmpeg command for the given (codec, backend) pair.
 
@@ -400,6 +425,8 @@ def build_encode_command(
         content: Optional content hint ('anime' enables x265 aq-mode=3).
         target_height: Downscale height (`scale=-2:H`); None = keep source
             resolution (pre-feature identical).
+        drop_sub_streams: Per-type subtitle indexes to exclude via
+            negative mapping (see unmuxable_subtitle_indexes).
     """
     builder = ENCODER_BUILDERS.get((codec, backend))
     if builder is None:
@@ -407,7 +434,48 @@ def build_encode_command(
             f"Unknown (codec, backend) pair: ({codec}, {backend})."
             f" Valid: {sorted(ENCODER_BUILDERS.keys())}"
         )
-    return builder(input_path, output_path, quality, content, target_height)
+    cmd = builder(input_path, output_path, quality, content, target_height)
+    if drop_sub_streams:
+        # Negative maps must follow the inclusive maps — insert just
+        # before the shared tail's -progress marker.
+        i = cmd.index("-progress")
+        for n in drop_sub_streams:
+            cmd[i:i] = ["-map", f"-0:s:{n}"]
+            i += 2
+    return cmd
+
+
+async def unmuxable_subtitle_indexes(input_path: str) -> list[int]:
+    """Per-type indexes of subtitle streams whose codec ffprobe cannot
+    name (codec_id 0 / damaged metadata). matroska refuses to stream-copy
+    those and fails the WHOLE encode ("Subtitle codec 0 is not
+    supported" — observed fleet-wide 2026-07-20); the pipeline drops
+    them via negative mapping with a loud log line instead. Fail-open:
+    any probe error returns [] and the encode proceeds exactly as
+    before."""
+    try:
+        async with managed_subprocess(
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "json",
+            input_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        ) as proc:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        streams = json.loads(out or b"{}").get("streams", [])
+        return [
+            i for i, s in enumerate(streams) if s.get("codec_name") in (None, "", "none", "unknown")
+        ]
+    except Exception:
+        logger.warning("Subtitle probe failed for %s — mapping all streams", input_path)
+        return []
 
 
 def parse_progress(line: str, total_duration: float) -> float | None:
@@ -489,7 +557,7 @@ async def run_encode(
 
                 # Capture potential error lines (last N), skipping progress key=value
                 # spam from -progress pipe:2 so failure diagnostics stay useful.
-                if not line.startswith(_PROGRESS_KEYS):
+                if not line.startswith(_PROGRESS_KEYS) and not line.startswith(_NOISE_PREFIXES):
                     error_lines.append(line)
                     if len(error_lines) > ERROR_LINES_BUFFER:
                         error_lines.pop(0)

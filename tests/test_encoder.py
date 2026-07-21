@@ -66,9 +66,24 @@ class TestBuildCommands:
         assert cmd[cmd.index("-c:s") + 1] == "copy"
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
-    def test_all_commands_map_all_streams(self, codec, backend):
+    def test_all_commands_map_real_streams_only(self, codec, backend):
+        """`-map 0` fed attached cover art to the video encoder and killed
+        whole encodes on the JPEG's dimensions (fleet, 2026-07-20). The
+        contract is now: FIRST real video stream (0:V:0 excludes attached
+        pics), all audio/subs/attachments, unknown-TYPE streams dropped."""
         cmd = build_encode_command(codec, backend, "/in", "/out", 21)
-        assert cmd[cmd.index("-map") + 1] == "0"
+        maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
+        assert maps == ["0:V:0", "0:a?", "0:s?", "0:t?"]
+        assert "-ignore_unknown" in cmd
+        assert "0" not in maps  # the bare catch-all must never come back
+
+    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
+    def test_drop_sub_streams_negative_maps(self, codec, backend):
+        """Unmuxable subtitle streams are excluded via negative maps,
+        inserted after the inclusive maps (order matters to ffmpeg)."""
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21, drop_sub_streams=[1, 3])
+        maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
+        assert maps == ["0:V:0", "0:a?", "0:s?", "0:t?", "-0:s:1", "-0:s:3"]
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
     def test_all_commands_overwrite(self, codec, backend):
@@ -169,3 +184,60 @@ class TestParseSpeed:
     def test_speed_na(self):
         line = "speed=N/A"
         assert parse_speed(line) is None
+
+
+class TestUnmuxableSubtitleProbe:
+    """The codec-0 subtitle class: matroska can't copy a subtitle stream
+    with no identifiable codec and fails the whole encode. The probe
+    finds those per-TYPE indexes; any probe failure fails OPEN (empty
+    list — encode proceeds exactly as before)."""
+
+    async def test_finds_unknown_codec_indexes(self, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        payload = (
+            b'{"streams": [{"codec_name": "subrip"}, {"codec_name": "unknown"},'
+            b' {"codec_name": "hdmv_pgs_subtitle"}, {}]}'
+        )
+
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return payload, b""
+
+        from transcode_forge.worker.encoder import unmuxable_subtitle_indexes
+
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=Proc())):
+            assert await unmuxable_subtitle_indexes("/x.mkv") == [1, 3]
+
+    async def test_probe_failure_fails_open(self):
+        from unittest.mock import patch
+
+        from transcode_forge.worker.encoder import unmuxable_subtitle_indexes
+
+        with patch("asyncio.create_subprocess_exec", side_effect=OSError("boom")):
+            assert await unmuxable_subtitle_indexes("/x.mkv") == []
+
+
+class TestErrorNoiseFilter:
+    def test_noise_prefixes_cover_observed_spam(self):
+        """The stored error messages that made failures unreadable
+        (2026-07-20 review) must be filtered from the diagnostic ring."""
+        from transcode_forge.worker.encoder import _NOISE_PREFIXES
+
+        observed = [
+            "[swscaler @ 0x595bd6167c00] deprecated pixel format used",
+            "x265 [info]: HEVC encoder version 3.5",
+            "set_mempolicy: Operation not permitted",
+            "Press [q] to stop, [?] for help",
+        ]
+        for line in observed:
+            assert line.startswith(_NOISE_PREFIXES), line
+        # The actual fatal lines must NOT be filtered.
+        for line in [
+            "Error initializing output stream 0:4 -- Error while opening encoder",
+            "[matroska @ 0x5b69dd316cc0] Subtitle codec 0 is not supported.",
+            "Could not write header for output file #0",
+        ]:
+            assert not line.startswith(_NOISE_PREFIXES), line
