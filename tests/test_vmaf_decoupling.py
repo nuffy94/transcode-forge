@@ -129,7 +129,7 @@ class TestFloorsOnlyGate:
             with pytest.raises(VmafGateError) as exc_info:
                 await _run(source, target_vmaf=97.0)
 
-        assert exc_info.value.mean_floor == 90.0
+        assert exc_info.value.mean_floor == 91.5
         assert source.read_bytes() == b"x" * 10000
 
     async def test_damaged_perc5_skips_at_default_floor(self, tmp_path):
@@ -141,7 +141,7 @@ class TestFloorsOnlyGate:
             with pytest.raises(VmafGateError) as exc_info:
                 await _run(source, target_vmaf=97.0)
 
-        assert exc_info.value.perc5_floor == 85.0
+        assert exc_info.value.perc5_floor == 86.0
 
     async def test_null_target_means_no_measurement_no_gate(self, tmp_path):
         """target_vmaf=None stays byte-identical to the pre-gate path —
@@ -324,7 +324,7 @@ class TestMeasurementLoopPersistence:
         from transcode_forge.repos import settings as settings_repo
 
         await _seed_pending_job(app, "/m/stamp.mkv")
-        await settings_repo.set_override(app.state.db, "vmaf_safety_perc5", "86")
+        await settings_repo.set_override(app.state.db, "vmaf_safety_perc5", "87")
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -333,9 +333,9 @@ class TestMeasurementLoopPersistence:
                 "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
             )
         claimed = r.json()["job"]
-        assert claimed["_vmaf_safety_mean"] == 90.0  # env default
-        assert claimed["_vmaf_safety_perc5"] == 86.0  # DB override
-        assert claimed["_vmaf_min_floor"] == 86.0  # legacy alias
+        assert claimed["_vmaf_safety_mean"] == 91.5  # env default (v1 scale)
+        assert claimed["_vmaf_safety_perc5"] == 87.0  # DB override
+        assert claimed["_vmaf_min_floor"] == 87.0  # legacy alias
 
 
 # ── Settings validation (spec §4.6) ──────────────────────────────────────

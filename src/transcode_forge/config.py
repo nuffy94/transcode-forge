@@ -51,9 +51,9 @@ class Settings(BaseSettings):
     # The old TF_VMAF_MIN_FLOOR knob is retired and no longer read.
     # All four are DB-overridable via the settings page (repos/settings.py).
     default_codec: str = Field(default="hevc", pattern=r"^(hevc|av1)$")
-    target_vmaf: float = Field(default=97.0, ge=0.0, le=100.0)
-    vmaf_safety_mean: float = Field(default=90.0, ge=0.0, le=100.0)
-    vmaf_safety_perc5: float = Field(default=85.0, ge=0.0, le=100.0)
+    target_vmaf: float = Field(default=98.0, ge=0.0, le=100.0)
+    vmaf_safety_mean: float = Field(default=91.5, ge=0.0, le=100.0)
+    vmaf_safety_perc5: float = Field(default=86.0, ge=0.0, le=100.0)
 
     # Per-file target-VMAF CRF search (ab-av1 style, worker-side). Disable
     # to always encode at the fixed quality preset; the VMAF gate still runs.

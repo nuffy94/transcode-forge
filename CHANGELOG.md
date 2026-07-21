@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **The quality gate now scores with VMAF v1** (`vmaf_v1.0.16_3d0h` /
+  `vmaf_v1.0.16_1d5h_2160`, libvmaf ≥ 3.2) — Netflix's new model
+  generation with materially better banding/blockiness detection, the
+  exact artifact class the worst-scenes floor exists to catch.
+  **The floors change numeric meaning**: defaults move 90/85 →
+  **91.5/86** and the CRF-search target 97 → **98**, translating the
+  old thresholds onto the v1 scale (96-cell clip-ladder calibration,
+  94% keep/reject parity, validated against full-file production
+  anchors — plans/vmaf-v1-gate1-results.md). **If your Settings page
+  carries overridden floors, review them**: v0-scale numbers are
+  slightly loose under v1. Workers whose measurement ffmpeg predates
+  libvmaf 3.2 skip the gate loudly (originals never at risk) instead
+  of failing jobs — update worker images/binaries to restore gating.
+
 ### Fixed
 - **Skipping a file larger than 2 GiB no longer poisons the scheduler.**
   Installs that predate the migration runner carried an int32

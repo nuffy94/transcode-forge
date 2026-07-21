@@ -343,3 +343,24 @@ class TestMeasureVmafStreaming:
                     duration=60.0,
                     on_progress=on_progress,
                 )
+
+
+class TestMissingModelIsUnavailable:
+    async def test_missing_v1_model_skips_gate_not_fails(self, tmp_path):
+        """A binary with libvmaf but no v1 models (pre-3.2 static build on
+        an un-updated worker) must raise VmafUnavailableError — gate
+        skipped loudly — never a hard VmafError that fails every gated
+        job on that worker (Gate 2 mixed-fleet contract)."""
+
+        class Proc:
+            returncode = 1
+
+            async def communicate(self):
+                return (
+                    b"",
+                    b"could not load libvmaf model with version: vmaf_v1.0.16_3d0h",
+                )
+
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=Proc())):
+            with pytest.raises(VmafUnavailableError, match="update the worker image"):
+                await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")

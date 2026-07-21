@@ -3,7 +3,7 @@
 Two jobs:
 
 1. measure_vmaf() — score an encode against its source with the
-   resolution-matched model (vmaf_v0.6.1 ≤1080p, vmaf_4k_v0.6.1 above),
+   resolution-matched model (VMAF v1: 1080p@3H ≤1080p, 4K@1.5H above),
    pooled on worst-scenes (perc5/min) as well as mean. The quality gate in
    pipeline.py NEVER pools on arithmetic mean alone — mean hides bad scenes.
 
@@ -12,8 +12,10 @@ Two jobs:
    quality value (= smallest file) that still meets the target. Falls back
    to the fixed preset when disabled or when no candidate qualifies.
 
-Both require ffmpeg built with libvmaf (models are compiled into
-libvmaf ≥ 2.0, so `model=version=…` needs no external files). When libvmaf
+Both require ffmpeg built with libvmaf ≥ 3.2 (the v1 models are
+compiled in, so `model=version=…` needs no external files; a binary
+that merely HAS libvmaf but predates the v1 models raises
+VmafUnavailableError — gate skipped loudly, never mass-failed). When libvmaf
 is missing, VmafUnavailableError is raised — the pipeline logs loudly and
 proceeds without the gate (pre-feature behavior), keeping rolling worker
 updates safe.
@@ -40,8 +42,12 @@ logger = logging.getLogger(__name__)
 # env var at it. Default: the regular ffmpeg on PATH.
 VMAF_FFMPEG = os.environ.get("TF_VMAF_FFMPEG", "ffmpeg")
 
-VMAF_MODEL_HD = "vmaf_v0.6.1"
-VMAF_MODEL_4K = "vmaf_4k_v0.6.1"
+# VMAF v1 (libvmaf >= 3.2): better banding/blockiness detection — the
+# perc5 floor's exact artifact class. Floors/targets are calibrated to
+# the v1 scale (plans/vmaf-v1-gate1-results.md: 96-cell clip-ladder
+# mapping, 94% decision parity, 5 full-file production anchors).
+VMAF_MODEL_HD = "vmaf_v1.0.16_3d0h"
+VMAF_MODEL_4K = "vmaf_v1.0.16_1d5h_2160"
 # Sources taller than 1080p are scored with the 4K model.
 VMAF_4K_MIN_HEIGHT = 1440
 
@@ -312,6 +318,16 @@ async def measure_vmaf(
             err = (stderr or b"").decode(errors="replace")
             if "libvmaf" in err and ("No such filter" in err or "Unknown filter" in err):
                 raise VmafUnavailableError("ffmpeg is not built with libvmaf")
+            if "could not load libvmaf model" in err:
+                # A binary with libvmaf but WITHOUT the requested model —
+                # a pre-v1 measurement ffmpeg on a flipped fleet. Skip the
+                # gate loudly (pre-feature behavior) instead of failing
+                # every gated job on that worker; the fix is updating the
+                # worker's measurement binary/image.
+                raise VmafUnavailableError(
+                    f"measurement ffmpeg lacks the {model} model — update the "
+                    "worker image (needs libvmaf >= 3.2 for VMAF v1)"
+                )
             raise VmafError(f"VMAF measurement failed (exit {proc.returncode}): {err[-300:]}")
 
         try:
