@@ -1121,10 +1121,20 @@ input.forge-input.pl-8 { padding-left: 2rem; }
 .forge-pager-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ====================================================================
-   HTMX transitions
+   HTMX transitions — deliberately NONE.
+
+   .htmx-settling { opacity: 0 } was a 0.6-era fade-in nicety that
+   became THE dashboard flicker once morph swaps arrived: htmx tags
+   every swapped panel's content settling for defaultSettleDelay
+   (20ms ≈ 1-2 frames at 60Hz), and this rule rendered the ENTIRE
+   panel invisible for that window — a split-second full blank on
+   every poll (3s on the dashboard), beating against the 2.4s shimmer.
+   Root-caused 2026-07-21 from a 60fps screen capture (frame-exact:
+   2-frame luminance drop every 178 frames) after DOM/animation
+   instrumentation showed nothing — opacity via class flip is
+   invisible to mutation observers and getAnimations().
+   Do not reintroduce settle-phase hiding on polled/morphed content.
    ==================================================================== */
-.htmx-settling { opacity: 0; }
-.htmx-added    { transition: opacity 0.2s ease-in; opacity: 1; }
 
 /* ---- Focus indicators (WCAG 2.4.7) ---- */
 a:focus-visible,
