@@ -12,6 +12,7 @@ import asyncio
 import logging
 import signal
 import socket
+import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,17 @@ from transcode_forge.worker.storage.filesystem import (
 from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
+
+
+# Poison parking: a report the scheduler PERSISTENTLY refuses with a
+# retryable error (a 500 from a server-side bug) must never be dropped —
+# but after this many attempts it stops blocking the worker's claims and
+# retries on a slow tick instead. Observed 2026-07-20: an int32 overflow
+# in skipped_files.file_size 500'd one skip report forever; the drain-
+# before-claim backpressure held BOTH Docker workers idle for ~2 days
+# (attempt 5,176) while the retry storm flapped the Loki error alert.
+POISON_ATTEMPTS = 25
+POISON_COOLDOWN_S = 600.0
 
 
 class DrainResult(StrEnum):
@@ -748,6 +760,14 @@ class HttpWorkerAgent:
         for entry in self.outbox.entries():
             if entry.job_id in blocked:
                 continue
+            if (
+                entry.attempts >= POISON_ATTEMPTS
+                and time.time() - entry.last_attempt_at < POISON_COOLDOWN_S
+            ):
+                # Parked poison entry: still in its cooldown — keep the
+                # per-job chain order but don't burn an attempt.
+                blocked.add(entry.job_id)
+                continue
             try:
                 await self._send_report(entry.job_id, entry.kind, entry.payload)
             except Exception as e:
@@ -788,7 +808,32 @@ class HttpWorkerAgent:
                     blocked.add(entry.job_id)
                 continue
             self.outbox.delete(entry)
-        if not self.outbox.entries():
+        remaining = self.outbox.entries()
+        if not remaining:
+            return DrainResult.EMPTY
+        if auth_blocked:
+            return DrainResult.AUTH_BLOCKED
+        live = [
+            e
+            for e in remaining
+            if e.attempts < POISON_ATTEMPTS or time.time() - e.last_attempt_at >= POISON_COOLDOWN_S
+        ]
+        if not live:
+            # Only parked poison remains: report EMPTY so claims (and
+            # startup registration) proceed — the entries stay journaled
+            # and retry every cooldown tick. If the parked report is a
+            # terminal outcome the scheduler later re-assigns, its
+            # eventual delivery resolves via the idempotent-receipt
+            # endpoints (duplicate → 204, conflict → 409 discard).
+            logger.warning(
+                "Outbox: %d poison entr%s parked (≥%d failed attempts) — "
+                "retrying every %ds without blocking claims; the scheduler "
+                "is persistently refusing these reports and needs a look",
+                len(remaining),
+                "y" if len(remaining) == 1 else "ies",
+                POISON_ATTEMPTS,
+                int(POISON_COOLDOWN_S),
+            )
             return DrainResult.EMPTY
         return DrainResult.AUTH_BLOCKED if auth_blocked else DrainResult.BLOCKED
 

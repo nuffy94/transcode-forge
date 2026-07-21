@@ -38,12 +38,23 @@ _PROGRESS_KEYS = (
 # banners, container NUMA noise, ffmpeg's console hint. The fatal line
 # ("Error initializing output stream…") was pushed out of the ring by
 # these, which is why failed jobs read as gibberish (observed 2026-07-20).
+# Prefixes are level-scoped or static banners; the swscaler case matches
+# the specific benign MESSAGE, not the bare "[swscaler" component tag —
+# a genuine fatal swscaler line must stay in the ring (review of #88).
 _NOISE_PREFIXES = (
-    "[swscaler",
     "x265 [info]:",
     "set_mempolicy:",
     "Press [q] to stop",
 )
+_NOISE_SUBSTRINGS = ("deprecated pixel format used",)
+
+
+def _is_noise(line: str) -> bool:
+    """True for known-benign stderr spam excluded from the error ring."""
+    if line.startswith(_PROGRESS_KEYS) or line.startswith(_NOISE_PREFIXES):
+        return True
+    return any(s in line for s in _NOISE_SUBSTRINGS)
+
 
 ERROR_LINES_BUFFER = 10
 DEFAULT_PROGRESS_INTERVAL = 2.0
@@ -115,9 +126,13 @@ def _scale_args(target_height: int | None) -> list[str]:
 # attached cover art, which `-map 0` used to feed to the video encoder,
 # killing the whole encode on the JPEG's dimensions; observed fleet-wide
 # 2026-07-20), all audio/subtitle/attachment streams, unknown-TYPE
-# streams dropped instead of fatal. Copy audio/subs. Newline-terminated
-# progress on stderr (default rolling stats use \r which readline()
-# never returns until the process exits).
+# streams dropped instead of fatal. Data-type (d) streams are dropped
+# DELIBERATELY: mkv's data-stream muxing support is spotty and carrying
+# them would reintroduce the exotic-stream failure class this mapping
+# exists to end (review of #88 — the original file keeps everything).
+# Copy audio/subs. Newline-terminated progress on stderr (default
+# rolling stats use \r which readline() never returns until the process
+# exits).
 _COMMON_TAIL = [
     "-c:a",
     "copy",
@@ -557,7 +572,7 @@ async def run_encode(
 
                 # Capture potential error lines (last N), skipping progress key=value
                 # spam from -progress pipe:2 so failure diagnostics stay useful.
-                if not line.startswith(_PROGRESS_KEYS) and not line.startswith(_NOISE_PREFIXES):
+                if not _is_noise(line):
                     error_lines.append(line)
                     if len(error_lines) > ERROR_LINES_BUFFER:
                         error_lines.pop(0)

@@ -8,6 +8,7 @@ the REAL agent against the REAL app through a fault-injecting wrapper.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -544,3 +545,51 @@ def test_outbox_quarantines_torn_entries(tmp_path):
 def test_outbox_rejects_unknown_kind(tmp_path):
     with pytest.raises(ValueError):
         Outbox(tmp_path).append("job-a", "progress", {})
+
+
+# ── Contract 13 — poison entries park instead of bricking the worker ────────
+
+
+async def test_poison_entry_parks_after_max_attempts(client: AsyncClient, app, tmp_path):
+    """A report the scheduler PERSISTENTLY 500s (observed live: int32
+    overflow on skipped_files.file_size — attempt 5,176, both Docker
+    workers held idle ~2 days by drain backpressure) must park: after
+    POISON_ATTEMPTS the drain reports EMPTY so claims resume, the entry
+    is never dropped, and it retries only once per cooldown tick."""
+    from transcode_forge.worker.http_agent import POISON_ATTEMPTS, DrainResult
+
+    agent, hostile = await _make_agent(client, app, tmp_path, "poison-node")
+    job = await _queue_and_claim(client, app, agent, "poison")
+    agent.outbox.append(
+        job.id,
+        "skipped",
+        {"reason": "size_regression", "error_message": "output larger than source"},
+    )
+
+    hostile.watch("skipped")
+    hostile.inject("skipped", *["500"] * (POISON_ATTEMPTS + 5))
+
+    # Young entry: every drain burns an attempt and BLOCKS (backpressure).
+    for i in range(POISON_ATTEMPTS - 1):
+        assert await agent._drain_outbox() is DrainResult.BLOCKED, f"attempt {i}"
+    # The threshold-crossing pass burns the final attempt AND parks in
+    # the same breath — EMPTY from here on.
+    assert await agent._drain_outbox() is DrainResult.EMPTY
+    assert hostile.hit_count("skipped") == POISON_ATTEMPTS
+
+    # Inside cooldown: parked — EMPTY (claims resume), no delivery
+    # attempted, entry still journaled.
+    assert await agent._drain_outbox() is DrainResult.EMPTY
+    assert await agent._drain_outbox() is DrainResult.EMPTY
+    assert hostile.hit_count("skipped") == POISON_ATTEMPTS
+    assert agent.outbox.pending_job_ids() == {job.id}
+
+    # Cooldown elapses: exactly one slow-tick retry, then parked again.
+    real_time = time.time
+    with patch(
+        "transcode_forge.worker.http_agent.time.time",
+        lambda: real_time() + 700.0,
+    ):
+        assert await agent._drain_outbox() is DrainResult.EMPTY  # retried, re-parked
+    assert hostile.hit_count("skipped") == POISON_ATTEMPTS + 1
+    assert agent.outbox.pending_job_ids() == {job.id}

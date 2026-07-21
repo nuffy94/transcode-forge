@@ -46,17 +46,23 @@ class _Connectable(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
 
 
-def discover_migrations() -> list[tuple[int, str, str]]:
-    """Return [(version, name, sql), ...] sorted by version."""
+def discover_migrations() -> list[tuple[int, str, str, bool]]:
+    """Return [(version, name, sql, pg_only), ...] sorted by version.
+
+    A `NNNN_name.pg.sql` file is postgres-only DDL (e.g. ALTER COLUMN
+    TYPE, which SQLite can't parse — and usually doesn't need: its
+    INTEGER is already 8-byte). SQLite records the version without
+    executing so both dialects agree on the schema version."""
     files = sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-    out: list[tuple[int, str, str]] = []
+    out: list[tuple[int, str, str, bool]] = []
     for f in files:
-        match = re.match(r"(\d{4})_(.+)\.sql$", f.name)
+        match = re.match(r"(\d{4})_(.+?)(\.pg)?\.sql$", f.name)
         if not match:
             continue
         version = int(match.group(1))
         name = match.group(2)
-        out.append((version, name, f.read_text(encoding="utf-8")))
+        pg_only = match.group(3) is not None
+        out.append((version, name, f.read_text(encoding="utf-8"), pg_only))
     return out
 
 
@@ -112,13 +118,17 @@ async def apply_sqlite(conn: object, *, fresh: bool | None = None) -> None:
 
     applied = await _applied_versions_sqlite(aio)
     migrations = discover_migrations()
-    for version, name, sql in migrations:
+    for version, name, sql, pg_only in migrations:
         if version in applied:
             continue
         if not fresh and version == 1:
             # Pre-existing v0.4 install: tables already exist, just record v1 applied.
             await _record_applied_sqlite(aio, version, name)
             logger.info("Migration 0001_%s: stamped (existing install)", name)
+            continue
+        if pg_only:
+            await _record_applied_sqlite(aio, version, name)
+            logger.info("Migration %04d_%s: postgres-only, stamped", version, name)
             continue
         # aiosqlite handles multi-statement scripts + comments natively.
         await aio.executescript(sql)  # type: ignore[attr-defined]
@@ -206,7 +216,7 @@ async def apply_postgres(pool: object) -> None:
         fresh = await _is_fresh_install_postgres(conn)
         applied = await _applied_versions_postgres(conn)
         migrations = discover_migrations()
-        for version, name, sql in migrations:
+        for version, name, sql, _pg_only in migrations:
             if version in applied:
                 continue
             if not fresh and version == 1:

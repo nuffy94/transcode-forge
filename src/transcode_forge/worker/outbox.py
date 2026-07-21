@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,9 @@ class OutboxEntry:
     payload: dict[str, object]
     attempts: int
     path: Path
+    # Epoch of the last failed delivery attempt (0.0 = never attempted).
+    # The drain's poison-parking gate reads this — see http_agent.
+    last_attempt_at: float = 0.0
 
 
 class Outbox:
@@ -102,6 +106,7 @@ class Outbox:
                         payload=dict(body["payload"]),
                         attempts=int(body.get("attempts", 0)),
                         path=path,
+                        last_attempt_at=float(body.get("last_attempt_at", 0.0)),
                     )
                 )
             except (ValueError, KeyError, json.JSONDecodeError, OSError):
@@ -120,12 +125,14 @@ class Outbox:
             pass
 
     def bump_attempts(self, entry: OutboxEntry) -> None:
-        """Record a failed delivery attempt (diagnostic only)."""
+        """Record a failed delivery attempt + its time (feeds the drain's
+        poison-parking gate)."""
         body = {
             "job_id": entry.job_id,
             "kind": entry.kind,
             "payload": entry.payload,
             "attempts": entry.attempts + 1,
+            "last_attempt_at": time.time(),
         }
         tmp_path = entry.path.with_suffix(".tmp")
         try:

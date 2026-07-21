@@ -671,3 +671,47 @@ class TestVerifyOutputDeepCheck:
         offsets = [float(cmd[cmd.index("-ss") + 1]) for cmd in invocations]
         # 5%, 50%, 95% of 3600 = 180, 1800, 3420
         assert offsets == pytest.approx([180.0, 1800.0, 3420.0])
+
+
+class TestUnmuxableSubtitleWiring:
+    """The pipeline threads the pre-encode subtitle probe into the encode
+    command (review of #88: the glue was untested — the probe ran
+    unmocked and fail-open in every pipeline test)."""
+
+    async def test_probe_result_reaches_encode_command(self, tmp_path, monkeypatch, caplog):
+        from unittest.mock import AsyncMock, patch
+
+        from transcode_forge import worker
+        from transcode_forge.worker.encoder import EncodeResult
+
+        src = tmp_path / "weird_subs.mkv"
+        src.write_bytes(b"x" * 10_000)
+        captured: dict = {}
+
+        async def fake_run_encode(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return EncodeResult(
+                success=False,
+                output_path="",
+                output_size=0,
+                returncode=1,
+                error_message="stop here — command capture is the assertion",
+            )
+
+        with (
+            patch.object(
+                worker.pipeline, "unmuxable_subtitle_indexes", AsyncMock(return_value=[2])
+            ),
+            patch.object(worker.pipeline, "run_encode", side_effect=fake_run_encode),
+        ):
+            with pytest.raises(worker.pipeline.PipelineError):
+                await worker.pipeline.run_pipeline(
+                    source_path=str(src),
+                    backend="cpu",
+                    quality=21,
+                    source_duration=60.0,
+                    job_id="j1",
+                    worker_id="w1",
+                )
+        assert "-0:s:2" in captured["cmd"]
+        assert "Dropping unmuxable subtitle stream" in caplog.text
