@@ -241,6 +241,7 @@ class TestPgOnlyMigrations:
         (db fixture) + version 15 recorded + inserts >2**31 survive."""
         import os
 
+        from transcode_forge.models.skipped import SkipReason
         from transcode_forge.repos import skipped as skip_repo
 
         rows = await (await db.execute("SELECT version FROM schema_migrations")).fetchall()
@@ -251,5 +252,5 @@ class TestPgOnlyMigrations:
             library="movies",
             codec="h264",
             file_size=2_884_089_163,
-            skip_reason="size_regression",
+            skip_reason=SkipReason.SIZE_REGRESSION,
         )
