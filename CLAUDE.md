@@ -74,7 +74,7 @@ ffprobe accepts but that won't decode are caught here. COMPARE checks size
 (larger than source → `SizeRegressionError`) and, when the job carries a
 target VMAF, the quality gate: full-file VMAF (resolution-matched model,
 worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the **absolute
-safety floors** (mean ≥ 90, perc5 ≥ 85 by default) or the encode is
+safety floors** (mean ≥ 91.5, perc5 ≥ 86 by default — VMAF v1 scale) or the encode is
 discarded (`VmafGateError`) — both are skip outcomes (job ends SKIPPED,
 original kept), not failures. The floors are deliberately NOT derived from
 the target: the target is what the CRF search aims for on samples, the
@@ -186,7 +186,8 @@ Common knobs:
 - `TF_DEFAULT_CODEC` — pre-fills the queue-time codec selector (hevc).
 - `TF_TARGET_VMAF` — the quality goal the CRF search aims for on samples
   (not a gate). `TF_VMAF_SAFETY_MEAN` / `TF_VMAF_SAFETY_PERC5` — absolute
-  "refuse to keep" floors for the full-file gate (90/85 defaults), never
+  "refuse to keep" floors for the full-file gate (91.5/86 defaults on
+  the VMAF v1 scale, calibrated in plans/vmaf-v1-gate1-results.md), never
   derived from the target. `TF_CRF_SEARCH_ENABLED` toggles the per-file
   CRF search. These plus the quality presets are DB-overridable from the
   Settings page (`repos/settings.py`, `effective(key)` = DB override

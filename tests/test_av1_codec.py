@@ -536,7 +536,7 @@ async def test_clear_override_restores_env_default(db):
     await settings_repo.set_override(db, "target_vmaf", "93")
     assert await settings_repo.effective(db, "target_vmaf") == "93"
     await settings_repo.clear_override(db, "target_vmaf")
-    assert float(await settings_repo.effective(db, "target_vmaf")) == 97.0
+    assert float(await settings_repo.effective(db, "target_vmaf")) == 98.0
 
 
 async def test_secret_keys_are_not_overridable(db):

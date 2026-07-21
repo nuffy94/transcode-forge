@@ -69,12 +69,12 @@ def test_gauge_graph_golden_no_downscale():
     change to this string is a scoring-behavior change and must be a
     deliberate one (update this golden in the same commit, with data)."""
     graph = build_gauge_graph(
-        model="vmaf_v0.6.1", log_path="/tmp/vmaf.json", n_subsample=5, n_threads=8
+        model="vmaf_v1.0.16_3d0h", log_path="/tmp/vmaf.json", n_subsample=5, n_threads=8
     )
     assert graph == (
         "[0:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[dis];"
         "[1:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[ref];"
-        "[dis][ref]libvmaf=model=version=vmaf_v0.6.1"
+        "[dis][ref]libvmaf=model=version=vmaf_v1.0.16_3d0h"
         ":log_fmt=json:log_path=/tmp/vmaf.json"
         ":n_subsample=5:n_threads=8"
     )
@@ -87,7 +87,7 @@ def test_gauge_graph_golden_downscale_reference():
     across workers whatever their ffmpeg's default. The DISTORTED chain and
     the index-pairing ops on both chains are untouched."""
     graph = build_gauge_graph(
-        model="vmaf_v0.6.1",
+        model="vmaf_v1.0.16_3d0h",
         log_path="/tmp/vmaf.json",
         n_subsample=5,
         n_threads=8,
@@ -96,7 +96,7 @@ def test_gauge_graph_golden_downscale_reference():
     assert graph == (
         "[0:v]settb=AVTB,setpts=N*100000,format=yuv420p10le[dis];"
         "[1:v]settb=AVTB,setpts=N*100000,scale=-2:1080:flags=lanczos,format=yuv420p10le[ref];"
-        "[dis][ref]libvmaf=model=version=vmaf_v0.6.1"
+        "[dis][ref]libvmaf=model=version=vmaf_v1.0.16_3d0h"
         ":log_fmt=json:log_path=/tmp/vmaf.json"
         ":n_subsample=5:n_threads=8"
     )
