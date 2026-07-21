@@ -4,6 +4,22 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Sources with embedded cover art no longer fail to encode.** `-map 0`
+  handed the attached picture (a JPEG "video" stream) to the video
+  encoder, which died on its dimensions — the encode command now maps
+  the first real video stream (`0:V:0`), all audio/subtitle/attachment
+  streams, and drops unknown-type streams instead of failing.
+- **A broken subtitle track no longer kills the whole encode.** Tracks
+  with no identifiable codec (matroska "Subtitle codec 0") are detected
+  pre-encode and excluded with a loud log line; the original keeps all
+  its tracks. Probe failures fall back to prior behavior.
+- **Failure messages now show the fatal error, not warning spam.** The
+  diagnostic capture filters swscaler/x265/NUMA/console noise that was
+  pushing the real error line out of the stored message.
+
 ## [0.12.0] - 2026-07-18
 
 ### Added

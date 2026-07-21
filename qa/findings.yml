@@ -454,3 +454,46 @@
     bugs above during the bench. Fixed by PR 76: the agent logs repr(exc)
     on every failure path; contract test 1 asserts the repr lands in the
     log ("ConnectTimeout('injected timeout')", not a blank).
+
+- id: encode-fails-on-attached-cover-art
+  title: Sources with embedded cover art fail TRANSCODE — global -c:v tries to x265-encode the JPEG
+  first_seen: 2026-07-20 / fail-triage
+  severity: high
+  status: fixed
+  refs: {pr: 88, test: "tests/test_encoder.py::TestBuildCommands::test_all_commands_map_real_streams_only"}
+  note: >-
+    ~15 fleet failures on The Voice WEBDLs. -map 0 mapped the attached
+    picture (mjpeg) as a second video stream; the global -c:v libx265
+    then died opening the encoder on the art's dimensions ("Error
+    initializing output stream 0:4"). Repro'd + fix verified live on a
+    failing source (0:V:0 mapping encodes clean). Fixed 2026-07-20 with
+    surgical maps (0:V:0 / 0:a? / 0:s? / 0:t? + -ignore_unknown).
+
+- id: encode-fails-on-unknown-codec-subtitle
+  title: Subtitle track with no identifiable codec fails the whole encode at mux ("Subtitle codec 0")
+  first_seen: 2026-07-20 / fail-triage
+  severity: high
+  status: fixed
+  refs: {pr: 88, test: "tests/test_encoder.py::TestUnmuxableSubtitleProbe"}
+  note: >-
+    ~6 fleet failures. matroska refuses -c:s copy for codec-0 (damaged
+    metadata) subtitle tracks and the encode dies at header write —
+    verified live that -ignore_unknown does NOT cover it. Fixed
+    2026-07-20 by probing subtitle codec names pre-encode and negative-
+    mapping unnameable tracks with a loud [TRANSCODE] warning; probe
+    failures fail OPEN to prior behavior. Original file keeps all its
+    tracks; only the encode omits the broken one.
+
+- id: worker-error-message-buries-fatal-line
+  title: Stored encode errors show warning spam (swscaler/x265/NUMA) instead of the fatal line
+  first_seen: 2026-07-20 / fail-triage
+  severity: medium
+  status: fixed
+  refs: {pr: 88, test: "tests/test_encoder.py::TestErrorNoiseFilter"}
+  note: >-
+    Mason, reviewing 21 fails: "i cant tell what went wrong on some of
+    them" — the 10-line stderr ring kept noise (deprecated-pixfmt spam,
+    x265 banners, set_mempolicy, "Press [q]") and pushed out the fatal
+    "Error initializing output stream" line. Fixed 2026-07-20 with a
+    noise-prefix filter on the ring, pinned against the observed spam
+    AND against filtering real fatal lines.
