@@ -4,6 +4,20 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The dashboard's split-second flicker — for real this time.** A
+  0.6-era `.htmx-settling { opacity: 0 }` fade-in rule rendered every
+  polled panel's freshly-swapped content invisible for htmx's 20ms
+  settle window (1-2 frames) on every poll — a full-panel blank every
+  3 seconds on the dashboard, beating against the 2.4s progress
+  shimmer. Invisible to DOM and animation instrumentation (an opacity
+  class flip is neither a mutation of interest nor an animation);
+  root-caused frame-exactly from a 60fps screen capture. The morph
+  work (#39, #83) was always correct — this rule was blanking the
+  correctly-morphed content.
+
 ## [0.13.0] - 2026-07-21
 
 ### Changed

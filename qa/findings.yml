@@ -514,3 +514,23 @@
     poison-parking (25 attempts -> 10-min slow tick, never dropped,
     claims resume) so one refused report can never idle a worker for
     days again. Live DB widened manually by Mason ahead of the deploy.
+
+- id: dashboard-settling-opacity-full-panel-blink
+  title: Every polled panel blanks 1-2 frames per poll — .htmx-settling{opacity:0} hides morphed content for the 20ms settle window
+  first_seen: 2026-07-17 / mason-live
+  severity: high
+  status: fixed
+  refs: {pr: 92}
+  note: >-
+    Mason's persistent report ("the bar is there... every 2 waves it
+    flickers for a split second") survived two shipped "flicker fixes"
+    (#83 morphs, will-change experiments) because the mechanism was an
+    opacity class flip — invisible to mutation observers,
+    getAnimations(), and animation-kill bisection. Root-caused
+    2026-07-21 via 60fps ddagrab screen capture: 2-frame luminance
+    drop every 178 frames (3.006s = the dashboard poll), frame 468
+    showing the panel fully blank while the DOM node provably survived
+    the morph (marker test). The 0.6-era fade-in pair
+    (.htmx-settling/.htmx-added) removed with a tombstone comment.
+    Lesson pinned: for sub-frame visual bugs, capture the compositor
+    (ddagrab), not the DOM.
