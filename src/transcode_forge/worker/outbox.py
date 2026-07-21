@@ -45,9 +45,12 @@ class OutboxEntry:
     payload: dict[str, object]
     attempts: int
     path: Path
-    # Epoch of the last failed delivery attempt (0.0 = never attempted).
-    # The drain's poison-parking gate reads this — see http_agent.
+    # Epoch of the last failed delivery attempt (0.0 = never attempted)
+    # and its error class ("retryable" | "auth"; "" = pre-#89 entry).
+    # The drain's poison-parking gate reads both — see http_agent: only
+    # RETRYABLE-classed failures may park; AUTH must keep screaming.
     last_attempt_at: float = 0.0
+    last_class: str = ""
 
 
 class Outbox:
@@ -107,6 +110,7 @@ class Outbox:
                         attempts=int(body.get("attempts", 0)),
                         path=path,
                         last_attempt_at=float(body.get("last_attempt_at", 0.0)),
+                        last_class=str(body.get("last_class", "")),
                     )
                 )
             except (ValueError, KeyError, json.JSONDecodeError, OSError):
@@ -124,15 +128,16 @@ class Outbox:
         except FileNotFoundError:
             pass
 
-    def bump_attempts(self, entry: OutboxEntry) -> None:
-        """Record a failed delivery attempt + its time (feeds the drain's
-        poison-parking gate)."""
+    def bump_attempts(self, entry: OutboxEntry, error_class: str = "retryable") -> None:
+        """Record a failed delivery attempt, its time, and its error
+        class (feeds the drain's poison-parking gate)."""
         body = {
             "job_id": entry.job_id,
             "kind": entry.kind,
             "payload": entry.payload,
             "attempts": entry.attempts + 1,
             "last_attempt_at": time.time(),
+            "last_class": error_class,
         }
         tmp_path = entry.path.with_suffix(".tmp")
         try:
@@ -144,10 +149,13 @@ class Outbox:
     def pending_job_ids(self) -> set[str]:
         """Jobs with undelivered reports — the claim fence reads this.
 
-        A worker must never claim while it holds a pending entry (spec +
-        PR A review): retry_job reuses job ids, so a stale attempt-1
-        report landing on a re-claimed attempt-2 of the same job is the
-        exact 'successful job marked failed' lie this train closes.
+        A worker must never claim while it holds a pending LIVE entry
+        (spec + PR A review): retry_job reuses job ids, so a stale
+        attempt-1 report landing on a re-claimed attempt-2 of the same
+        job is the exact 'successful job marked failed' lie this train
+        closes. Poison-PARKED entries (#89) are the one exception for
+        the run-loop's claim gate — but never for registration, which
+        requires true emptiness (see _drain_before_register).
         """
         return {e.job_id for e in self.entries()}
 

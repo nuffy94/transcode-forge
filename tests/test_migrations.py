@@ -231,3 +231,25 @@ class TestPgOnlyMigrations:
             cur = await conn.execute("SELECT version FROM schema_migrations")
             versions = {row[0] for row in await cur.fetchall()}
         assert 15 in versions
+
+    async def test_postgres_lane_exercises_already_bigint_alter(self, db):
+        """On Postgres the adapter makes 0001 create file_size as BIGINT,
+        so 0015's ALTER runs against an ALREADY-BIGINT column on every
+        fresh PG migration — i.e. CI's PG lane exercises the exact
+        redundant-ALTER path of the manually-widened production DB. This
+        test makes that implicit coverage explicit: migrations applied
+        (db fixture) + version 15 recorded + inserts >2**31 survive."""
+        import os
+
+        from transcode_forge.repos import skipped as skip_repo
+
+        rows = await (await db.execute("SELECT version FROM schema_migrations")).fetchall()
+        assert 15 in {r[0] for r in rows}
+        await skip_repo.record_skip(
+            db,
+            file_path="/m/huge-" + os.urandom(4).hex() + ".mkv",
+            library="movies",
+            codec="h264",
+            file_size=2_884_089_163,
+            skip_reason="size_regression",
+        )

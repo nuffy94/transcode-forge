@@ -593,3 +593,70 @@ async def test_poison_entry_parks_after_max_attempts(client: AsyncClient, app, t
         assert await agent._drain_outbox() is DrainResult.EMPTY  # retried, re-parked
     assert hostile.hit_count("skipped") == POISON_ATTEMPTS + 1
     assert agent.outbox.pending_job_ids() == {job.id}
+
+
+# ── Contract 14 — parked poison never unlocks REGISTRATION ──────────────────
+
+
+async def test_registration_refuses_while_poison_parked(client: AsyncClient, app, tmp_path, caplog):
+    """Registration releases this worker's active jobs server-side, so
+    the startup drain must require TRUE emptiness — the run-loop's
+    poison-tolerant EMPTY is not enough (review of #89: restart + parked
+    complete → release → self-reclaim → stale-report CAS race)."""
+    from transcode_forge.worker.http_agent import POISON_ATTEMPTS, DrainResult
+
+    agent, hostile = await _make_agent(client, app, tmp_path, "reg-poison")
+    job = await _queue_and_claim(client, app, agent, "regp")
+    agent.outbox.append(job.id, "skipped", {"reason": "size_regression", "error_message": "big"})
+    # Park it: bump to threshold with a fresh timestamp, no real posts.
+    for _ in range(POISON_ATTEMPTS):
+        agent.outbox.bump_attempts(agent.outbox.entries()[0])
+
+    # Run-loop semantics: parked → EMPTY (claims may resume).
+    assert await agent._drain_outbox() is DrainResult.EMPTY
+
+    # Registration gate: must NOT proceed on that EMPTY.
+    hostile.inject("skipped", "500", "500", "500")
+    reg_task = asyncio.create_task(agent._drain_before_register())
+    await asyncio.sleep(2.5)
+    assert not reg_task.done(), "registration proceeded with a parked report!"
+    assert "REFUSING to register" in caplog.text
+
+    # Clear the faults and force the cooldown elapsed: the next pass
+    # delivers for real and registration unblocks.
+    import json as _json
+
+    hostile._faults["skipped"].clear()
+    entry = agent.outbox.entries()[0]
+    body = _json.loads(entry.path.read_text(encoding="utf-8"))
+    body["last_attempt_at"] = 0.0
+    entry.path.write_text(_json.dumps(body), encoding="utf-8")
+    async with asyncio.timeout(20):
+        await reg_task
+    assert agent.outbox.pending_job_ids() == set()
+
+
+async def test_auth_entries_never_park(client: AsyncClient, app, tmp_path):
+    """An AUTH-refused report must scream every pass — even past the
+    poison threshold it is attempted (and AUTH_BLOCKED returned), never
+    silently parked into EMPTY (review of #89)."""
+    from transcode_forge.worker.http_agent import POISON_ATTEMPTS, DrainResult
+
+    agent, hostile = await _make_agent(client, app, tmp_path, "auth-poison")
+    job = await _queue_and_claim(client, app, agent, "authp")
+    agent.outbox.append(job.id, "skipped", {"reason": "size_regression", "error_message": "big"})
+    for _ in range(POISON_ATTEMPTS + 3):
+        agent.outbox.bump_attempts(agent.outbox.entries()[0], error_class="auth")
+
+    # Real 401s: swap in a client carrying a revoked token (the hostile
+    # wrapper only injects '500'/'timeout').
+    from transcode_forge.worker.http_client import WorkerHttpClient
+
+    await agent._client.aclose()
+    agent._client = WorkerHttpClient(
+        "http://test", "revoked-token", transport=ASGITransport(app=hostile)
+    )
+    hostile.watch("skipped")
+    assert await agent._drain_outbox() is DrainResult.AUTH_BLOCKED
+    assert hostile.hit_count("skipped") == 1  # attempted, not parked
+    assert agent.outbox.pending_job_ids() == {job.id}

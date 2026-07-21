@@ -693,7 +693,31 @@ class HttpWorkerAgent:
                 result = DrainResult.BLOCKED
                 logger.error("Outbox drain failed: %r", e)
             if result is DrainResult.EMPTY:
-                return
+                if not self.outbox.entries():
+                    return
+                # Poison-parked entries make the RUN-loop's drain report
+                # EMPTY (claims may resume) — but registration releases
+                # our active jobs server-side, so proceeding here with ANY
+                # undelivered terminal report reopens the release race
+                # this loop exists to close (review of #89: restart +
+                # parked complete → release → self-reclaim → stale-report
+                # CAS). Strict emptiness at THIS gate only: a poisoned
+                # worker waits at boot, loudly, until the scheduler-side
+                # cause is fixed — the same accepted cost as a scheduler
+                # outage. Own capped cadence: parked passes are no-op
+                # file reads, and falling through to the exponential
+                # backoff let its attempt counter run away.
+                if not announced:
+                    logger.error(
+                        "Startup drain: only poison-parked reports remain — "
+                        "REFUSING to register until they deliver "
+                        "(registration would release their jobs and race "
+                        "the stale reports). Fix the scheduler-side "
+                        "refusals to unblock this worker."
+                    )
+                    announced = True
+                await asyncio.sleep(5.0)
+                continue
             if result is DrainResult.AUTH_BLOCKED:
                 logger.error(
                     "Outbox delivery is blocked on credentials — proceeding to "
@@ -762,10 +786,13 @@ class HttpWorkerAgent:
                 continue
             if (
                 entry.attempts >= POISON_ATTEMPTS
+                and entry.last_class != "auth"
                 and time.time() - entry.last_attempt_at < POISON_COOLDOWN_S
             ):
                 # Parked poison entry: still in its cooldown — keep the
-                # per-job chain order but don't burn an attempt.
+                # per-job chain order but don't burn an attempt. AUTH-
+                # classed entries never park: the invariant is that a
+                # credential wall SCREAMS every pass (review of #89).
                 blocked.add(entry.job_id)
                 continue
             try:
@@ -780,7 +807,7 @@ class HttpWorkerAgent:
                         entry.job_id,
                         e,
                     )
-                    self.outbox.bump_attempts(entry)
+                    self.outbox.bump_attempts(entry, error_class="auth")
                     blocked.add(entry.job_id)
                     auth_blocked = True
                 elif cls is ErrorClass.TERMINAL:
@@ -816,12 +843,16 @@ class HttpWorkerAgent:
         live = [
             e
             for e in remaining
-            if e.attempts < POISON_ATTEMPTS or time.time() - e.last_attempt_at >= POISON_COOLDOWN_S
+            if e.attempts < POISON_ATTEMPTS
+            or e.last_class == "auth"
+            or time.time() - e.last_attempt_at >= POISON_COOLDOWN_S
         ]
         if not live:
-            # Only parked poison remains: report EMPTY so claims (and
-            # startup registration) proceed — the entries stay journaled
-            # and retry every cooldown tick. If the parked report is a
+            # Only parked poison remains: report EMPTY so the RUN-loop's
+            # claim gate proceeds — the entries stay journaled and retry
+            # every cooldown tick. Startup registration does NOT accept
+            # this EMPTY (it re-checks true emptiness — see
+            # _drain_before_register). If the parked report is a
             # terminal outcome the scheduler later re-assigns, its
             # eventual delivery resolves via the idempotent-receipt
             # endpoints (duplicate → 204, conflict → 409 discard).
