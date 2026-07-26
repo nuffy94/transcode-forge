@@ -20,7 +20,7 @@
 # <UDF name="s3_access_key" label="Object Storage access key" />
 # <UDF name="s3_secret_password" label="Object Storage secret key" />
 # <UDF name="worker_name" label="Worker name shown in the UI (blank = hostname)" default="" example="linode-worker-1" />
-# <UDF name="worker_max_concurrent" label="Concurrent jobs, 1-4 (blank = auto from CPU count)" default="" />
+# <UDF name="worker_max_concurrent" label="Concurrent encodes, 1-4 (blank = auto from CPU count, recommended; scale throughput by adding worker instances, not this knob)" default="" />
 
 set -euo pipefail
 
