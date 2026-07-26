@@ -22,7 +22,8 @@ with one obsession: never lose an original — even if a worker dies mid-encode.
 - **No file ever lost** — orphan-job detection, integrity audit, and
   cross-view consistency tests so the dashboard never lies about state.
 
-> **Status**: v0.13.1. Self-hostable; install in three commands.
+> **Status**: actively developed, in production use. Self-hostable;
+> install in three commands.
 
 ## The console
 
