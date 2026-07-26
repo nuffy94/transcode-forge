@@ -52,6 +52,15 @@ Both StackScripts auto-tune `TF_WORKER_MAX_CONCURRENT` from the CPU count
 (~4 vCPUs per concurrent encode, capped at 4); an explicit worker UDF
 overrides it. Block Storage scratch: ~2× your largest media file.
 
+**Leave the knob on auto — add instances for throughput.** Measured
+(2026-07-15, RTX 4000 Ada GPU plan, 4 vCPU): two concurrent encodes ran
+**17% slower** than one back-to-back — the VMAF quality gauge is CPU-bound,
+so a second job starves both of CPU while the GPU encoder sits ~13%
+utilized. One encode per ~4 vCPUs is the real ceiling on every plan. When
+you need more throughput, add worker Linodes (each with its own token)
+rather than raising `TF_WORKER_MAX_CONCURRENT` — same guidance as the LKE
+chart (scale `worker.replicas`, not `maxConcurrent`).
+
 ## Prerequisites
 
 1. A Linode account (Cloud Manager access).
