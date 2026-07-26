@@ -4,9 +4,10 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-A self-hosted h264→HEVC transcoder for your media library. One scheduler, as
-many worker machines as you've got, and an 8-step pipeline with one obsession:
-never lose an original — even if a worker dies mid-encode.
+A self-hosted transcoder that shrinks your media library into modern,
+efficient codecs — HEVC and AV1 today, with room for whatever comes next.
+One scheduler, as many worker machines as you've got, and an 8-step pipeline
+with one obsession: never lose an original — even if a worker dies mid-encode.
 
 - **Atomic 8-step pipeline** — lock → transcode → verify → compare →
   swap → confirm → cleanup → unlock. The original file is always
@@ -21,7 +22,7 @@ never lose an original — even if a worker dies mid-encode.
 - **No file ever lost** — orphan-job detection, integrity audit, and
   cross-view consistency tests so the dashboard never lies about state.
 
-> **Status**: v0.9.0. Self-hostable; install in three commands.
+> **Status**: v0.13.1. Self-hostable; install in three commands.
 
 ## The console
 
@@ -186,7 +187,7 @@ worker tokens would travel unencrypted.
 ## What it does (and doesn't)
 
 **Does**:
-- Watches your media library, finds h264 files, queues them
+- Watches your media library, finds the files worth re-encoding, queues them
 - Distributes work to one or more workers (QSV / NVENC / CPU)
 - Verifies every output before replacing the original
 - Re-queues stuck jobs if a worker disappears mid-transcode
