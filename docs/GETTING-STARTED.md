@@ -1,6 +1,6 @@
 # Getting Started — Transcode Forge
 
-Welcome to Transcode Forge, a self-hosted h264→HEVC transcoder. This guide walks you from zero to your first transcode in about 5 minutes, then adds a second worker node on a different machine.
+Welcome to Transcode Forge, a self-hosted transcoder that shrinks your media library into modern codecs (HEVC and AV1 today). This guide walks you from zero to your first transcode in about 5 minutes, then adds a second worker node on a different machine.
 
 **System requirements:** Linux or macOS with Docker and Compose.
 

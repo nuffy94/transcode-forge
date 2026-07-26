@@ -6,7 +6,7 @@ two backends serve different goals:
 
 | Backend | Behavior | Use it for |
 |---------|----------|-----------|
-| **filesystem** | Transcodes the file **in place** — replaces the h264 original with the smaller HEVC and reclaims disk. | A NAS library where the goal is to **shrink** your collection. |
+| **filesystem** | Transcodes the file **in place** — replaces the original with the smaller encode and reclaims disk. | A NAS library where the goal is to **shrink** your collection. |
 | **s3** | Keeps the master object untouched, transcodes a copy, and uploads a **derivative** (a separate optimized object); repeat requests reuse the cached derivative. | Cloud / distributed setups where workers shouldn't share a filesystem. |
 
 Pick a backend when you create the library (UI or API). Existing libraries

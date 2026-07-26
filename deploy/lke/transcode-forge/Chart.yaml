@@ -1,7 +1,8 @@
 apiVersion: v2
 name: transcode-forge
 description: >-
-  Distributed h264 -> HEVC/AV1 media transcoder on Kubernetes — scheduler,
+  Distributed media transcoder on Kubernetes (modern codecs — HEVC/AV1
+  today) — scheduler,
   Redis, optional in-cluster Postgres, and CPU workers, with an S3-compatible
   Object Storage media plane (LKE block storage is RWO/single-node, so media
   must live in Object Storage).

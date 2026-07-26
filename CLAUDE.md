@@ -5,8 +5,9 @@ repository. End-users don't need to read this — see `README.md`.
 
 ## Project overview
 
-Transcode Forge is a self-hosted h264→HEVC/AV1 media transcoder. Scheduler +
-workers, hardware-accelerated encoding on two axes — codec (HEVC, AV1) ×
+Transcode Forge is a self-hosted media transcoder that re-encodes libraries
+into modern, efficient codecs. Scheduler +
+workers, hardware-accelerated encoding on two axes — codec (HEVC, AV1 today) ×
 backend (Intel QSV, NVIDIA NVENC, software x265/SVT-AV1 fallback) — an atomic
 8-step pipeline that never loses an original file, and a VMAF quality gate so
 a bad encode can never silently replace one either.
