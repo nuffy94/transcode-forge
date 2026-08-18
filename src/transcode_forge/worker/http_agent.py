@@ -366,24 +366,11 @@ class HttpWorkerAgent:
             if recovery in ("restored", "cleaned"):
                 logger.warning("Claim-time recovery on %s: %s", source_ref, recovery)
 
-        try:
-            source_path_local = await storage.fetch(source_ref)
-        except Exception as e:
-            logger.error("Failed to fetch source for job %s: %r", job.id, e)
-            await self._deliver(
-                job.id,
-                "failed",
-                {
-                    "error_message": f"Failed to fetch source: {e!r}",
-                    "retry_count": job.retry_count + 1,
-                },
-            )
-            self._current_job_id = None
-            return
-
-        # Check for dedup/reuse opportunity (S3-only for now).
-        # For S3 libraries, compute the derivative key and look it up via the scheduler.
-        # If a derivative exists, the scheduler marks the job COMPLETE and we skip encoding.
+        # Registry check BEFORE the download (S3-only). The derivative key is
+        # computed from job-row fields alone, so a hit costs zero bucket
+        # traffic: no HEAD, no download, no egress. Checking after fetch()
+        # (the original order) skipped the encode and upload but still paid
+        # the download the registry exists to avoid.
         if is_s3:
             dedup_result = await self._try_dedup(job, storage)
             if dedup_result:
@@ -405,6 +392,21 @@ class HttpWorkerAgent:
                 await storage.cleanup(job)
                 self._current_job_id = None
                 return
+
+        try:
+            source_path_local = await storage.fetch(source_ref)
+        except Exception as e:
+            logger.error("Failed to fetch source for job %s: %r", job.id, e)
+            await self._deliver(
+                job.id,
+                "failed",
+                {
+                    "error_message": f"Failed to fetch source: {e!r}",
+                    "retry_count": job.retry_count + 1,
+                },
+            )
+            self._current_job_id = None
+            return
 
         async def on_progress(progress: float, speed: float | None) -> None:
             self._current_progress = progress
