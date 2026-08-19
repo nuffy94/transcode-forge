@@ -24,12 +24,21 @@ RUN sed -i 's|^Components: main$|Components: main contrib non-free non-free-firm
 # The build fails loudly if either encoder or the scoring path is missing.
 # The smoke uses 1080p frames: the v1 models' CAMBI feature errors on
 # tiny frames (`no feature 'cambi_hrs_1080_…'` on 192x108).
-# PINNED to a dated release (not the rolling "latest"): the binary is GPL —
-# distributing it in the published image requires the corresponding source
-# to stay identifiable (see THIRD-PARTY-LICENSES.md), and pinning also keeps
-# image builds reproducible. Bump deliberately.
-ARG VMAF_FFMPEG_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-15-14-01/ffmpeg-n7.1.5-2-g998de74adf-linux64-gpl-7.1.tar.xz
+# PINNED and MIRRORED on this repo's releases (not BtbN's rolling "latest",
+# and not BtbN's dated autobuild tags either: those are pruned after a few
+# weeks. The July 2026 pin 404'd on 2026-08-18 and broke every image
+# build). The mirror release carries the upstream tag, the FFmpeg source
+# commit, and the sha256 (see THIRD-PARTY-LICENSES.md): the binary is GPL,
+# so distributing it in the published image requires the corresponding
+# source to stay identifiable. The sha256 check below makes the pin
+# tamper-evident. Bump deliberately: re-mirror, re-run the self-test, and
+# compare VMAF scores against the previous binary before moving the pin
+# (the n7.1.5 -> n8.1.2 move scored bit-identical on the v0, v1 and 4k
+# models).
+ARG VMAF_FFMPEG_URL=https://github.com/nuffy94/transcode-forge/releases/download/ffmpeg-vmaf-n8.1.2-44-g7c533d0f86/ffmpeg-n8.1.2-44-g7c533d0f86-linux64-gpl-8.1.tar.xz
+ARG VMAF_FFMPEG_SHA256=03ccc8a1cb534b97c2bc43f322ddb1b7c23bd325abb7e4c31aa37f4b4c0e648f
 RUN curl -fsSL "$VMAF_FFMPEG_URL" -o /tmp/ffmpeg-static.tar.xz \
+    && echo "$VMAF_FFMPEG_SHA256  /tmp/ffmpeg-static.tar.xz" | sha256sum -c - \
     && mkdir -p /opt/ffmpeg-vmaf \
     && tar -xJf /tmp/ffmpeg-static.tar.xz --strip-components=2 -C /opt/ffmpeg-vmaf \
         --wildcards '*/bin/ffmpeg' \

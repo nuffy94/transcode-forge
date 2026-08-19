@@ -50,7 +50,7 @@ GPL components' obligation is source availability, satisfied below:
 | Tool | License | Corresponding source |
 |------|---------|------|
 | ffmpeg (Debian package) | GPL-2+ build (links GPL x264/x265) | Debian source packages for the pinned base image: <https://snapshot.debian.org/> (`apt source ffmpeg` inside the image resolves the exact version). |
-| ffmpeg static build (VMAF measurement) | GPL-3.0 | Pinned BtbN release — sources published with the same release tag: <https://github.com/BtbN/FFmpeg-Builds/releases> (tag in the `VMAF_FFMPEG_URL` Dockerfile ARG). |
+| ffmpeg static build (VMAF measurement) | GPL-3.0 | Unmodified BtbN build, mirrored as a release asset on this repo because BtbN prunes its autobuild tags. The mirror release (tag in the `VMAF_FFMPEG_URL` Dockerfile ARG, currently `ffmpeg-vmaf-n8.1.2-44-g7c533d0f86`) records the upstream BtbN tag, the sha256, and the FFmpeg source commit: <https://github.com/FFmpeg/FFmpeg/commit/7c533d0f86> (release/8.1). Build recipe: <https://github.com/BtbN/FFmpeg-Builds>. |
 | `intel-media-va-driver-non-free`, `libmfx1` | Proprietary (Intel; Debian non-free) | Optional QSV hardware acceleration; redistributable per Intel's Debian packaging terms. |
 | Redis 7 | RSALv2 + Commons Clause | Separate official `redis:7-alpine` image — referenced by compose, not bundled in ours. |
 | PostgreSQL 16 | PostgreSQL License | Separate official image — referenced by compose, not bundled in ours. |
