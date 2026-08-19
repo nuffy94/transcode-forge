@@ -60,18 +60,22 @@ class _ScriptedClient:
         self.download_error = download_error
         self.upload_error = upload_error
         self.uploaded: dict[str, bytes] = {}
+        self.calls: list[str] = []
 
     async def head_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("head_object")
         if self.head_error is not None:
             raise self.head_error
         return {"ContentLength": len(TEST_DATA)}
 
     async def download_file(self, **kwargs: Any) -> None:
+        self.calls.append("download_file")
         if self.download_error is not None:
             raise self.download_error
         Path(kwargs["Filename"]).write_bytes(TEST_DATA)
 
     async def upload_fileobj(self, fileobj: Any, bucket: str, key: str, **kwargs: Any) -> None:
+        self.calls.append("upload_fileobj")
         if self.upload_error is not None:
             raise self.upload_error
         self.uploaded[key] = fileobj.read()
@@ -235,6 +239,30 @@ class TestWorkerAgentS3Failures:
         assert kwargs["space_saved"] == 0
         agent._client.failed.assert_not_awaited()
         assert agent._current_job_id is None
+
+    async def test_dedup_hit_never_touches_the_bucket(self, agent: HttpWorkerAgent):
+        """The registry check must run BEFORE the download. A dedup hit
+        that has already pulled the original still paid the egress the
+        registry exists to avoid (Phase 2 row 4: 'nothing downloaded twice')."""
+        scripted = _ScriptedClient()
+        job = _make_s3_job()
+        agent._client.check_derivative.return_value = {
+            "found": True,
+            "output_size": 4242,
+            "derivative_key": "reused-key",
+        }
+        pipeline = AsyncMock(return_value=dict(PIPELINE_RESULT))
+
+        with (
+            patch("aioboto3.Session", return_value=_MockSession(scripted)),
+            patch("transcode_forge.worker.http_agent.run_pipeline", new=pipeline),
+        ):
+            await agent._process_job(job)
+
+        assert scripted.calls == [], f"S3 touched on a dedup hit: {scripted.calls}"
+        agent._client.check_derivative.assert_awaited_once()
+        agent._client.complete.assert_awaited_once()
+        pipeline.assert_not_awaited()
 
 
 class TestS3BackendErrorContracts:
