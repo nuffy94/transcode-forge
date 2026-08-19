@@ -4,6 +4,24 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Image builds no longer depend on a third-party URL that expires.** The
+  static ffmpeg the image uses for VMAF measurement was pinned to a BtbN
+  autobuild tag; BtbN prunes those after a few weeks and stopped building
+  the 7.1 line, so the pin 404'd on 2026-08-18 and every image build
+  failed. The tarball (n8.1.2-44-g7c533d0f86, unmodified) is now mirrored
+  as a release asset on this repo with its provenance, the Dockerfile
+  points there and verifies the sha256, and the move was checked before
+  landing: all four VMAF models load, and scores on a test pair are
+  bit-identical to the previous n7.1.5 binary on the v0, v1 and 4k
+  models, so the gate's floors carry over unchanged.
+- **A registry hit on Object Storage no longer pays for the download.**
+  The worker checked the derivative registry after fetching the original;
+  the check now runs first, so a repeat job touches the bucket zero times.
+  (#97)
+
 ## [0.13.1] - 2026-07-21
 
 ### Fixed
