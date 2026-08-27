@@ -42,39 +42,53 @@ Shared CPU plans throttle sustained x265 encode — use Dedicated. Size the
 plan for CPU; store media in Object Storage and scratch on a Block Storage
 volume, not the small root disk.
 
-| Tier   | Plan            | vCPU | ~$/mo | Concurrent jobs (auto) |
-| ------ | --------------- | ---- | ----- | ---------------------- |
-| Small  | Dedicated 8GB   | 4    | ~$72  | 1                      |
-| Medium | Dedicated 16GB  | 8    | ~$144 | 2                      |
-| Large  | Dedicated 32–64GB | 16–32 | ~$288–576 | 4                |
+| Tier   | Plan            | vCPU | ~$/mo |
+| ------ | --------------- | ---- | ----- |
+| Small  | Dedicated 8GB   | 4    | ~$72  |
+| Medium | Dedicated 16GB  | 8    | ~$144 |
+| Large  | Dedicated 32–64GB | 16–32 | ~$288–576 |
 
-Both StackScripts auto-tune `TF_WORKER_MAX_CONCURRENT` from the CPU count
-(~4 vCPUs per concurrent encode, capped at 4); an explicit worker UDF
-overrides it. Block Storage scratch: ~2× your largest media file.
+Every worker runs one job at a time; more vCPUs make that one job (and
+its quality measurement) faster. Block Storage scratch: ~2× your largest
+media file.
 
-**Leave the knob on auto — add instances for throughput.** Measured
-(2026-07-15, RTX 4000 Ada GPU plan, 4 vCPU): two concurrent encodes ran
-**17% slower** than one back-to-back — the VMAF quality gauge is CPU-bound,
-so a second job starves both of CPU while the GPU encoder sits ~13%
-utilized. One encode per ~4 vCPUs is the real ceiling on every plan. When
-you need more throughput, add worker Linodes (each with its own token)
-rather than raising `TF_WORKER_MAX_CONCURRENT` — same guidance as the LKE
-chart (scale `worker.replicas`, not `maxConcurrent`).
+**For throughput, add worker Linodes — each with its own token.**
+Measured (2026-07-15, RTX 4000 Ada GPU plan, 4 vCPU): two concurrent
+encodes ran **17% slower** than one back-to-back — the VMAF quality gauge
+is CPU-bound, so a second job starves both of CPU while the GPU encoder
+sits ~13% utilized. Same guidance as the LKE chart (scale
+`worker.replicas`, not concurrency).
 
 ## Prerequisites
 
-1. A Linode account (Cloud Manager access).
-2. **Optional but recommended — domain + TLS:** a domain you control. With
-   Cloudflare DNS, also an API token scoped to `Zone / DNS / Edit` for that
-   zone (certificates via DNS-01, no port-80 race). Without Cloudflare,
-   HTTP-01 is used automatically once DNS points at the instance.
-3. **Object Storage (required for multi-node):** a bucket + access keys
+Have these ready before you start. Everything else the StackScripts
+handle on the instance.
+
+1. **A Linode account** with Cloud Manager access and the ability to
+   create paid resources.
+2. **An SSH key pair**, public key handy. It's attached to the
+   *scheduler* at creation — the localhost-only path and the local-worker
+   join both use SSH. Workers never get one (see step 8).
+3. **Optional but recommended — a domain**, if you want HTTPS on a real
+   name: registered, with its nameservers pointed at a DNS provider
+   where you can add an `A` record.
+   - **Cloudflare DNS:** also create an API token scoped to
+     `Zone / DNS / Edit` for that zone. Certificates issue via DNS-01 —
+     no waiting on propagation, no port-80 race.
+   - **Any other DNS provider (including Linode's DNS Manager):** leave
+     the Cloudflare token UDF blank. Certificates fall back to HTTP-01,
+     which works once your `A` record points at the instance and has
+     propagated.
+4. **Object Storage (required for multi-node):** a bucket + access keys
    (Cloud Manager → Object Storage). Create **limited access keys** scoped
    to just the media bucket — every worker holds these keys, so scoping
    caps the blast radius of a compromised node. Note the endpoint URL,
    e.g. `https://us-ord-1.linodeobjects.com`.
-4. **Optional — Managed Databases:** a PostgreSQL Managed Database if you
-   don't want the built-in Postgres container. Note its connection URL.
+5. **Optional — Managed Databases:** a PostgreSQL Managed Database if you
+   don't want the built-in Postgres container. Note its connection URL,
+   including `?sslmode=require`.
+6. **Something to transcode:** your own h264 media, or seed the bucket
+   with ~2 GB of CC-BY test movies (step 2).
 
 ## The runbook
 
@@ -114,8 +128,9 @@ perimeter** — don't skip it.
 
 - **forge-scheduler** policy: inbound DROP default; allow TCP 22 (ideally
   from your IP only), 80, 443.
-- **forge-worker** policy: inbound DROP default; allow TCP 22 at most.
-  Workers are outbound-only.
+- **forge-worker** policy: inbound DROP default, no allow rules. Workers
+  are outbound-only and never need SSH — use the Lish console if you
+  ever need a shell on one.
 
 ### 4. Create the scheduler Linode
 
@@ -126,7 +141,8 @@ Cloud Manager → Create → Linode → StackScripts tab → your scheduler scri
 - Fill the UDFs: `domain` (blank = localhost-only), Cloudflare token
   (blank = HTTP-01), Object Storage endpoint/bucket/keys (blank = local
   media), Managed Database URL (blank = built-in Postgres).
-- Attach the **forge-scheduler** Cloud Firewall and your SSH key.
+- Attach the **forge-scheduler** Cloud Firewall and your SSH key (the
+  scheduler is the only instance that gets a key).
 - Add a **Block Storage volume** (media/scratch — the script formats and
   mounts an unformatted attached volume at `/mnt/data`).
 
@@ -168,8 +184,9 @@ cd /opt/transcode-forge && ./join-local-worker.sh   # prompts for the token
 For each worker: issue a fresh token in the UI (one per worker — they're
 individually revocable), then Create → Linode with the worker StackScript.
 UDFs: `server_url` (`https://<domain>`), the token, and the same Object
-Storage endpoint/keys. Attach the **forge-worker** Cloud Firewall. The
-worker appears on the Workers page within a heartbeat of boot finishing.
+Storage endpoint/keys. Attach the **forge-worker** Cloud Firewall — no
+SSH key (use Lish if you ever need a console). The worker appears on the
+Workers page within a heartbeat of boot finishing.
 
 ### Smoke test
 
