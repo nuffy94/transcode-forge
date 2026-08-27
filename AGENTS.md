@@ -90,7 +90,9 @@ uv run python scripts/build_css.py --check    # fail if committed CSS is stale
 
 - `asyncio_mode = "auto"` — async tests just work, no decorator needed.
 - Tests run on in-memory SQLite with migrations fully applied; Redis is
-  mocked; **ffmpeg is not required**.
+  mocked; **ffmpeg is not required locally** — the one real-encode test
+  (`tests/test_pipeline_integration.py`) self-skips missing encoders. CI
+  installs ffmpeg so it actually runs there.
 - The `client` fixture is already authenticated as admin; use
   `unauthed_client` to test the auth boundary.
 - The QA sweep in `tests/qa/` is excluded by default — run explicitly
