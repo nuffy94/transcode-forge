@@ -126,7 +126,7 @@ class Settings(BaseSettings):
                 f"TF_VMAF_SAFETY_PERC5 ({self.vmaf_safety_perc5:g}) cannot exceed "
                 f"TF_VMAF_SAFETY_MEAN ({self.vmaf_safety_mean:g}). If you are "
                 "porting the retired TF_VMAF_MIN_FLOOR, note the new floors are "
-                'absolute "refuse to keep" bars (defaults 90/85), not the old '
+                'absolute "refuse to keep" bars (defaults 91.5/86), not the old '
                 "target-coupled floor."
             )
         return self
