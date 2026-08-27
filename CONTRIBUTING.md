@@ -14,10 +14,9 @@ feature branch  ──PR──▶  main
   deletion. Every change arrives via a pull request with green CI.
 - **feature branches** — short-lived, branched from `main`, named for the change:
   `feat/av1-encoder`, `fix/orphan-job-release`, `docs/contributing-flow`.
-- **`dev`** — reserved as the future staging tier. It slots into the middle
-  (`feature → dev → main`) once there's a staging *deploy* to test against — i.e.
-  when the release pipeline lands (post-StackScripts). Until then, work goes
-  straight to `main`.
+- **`dev`** — retired (July 2026). The repo is trunk-based; release channels
+  cover the staging role instead: every merge to `main` publishes the `:edge`
+  image, and `:latest` only moves on a `v*` tag.
 
 ## Commits
 
