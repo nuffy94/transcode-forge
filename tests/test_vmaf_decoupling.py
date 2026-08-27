@@ -109,7 +109,7 @@ class TestFloorsOnlyGate:
         """THE flaw regression. Live numbers from the 2026-07-04 batch:
         full file measured 93.3 mean / 88.1 perc5 against target 97 —
         skipped by the old target-derived gate (97/95), a good encode
-        discarded. Under the absolute floors (90/85) it must complete."""
+        discarded. Under the absolute floors (91.5/86) it must complete."""
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
@@ -121,7 +121,7 @@ class TestFloorsOnlyGate:
         assert source.read_bytes() == b"y" * 5000  # swap happened
 
     async def test_damaged_mean_skips_at_default_floor(self, tmp_path):
-        """Mean below the 90 default → VmafGateError (skip, original kept)."""
+        """Mean below the 91.5 default → VmafGateError (skip, original kept)."""
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
@@ -133,7 +133,7 @@ class TestFloorsOnlyGate:
         assert source.read_bytes() == b"x" * 10000
 
     async def test_damaged_perc5_skips_at_default_floor(self, tmp_path):
-        """Mean fine but worst scenes below the 85 default → skip."""
+        """Mean fine but worst scenes below the 86 default → skip."""
         source = tmp_path / "ep.mkv"
         source.write_bytes(b"x" * 10000)
 
@@ -403,7 +403,7 @@ class TestConfigPairValidation:
         from transcode_forge.config import Settings
 
         with pytest.raises(ValidationError, match="cannot exceed"):
-            Settings(vmaf_safety_perc5=95.0)  # mean stays at the 90 default
+            Settings(vmaf_safety_perc5=95.0)  # mean stays at the 91.5 default
 
     def test_coherent_pair_boots(self):
         from transcode_forge.config import Settings

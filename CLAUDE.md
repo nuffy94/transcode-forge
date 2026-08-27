@@ -29,8 +29,8 @@ uv run pytest tests/test_pipeline.py     # single file
 uv run pytest -k "test_swap"             # by name
 uv run pytest --cov=transcode_forge      # with coverage
 
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/        # CI enforces --check; format before pushing
+uv run ruff check src/ tests/ qa/ scripts/
+uv run ruff format src/ tests/ qa/ scripts/   # CI enforces --check; format before pushing
 uv run mypy src/
 
 uv run python scripts/build_css.py            # build served CSS from assets/css/forge.css
@@ -38,11 +38,24 @@ uv run python scripts/build_css.py --watch    # rebuild on change (dev CSS loop)
 uv run python scripts/build_css.py --check    # fail if committed app.css is stale (CI gate)
 ```
 
-CI (`.github/workflows/tests.yml`) runs `ruff check`, `ruff format --check`,
-`mypy src/`, `pytest --cov`, and a `css-fresh` job (`build_css.py --check`)
-on every push and PR. A formatting drift, type error, or CSS drift will
-fail the build — always run `ruff format`, `mypy src/`, and rebuild the CSS
-before committing.
+CI (`.github/workflows/tests.yml`) runs five jobs on every push and PR:
+
+- `test` — `ruff check` + `ruff format --check` (over `src/ tests/ qa/
+  scripts/`), `mypy src/`, and `pytest --cov`.
+- `test-postgres` — the same suite against a real Postgres 16 service
+  container (`TF_TEST_DB_URL`); catches SQLite-vs-PG dialect bugs the
+  SQLite lane can't see.
+- `qa-sweep` — the deterministic UX sweep (`tests/qa/`: axe + error
+  capture + screenshots against a seeded demo-static instance).
+- `css-fresh` — `build_css.py --check`; fails if the committed CSS is
+  stale relative to its source.
+- `image-build` — the production Dockerfile must build (its baked-in
+  encoder + VMAF smoke runs at PR time; publishing stays in
+  `publish.yml`).
+
+A formatting drift, type error, dialect regression, or CSS drift will
+fail the build — always run `ruff format`, `mypy src/`, and rebuild the
+CSS before committing.
 
 The served `src/transcode_forge/web/static/css/app.css` is **generated** by the
 pinned Tailwind v4 standalone CLI (no Node). Edit the source
@@ -114,8 +127,8 @@ to the browser.
 
 All DB access lives in `repos/` — one module per resource (jobs, workers,
 media, libraries, scans, skipped, system, schedules, exclusions, users,
-worker_tokens). Models in `models/` are Pydantic `BaseModel` with `StrEnum`
-for statuses.
+worker_tokens, settings, derivatives). Models in `models/` are Pydantic
+`BaseModel` with `StrEnum` for statuses.
 
 ### Database abstraction
 
@@ -133,8 +146,11 @@ for statuses.
 `apply_postgres()` create the `schema_migrations` table on first boot
 and apply pending migrations. Existing pre-migrations installs are
 detected (the `jobs` table exists but `schema_migrations` doesn't) and
-have version 1 stamped applied without re-running. **Never edit a
-released migration; always add a new numbered file.**
+have version 1 stamped applied without re-running. A `NNNN_name.pg.sql`
+file is Postgres-only DDL (e.g. `ALTER COLUMN TYPE`); SQLite records the
+version without executing it so both dialects agree on the schema
+version. **Never edit a released migration; always add a new numbered
+file.**
 
 ### Auth
 
@@ -180,7 +196,9 @@ Common knobs:
 - `TF_DB_URL` — `postgresql://…` (prod) or `sqlite:///path.db` (dev/test).
 - `TF_REDIS_URL` — `redis://host:port/db`.
 - `TF_AUTH_SECRET` — cookie-signing secret. Generated random per boot if
-  not set; pin it in production so sessions survive restarts.
+  not set; pin it in production. Worker tokens are HMAC-hashed with a
+  pepper derived from it (`TF_TOKEN_PEPPER` overrides), so an unpinned
+  secret invalidates issued worker tokens on restart, not just sessions.
 - `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` — library paths.
 - `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
   file); mapped per encoder in `worker/encoder.py`.
@@ -193,12 +211,21 @@ Common knobs:
   CRF search. These plus the quality presets are DB-overridable from the
   Settings page (`repos/settings.py`, `effective(key)` = DB override
   else env). The old `TF_VMAF_MIN_FLOOR` knob is retired and ignored.
+- `TF_S3_ENDPOINT_URL`, `TF_S3_REGION`, `TF_S3_ACCESS_KEY_ID`,
+  `TF_S3_SECRET_ACCESS_KEY` — optional S3-compatible object storage for
+  S3 library backends (scheduler and workers both need them).
+  `TF_SCRATCH_DIR` — fast local scratch for S3 downloads/uploads.
+- `TF_SESSION_SECURE` — set true behind a TLS reverse proxy so the admin
+  session cookie carries the Secure flag.
 
 Worker-side:
 - `TF_SERVER_URL` — scheduler URL (presence selects HTTP mode).
 - `TF_WORKER_TOKEN` — bearer token issued from the scheduler UI.
 - `TF_WORKER_NAME`, `TF_PREFERRED_BACKEND` (old `TF_PREFERRED_ENCODER`
   is a deprecated alias), `TF_PATH_MAP` — per-worker.
+- `TF_WORKER_MAX_CONCURRENT` — parallel jobs per worker (default 1, max
+  4). Scale with more workers, not this knob — see the concurrency
+  guidance in `deploy/linode/README.md`.
 - `TF_WORKER_STATE_DIR` — durable worker state (the milestone outbox:
   undelivered terminal reports). Empty → `<scratch root>/state`, which
   every scratch cleanup path spares. Docker workers should mount it so
@@ -210,8 +237,15 @@ Worker-side:
 ## Testing
 
 - `asyncio_mode = "auto"` in pytest config — async tests run automatically.
-- In-memory SQLite per test (no Postgres dependency).
-- Redis is mocked via `conftest.py` fixtures. ffmpeg is not required.
+- In-memory SQLite per test (no local Postgres dependency; the
+  `test-postgres` CI job runs the same suite on real PG via
+  `TF_TEST_DB_URL`).
+- Redis is mocked via `conftest.py` fixtures. ffmpeg is not required
+  locally — the one real-encode test
+  (`tests/test_pipeline_integration.py`) self-skips missing encoders;
+  CI installs ffmpeg so it actually runs there.
+- `tests/qa/` and `tests/test_s3_integration.py` are excluded from the
+  default run via `addopts` — invoke them explicitly.
 - `db` fixture: temp SQLite with schema fully applied via the migrations.
 - `app` fixture: full FastAPI app with mocked Redis.
 - `client` fixture: `httpx.AsyncClient` over ASGI transport, **already

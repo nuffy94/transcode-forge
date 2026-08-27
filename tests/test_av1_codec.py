@@ -347,7 +347,7 @@ async def _mock_encode_ok(cmd, total_duration, progress_callback=None):
 async def test_vmaf_below_floor_skips_and_keeps_original(tmp_path):
     """D5: if measured VMAF lands below the safety floors, the pipeline
     raises VmafGateError — original file untouched, no swap, nothing left
-    behind. Floors are absolute (90/85 defaults), not derived from target."""
+    behind. Floors are absolute (91.5/86 defaults), not derived from target."""
     from transcode_forge.worker.pipeline import VmafGateError, run_pipeline
     from transcode_forge.worker.vmaf import VmafScore
 
