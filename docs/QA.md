@@ -54,7 +54,7 @@ brand/computed-style/shell assertions live in `tests/qa/test_shell.py`.
 |---|---|---|---|
 | **L1 — unit/integration** | `pytest` | free · ~3m CI | every push (CI) |
 | **L2 — deterministic sweep** | `pytest tests/qa/` | free · ~2m25s CI | every push (CI) |
-| **L3 — AI exploratory** | `qa/ux-sweep.workflow.js` | ~18 agents observed last full run; wall time + agent count logged into each run's `report.json` | before every release tag + after UI-heavy merges |
+| **L3 — AI exploratory** | `qa/ux-sweep.workflow.js` | 12–18 agents observed across full runs (verification agents scale with findings); each run logs its actual wall time + agent count into its `report.json` — that file is the authority, not this cell | before every release tag + after UI-heavy merges |
 | **L4 — codify** | `/qa-codify <finding-id>` | free thereafter | whenever the ledger has something to close |
 
 CI wall-times above are from real runs (2026-07-09: `test` ≈ 2m52–3m03s,
@@ -161,9 +161,12 @@ it doesn't count.
   scenarios.
 - **Bounded** — scenarios run in waves (default 3 at a time), and each
   scenario gets at most 3 verification agents (overflow is reported, never
-  silently dropped). Observed cost of the last full run: 18 agents
-  (1 prep + 10 explorers + 6 verify + 1 report); each run's actual agent
-  count and wall time land in its `report.json`. `{serial: true}` is the
+  silently dropped). Observed costs: 18 agents on a run with findings
+  to verify (1 prep + 10 explorers + 6 verify + 1 report); 12 on the
+  2026-07-14 release-gate run, where nothing crossed the flag threshold
+  so the verify wave never spawned. Each run's actual agent count and
+  wall time land in its `report.json` — trust that over any number
+  written here. `{serial: true}` is the
   rate-limit fallback (one at a time, one verifier per finding).
 - **Ledgered output** — the synthesize step updates `qa/findings.yml`
   against the WHOLE ledger (semantic matching): recurrences of fixed
