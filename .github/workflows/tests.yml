@@ -9,7 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 2026-08-31: a run with 953 tests PASSING in 8m51 was killed at the
+    # old 10-minute ceiling during coverage teardown (setup + lint + mypy
+    # eat the rest). 15 gives headroom for suite growth + slow runners.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
