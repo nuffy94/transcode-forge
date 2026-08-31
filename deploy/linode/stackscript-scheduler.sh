@@ -298,6 +298,10 @@ if [[ -n "$DOMAIN" ]]; then
         cat > "$APP_DIR/Caddyfile" <<'EOF'
 {$TF_DOMAIN} {
     encode zstd gzip
+    # /metrics is auth-exempt in the app (Prometheus scrapes it) — keep it
+    # off the public edge; scrape the instance from inside the perimeter.
+    @metrics path /metrics*
+    respond @metrics 403
     reverse_proxy scheduler:8000
     tls {
         dns cloudflare {$CLOUDFLARE_API_TOKEN}
@@ -308,6 +312,10 @@ EOF
         cat > "$APP_DIR/Caddyfile" <<'EOF'
 {$TF_DOMAIN} {
     encode zstd gzip
+    # /metrics is auth-exempt in the app (Prometheus scrapes it) — keep it
+    # off the public edge; scrape the instance from inside the perimeter.
+    @metrics path /metrics*
+    respond @metrics 403
     reverse_proxy scheduler:8000
 }
 EOF

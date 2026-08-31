@@ -230,6 +230,10 @@ alternatives to the Caddy edge:
 - Secrets (`TF_PG_PASSWORD`, `TF_AUTH_SECRET`) are generated on the
   instance into `/opt/transcode-forge/.env` (mode 600) and never printed —
   StackScript output lands on disk at `/root/StackScript.out`.
+- **`/metrics` stays inside the perimeter.** The endpoint is auth-exempt
+  in the app so Prometheus can scrape it, so the Caddyfile answers 403
+  for it at the public edge. Want the metrics? Scrape the instance from
+  your monitoring network, not through the domain.
 
 ## Troubleshooting
 
