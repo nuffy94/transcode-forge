@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}TV Shows — Transcode Forge{% endblock %}
+{% block title %}TV Shows · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>
-            <h1 class="text-[15px] font-semibold text-forge-paper">TV Shows</h1>
-            <p class="font-mono text-2xs text-forge-mute mt-0.5">
-                Shows with episodes still on h264 — queue a whole show in one click, or work episode by episode.
-            </p>
-        </div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">TV Shows</h1>        </div>
     </header>
 
     <!-- Stat strip -->
@@ -99,7 +95,7 @@
                     </span>
                     <span id="resolution-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
                         {{ icon('alert', 'forge-icon--sm') }}
-                        Downscale replaces the original — the higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
+                        Downscale replaces the original. The higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
                     </span>
                     <select id="queue-codec" class="forge-select" aria-label="Target codec">
                         <option value="">Codec: default</option>

@@ -11,7 +11,7 @@
             <span class="forge-stat-value text-3xl {% if space_saved_gb > 0 %}text-forge-ember-hot{% else %}text-forge-mute{% endif %}">{{ "%.1f"|format(space_saved_gb) }}</span>
             <span class="forge-stat-unit">GiB</span>
         </div>
-        <p class="forge-stat-meta mt-2">{% if space_saved_gb > 0 %}cumulative · all libraries{% else %}nothing reclaimed yet — queue an encode{% endif %}</p>
+        <p class="forge-stat-meta mt-2">{% if space_saved_gb > 0 %}cumulative · all libraries{% else %}nothing reclaimed yet · queue an encode{% endif %}</p>
     </div>
 
     <!-- Completed -->

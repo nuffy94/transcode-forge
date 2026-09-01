@@ -68,7 +68,7 @@
                 <div><dt class="forge-stat-label">VMAF</dt>
                     <dd class="font-mono text-xs mt-0.5 {% if best.achieved_vmaf %}text-forge-oxide{% else %}text-forge-mute{% endif %}">
                         {% if best.achieved_vmaf %}{{ "%.1f"|format(best.achieved_vmaf) }}{% if best.achieved_vmaf_perc5 is not none %}<span class="text-forge-mute" title="Worst scenes (5th percentile)"> · p5 {{ "%.1f"|format(best.achieved_vmaf_perc5) }}</span>{% endif %}{% if best.target_vmaf %} <span class="text-forge-mute">/ {{ "%.0f"|format(best.target_vmaf) }} target</span>{% endif %}
-                        {% if best.predicted_vmaf_mean is not none %}<br><span class="text-forge-mute" title="What the CRF search's short samples predicted — samples systematically score above the full file">pred {{ "%.1f"|format(best.predicted_vmaf_mean) }}{% if best.predicted_vmaf_perc5 is not none %} · p5 {{ "%.1f"|format(best.predicted_vmaf_perc5) }}{% endif %}</span>{% endif %}
+                        {% if best.predicted_vmaf_mean is not none %}<br><span class="text-forge-mute" title="What the CRF search's short samples predicted. Samples systematically score above the full file">pred {{ "%.1f"|format(best.predicted_vmaf_mean) }}{% if best.predicted_vmaf_perc5 is not none %} · p5 {{ "%.1f"|format(best.predicted_vmaf_perc5) }}{% endif %}</span>{% endif %}
                         {% else %}not measured{% endif %}
                     </dd></div>
                 <div><dt class="forge-stat-label">CRF</dt><dd class="font-mono text-xs text-forge-ink mt-0.5">{{ best.resolved_crf if best.resolved_crf is not none else best.quality_value }}</dd></div>

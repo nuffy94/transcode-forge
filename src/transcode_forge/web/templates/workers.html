@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}Workers — Transcode Forge{% endblock %}
+{% block title %}Workers · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>
-            <h1 class="text-[15px] font-semibold text-forge-paper">Workers</h1>
-            <p class="font-mono text-2xs text-forge-mute mt-0.5">
-                The fleet — transcode nodes, hardware encoders, live assignments, and join tokens.
-            </p>
-        </div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">Workers</h1>        </div>
     </header>
 
     <!-- Fleet numbers + coordinator -->
@@ -47,7 +43,7 @@
         <div id="add-worker-panel" class="p-4 hidden">
             <!-- Step 1: Issue Token -->
             <div class="mb-6">
-                <p class="forge-stat-label mb-3">Step 1 — issue a token for this worker</p>
+                <p class="forge-stat-label mb-3">Step 1: issue a token for this worker</p>
                 <div class="flex flex-wrap items-end gap-2.5">
                     <div class="flex-1 min-w-[200px]">
                         <label for="add-worker-label" class="forge-stat-label block mb-1">Worker name</label>
@@ -60,7 +56,7 @@
                 </div>
 
                 <div id="add-worker-token-reveal" class="forge-panel forge-panel--ember p-3.5 mt-3 hidden">
-                    <p class="forge-stat-label mb-1.5">Copy now — shown only once</p>
+                    <p class="forge-stat-label mb-1.5">Copy now. It's shown only once</p>
                     <div class="flex items-center gap-2">
                         <code id="add-worker-token-value" class="font-mono text-xs text-forge-paper bg-forge-well px-3 py-2 break-all flex-1"></code>
                         <button id="copy-token-btn" class="forge-btn">Copy</button>
@@ -70,7 +66,7 @@
 
             <!-- Step 2: Join Command -->
             <div id="add-worker-commands" class="mb-6 hidden">
-                <p class="forge-stat-label mb-3">Step 2 — run the worker</p>
+                <p class="forge-stat-label mb-3">Step 2: run the worker</p>
 
                 <div class="flex gap-2 mb-3">
                     <button class="forge-btn forge-btn--ember" data-cmd-type="docker">
@@ -100,7 +96,7 @@
 
             <!-- Storage guidance -->
             <div id="add-worker-storage" class="mb-6 hidden">
-                <p class="forge-stat-label mb-3">Storage — how the worker reads &amp; writes media</p>
+                <p class="forge-stat-label mb-3">Storage: how the worker reads &amp; writes media</p>
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     <div class="forge-panel forge-panel--ember p-3.5">
                         <p class="text-[13px] font-semibold text-forge-paper mb-1.5">Filesystem libraries</p>
@@ -115,7 +111,7 @@
                     <div class="forge-panel p-3.5">
                         <p class="text-[13px] font-semibold text-forge-paper mb-1.5">S3 libraries</p>
                         <div class="space-y-1.5 font-mono text-2xs text-forge-ink leading-relaxed">
-                            <p>No shared filesystem needed — add to the run command:</p>
+                            <p>No shared filesystem needed. Add to the run command:</p>
                             <code class="block bg-forge-well px-2 py-1">-e TF_S3_ENDPOINT_URL=...
 -e TF_S3_REGION=...
 -e TF_S3_ACCESS_KEY_ID=...
@@ -128,13 +124,13 @@
                 <p class="font-mono text-2xs text-forge-mute mt-3 leading-relaxed">
                     Needs: Docker, or uv + Python 3.12 + ffmpeg · network reach to
                     <code id="scheduler-url-display" class="bg-forge-well px-1 font-mono"></code>
-                    · a hardware encoder (QSV/NVENC) is optional — CPU works, slower.
+                    · a hardware encoder (QSV/NVENC) is optional. CPU works, slower.
                 </p>
             </div>
 
             <!-- Live token status -->
             <div id="add-worker-live-status" class="hidden">
-                <p class="forge-stat-label mb-3">Step 3 — waiting for the worker to connect…</p>
+                <p class="forge-stat-label mb-3">Step 3: waiting for the worker to connect…</p>
                 <div id="add-worker-tokens-list" hx-get="/partials/worker-tokens" hx-trigger="load, refresh, every 5s" hx-swap="innerHTML"></div>
             </div>
         </div>

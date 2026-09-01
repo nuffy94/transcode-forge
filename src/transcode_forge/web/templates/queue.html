@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}Queue — Transcode Forge{% endblock %}
+{% block title %}Queue · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>
-            <h1 class="text-[15px] font-semibold text-forge-paper">Job queue</h1>
-            <p class="font-mono text-2xs text-forge-mute mt-0.5">
-                Live work order — pending, in-flight, and finished transcodes. Click a status tile to filter.
-            </p>
-        </div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">Job queue</h1>        </div>
         <div class="flex items-center gap-2">
             <button id="pause-btn" class="forge-btn forge-btn--ember">
                 <span data-role="pause-icon">{{ icon('pause', 'forge-icon--sm') }}</span>
@@ -63,7 +59,7 @@
                 <span id="scan-status" class="font-mono text-2xs text-forge-mute uppercase tracking-stamp"></span>
             </div>
             <p class="px-3.5 pb-3 font-mono text-2xs text-forge-mute">
-                Scans catalog new files; it never queues them — pick files from Movies or TV Shows.
+                Scans catalog new files; it never queues them. Pick files from Movies or TV Shows.
             </p>
         </section>
 

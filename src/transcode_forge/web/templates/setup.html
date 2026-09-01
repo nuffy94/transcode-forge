@@ -3,7 +3,7 @@
 <html class="dark" lang="en">
 <head>
     {% include "partials/_head.html" %}
-    <title>First-run setup — Transcode Forge</title>
+    <title>First-run setup · Transcode Forge</title>
 </head>
 <body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
     <div class="forge-seam" aria-hidden="true"></div>
@@ -19,11 +19,11 @@
 
         <div class="forge-panel forge-panel--ember">
             <div class="forge-panel-hd">
-                <h1 class="forge-panel-title">First run — pick an admin password</h1>
+                <h1 class="forge-panel-title">First run: pick an admin password</h1>
             </div>
             <form class="p-4 space-y-4" onsubmit="return doSetup(event)">
                 <p class="font-mono text-2xs text-forge-ink leading-relaxed">
-                    This signs you in to the console. Workers never use it — they
+                    This signs you in to the console. Workers never use it. They
                     join with their own revocable tokens from the Workers page.
                 </p>
                 <div>
@@ -70,7 +70,7 @@
                 err.classList.remove('hidden');
             }
         } catch (_) {
-            err.textContent = 'Network error — is the scheduler up?';
+            err.textContent = 'Network error. Is the scheduler up?';
             err.classList.remove('hidden');
         }
         return false;

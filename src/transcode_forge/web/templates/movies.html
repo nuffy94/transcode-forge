@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}Movies — Transcode Forge{% endblock %}
+{% block title %}Movies · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>
-            <h1 class="text-[15px] font-semibold text-forge-paper">Movies</h1>
-            <p class="font-mono text-2xs text-forge-mute mt-0.5">
-                Library inventory — queue h264 files for transcode, one at a time or in bulk. Click a row for full detail.
-            </p>
-        </div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">Movies</h1>        </div>
     </header>
 
     <!-- Stat strip -->
@@ -106,7 +102,7 @@
     </p>
     <p id="resolution-warning" class="font-mono text-2xs text-forge-brass items-center gap-1.5" style="display:none">
         {{ icon('alert', 'forge-icon--sm') }}
-        Downscale replaces the original — the higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
+        Downscale replaces the original. The higher-resolution version is gone (S3 libraries keep their master). HEVC/AV1 files become queueable as same-codec shrinks.
     </p>
 </div>
 

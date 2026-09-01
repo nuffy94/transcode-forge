@@ -1,16 +1,12 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}Statistics — Transcode Forge{% endblock %}
+{% block title %}Statistics · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header>
-        <h1 class="text-[15px] font-semibold text-forge-paper">Statistics</h1>
-        <p class="font-mono text-2xs text-forge-mute mt-0.5">
-            Cumulative readouts — processed volume, library yield, worker performance, skip reasons.
-        </p>
-    </header>
+        <h1 class="text-[15px] font-semibold text-forge-paper">Statistics</h1>    </header>
 
     <div id="stats-container"
          hx-get="/partials/stats"

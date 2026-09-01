@@ -28,7 +28,7 @@
                 {% elif f.skip_reason == 'size_regression' %}
                 <span class="forge-pill forge-pill--failed">Size regression</span>
                 {% elif f.skip_reason == 'below_vmaf_floor' %}
-                <span class="forge-pill forge-pill--failed" title="The encode's measured VMAF fell below the quality floor — the original was kept.">Below VMAF floor</span>
+                <span class="forge-pill forge-pill--failed" title="The encode's measured VMAF fell below the quality floor. The original was kept.">Below VMAF floor</span>
                 {% elif f.skip_reason == 'too_small' %}
                 <span class="forge-pill forge-pill--caution">Too small</span>
                 {% elif f.skip_reason == 'manual_skip' %}
@@ -73,6 +73,6 @@
 <div class="forge-empty">
     {{ icon('ban') }}
     <p class="forge-empty-title">No skipped files</p>
-    <p class="forge-empty-hint">Files the scanner declines — already HEVC, wrong codec, too small — land here.</p>
+    <p class="forge-empty-hint">Files the scanner declines land here: already HEVC, wrong codec, too small.</p>
 </div>
 {% endif %}
