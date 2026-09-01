@@ -3,7 +3,7 @@
 <html class="dark" lang="en">
 <head>
     {% include "partials/_head.html" %}
-    <title>Sign in — Transcode Forge</title>
+    <title>Sign in · Transcode Forge</title>
 </head>
 <body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
     <div class="forge-seam" aria-hidden="true"></div>
@@ -56,7 +56,7 @@
                 err.classList.remove('hidden');
             }
         } catch (_) {
-            err.textContent = 'Network error — is the scheduler up?';
+            err.textContent = 'Network error. Is the scheduler up?';
             err.classList.remove('hidden');
         }
         return false;

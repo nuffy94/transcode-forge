@@ -36,7 +36,7 @@
 {% set cur = order.index(job.phase) %}
 {% set gate_off = job.target_vmaf is none %}
 <div class="forge-stations">
-    <span class="forge-tick forge-tick--lit" role="img" aria-label="Lock — original claimed and protected" title="Lock"></span>
+    <span class="forge-tick forge-tick--lit" role="img" aria-label="Lock: original claimed and protected" title="Lock"></span>
     {% for key, label in STATIONS %}
     {% set i = loop.index0 %}
     {% set off = gate_off and key in ('search', 'gauge') %}
@@ -53,12 +53,12 @@
         </div>
     </div>
     {% endfor %}
-    <span class="forge-tick" role="img" aria-label="Confirm — post-swap verification" title="Confirm"></span>
-    <span class="forge-tick" role="img" aria-label="Cleanup — backup removed" title="Cleanup"></span>
-    <span class="forge-tick" role="img" aria-label="Unlock — lock released" title="Unlock"></span>
+    <span class="forge-tick" role="img" aria-label="Confirm: post-swap verification" title="Confirm"></span>
+    <span class="forge-tick" role="img" aria-label="Cleanup: backup removed" title="Cleanup"></span>
+    <span class="forge-tick" role="img" aria-label="Unlock: lock released" title="Unlock"></span>
 </div>
 {% if show_copy %}
-<p class="mt-2 font-mono text-xs text-forge-ember-hot font-semibold">{{ PHASE_COPY.get(job.phase, job.phase) }}{% if job.phase == 'encode' and pct %} — {{ pct }}%{% elif job.phase_pct is not none %} — {{ (job.phase_pct * 100)|round|int }}%{% elif job.phase_detail %} — {{ job.phase_detail }}{% endif %}</p>
+<p class="mt-2 font-mono text-xs text-forge-ember-hot font-semibold">{{ PHASE_COPY.get(job.phase, job.phase) }}{% if job.phase == 'encode' and pct %} · {{ pct }}%{% elif job.phase_pct is not none %} · {{ (job.phase_pct * 100)|round|int }}%{% elif job.phase_detail %} · {{ job.phase_detail }}{% endif %}</p>
 {% endif %}
 {% else %}
 {# Pre-phase worker (or phase not yet reported): the classic meter. #}

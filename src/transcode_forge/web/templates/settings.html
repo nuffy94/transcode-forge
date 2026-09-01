@@ -1,15 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Settings — Transcode Forge{% endblock %}
+{% block title %}Settings · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header>
-        <h1 class="text-[15px] font-semibold text-forge-paper">Settings</h1>
-        <p class="font-mono text-2xs text-forge-mute mt-0.5">
-            Libraries, transcoding defaults, queue schedules, system state, and maintenance.
-        </p>
-    </header>
+        <h1 class="text-[15px] font-semibold text-forge-paper">Settings</h1>    </header>
 
     <div class="grid grid-cols-12 gap-4 lg:items-start max-w-[1600px]">
         {% include "settings/_libraries.html" %}

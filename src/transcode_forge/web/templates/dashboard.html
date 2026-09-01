@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/_icons.html" import icon %}
-{% block title %}Dashboard — Transcode Forge{% endblock %}
+{% block title %}Dashboard · Transcode Forge{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-4">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>
-            <h1 class="text-[15px] font-semibold text-forge-paper">Dashboard</h1>
-            <p class="font-mono text-2xs text-forge-mute mt-0.5">
-                The forge floor — live transcodes, recent outcomes, system state.
-            </p>
-        </div>
+            <h1 class="text-[15px] font-semibold text-forge-paper">Dashboard</h1>        </div>
         <button id="pause-btn" class="forge-btn forge-btn--ember">
             <span data-role="pause-icon">{{ icon('pause', 'forge-icon--sm') }}</span>
             <span data-role="play-icon" class="hidden">{{ icon('play', 'forge-icon--sm') }}</span>

@@ -31,7 +31,7 @@
                 {% elif job.status == 'failed' %}
                 <span class="forge-pill forge-pill--failed">Failed</span>
                 {% elif job.status == 'skipped' %}
-                <span class="forge-pill forge-pill--skipped" title="Attempted, then discarded — the original was kept.">Discarded</span>
+                <span class="forge-pill forge-pill--skipped" title="Attempted, then discarded. The original was kept.">Discarded</span>
                 {% else %}
                 <span class="forge-pill forge-pill--pending">{{ job.status }}</span>
                 {% endif %}
