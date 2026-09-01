@@ -4,6 +4,17 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-09-01
+
+### Changed
+- **The UI speaks plainly now.** The eight page subtitles are gone (they
+  only described each page to itself), em-dash prose across labels,
+  tooltips, hints, warnings, and toasts is flattened to periods and
+  colons, tab titles use a middle-dot separator, the idle dashboard
+  state is named "Idle", and Settings calls the Workers page by its
+  name. A new guard test fails the build on any em dash in rendered
+  template copy, so the register cannot drift back. (#106)
+
 ## [0.13.2] - 2026-08-26
 
 ### Fixed

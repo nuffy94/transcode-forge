@@ -15,7 +15,7 @@ image:
   # Pinned release tag — never ":latest" (must be v0.9.5+ for the four S3
   # scan/claim/derivative fixes the S3-only media plane depends on).
   # Tracks Chart.yaml appVersion; bump together on release.
-  tag: "0.13.2"
+  tag: "0.13.3"
   pullPolicy: IfNotPresent
 
 # All secret material. Inject at install time (e.g. via `op run` + --set);
