@@ -31,10 +31,18 @@ LOCK_SUFFIX = ".tf_lock"
 BAK_SUFFIX = ".tf_bak"
 TMP_SUFFIX = ".tf_tmp"
 
-# Locks from OTHER workers older than this are presumed dead (matches the
-# find_stale_locks default in worker/pipeline.py). Our own locks are always
-# stale at startup — a freshly started worker has no pipeline in flight.
-RECOVERY_STALE_LOCK_HOURS = 2.0
+# Lock heartbeat cadence: a running pipeline (worker/pipeline.py
+# _lock_heartbeat) refreshes its lock's timestamp this often. A lock from
+# ANOTHER worker that has missed three refreshes belongs to a pipeline that
+# is no longer running and is presumed dead; the recovery scans and
+# find_stale_locks all measure against this one window, derived from the
+# cadence so the two can never be tuned apart. Our own locks are always
+# stale at startup: a freshly started worker has no pipeline in flight.
+# A lock inside the window proves a pipeline is refreshing it, not that
+# the scheduler can reach that worker (incident 2026-09-02: a SIGKILLed
+# worker's 22 s old lock blocked retries for the old 2 h window).
+LOCK_TOUCH_INTERVAL = 300.0
+RECOVERY_STALE_LOCK_SECONDS = 3 * LOCK_TOUCH_INTERVAL
 
 
 class FilesystemBackend:
@@ -209,10 +217,10 @@ def _touch_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
     """Atomically refresh the lock's timestamp (the lock heartbeat).
 
     Written to a sibling temp file then os.replace()d so readers see the
-    old or the new JSON, never a partial write. Recovery treats locks
-    older than RECOVERY_STALE_LOCK_HOURS as dead — this heartbeat is what
-    makes that inference valid for encodes that legitimately run longer
-    (x265-slow 4K passes the 2h mark easily).
+    old or the new JSON, never a partial write. Recovery treats locks not
+    refreshed within RECOVERY_STALE_LOCK_SECONDS as dead; this heartbeat is
+    what makes that inference valid for encodes that legitimately run for
+    hours (x265-slow 4K routinely does).
     """
     payload = json.dumps(
         {
@@ -240,8 +248,8 @@ class LockHeartbeatGuard:
     Cancelling a task awaiting ``asyncio.to_thread`` does NOT wait for the
     underlying OS thread — an in-flight ``_touch_lock`` can complete AFTER
     the pipeline's finally block deleted the lock, resurrecting it with a
-    fresh timestamp (other workers then decline the path as "active" for
-    hours). The guard makes that impossible at the thread level: ``stop()``
+    fresh timestamp (other workers then treat the path as "active" for
+    the whole stale window). The guard makes that impossible at the thread level: ``stop()``
     takes the same mutex as every touch, so it returns only once any
     in-flight touch has finished, and every later touch no-ops.
     """
@@ -425,7 +433,7 @@ def recover_orphaned_backups(
     roots: Iterable[Path | str],
     *,
     worker_id: str,
-    stale_lock_hours: float = RECOVERY_STALE_LOCK_HOURS,
+    stale_lock_seconds: float = RECOVERY_STALE_LOCK_SECONDS,
 ) -> dict[str, int]:
     """Worker-startup recovery scan for the filesystem backend.
 
@@ -445,8 +453,8 @@ def recover_orphaned_backups(
     Separately, stale ``.tf_lock``/``.tf_tmp`` leftovers without a backup
     (crash mid-transcode) are removed so the path can be retried.
 
-    Locks held by other workers are respected unless older than
-    ``stale_lock_hours``. Returns action counters for logging and tests.
+    Locks held by other workers are respected unless not refreshed within
+    ``stale_lock_seconds``. Returns action counters for logging and tests.
     """
     stats = {
         "restored": 0,
@@ -455,7 +463,7 @@ def recover_orphaned_backups(
         "skipped_active": 0,
         "needs_attention": 0,
     }
-    stale_after = timedelta(hours=stale_lock_hours)
+    stale_after = timedelta(seconds=stale_lock_seconds)
 
     for root_like in roots:
         root = Path(root_like)
@@ -482,7 +490,7 @@ def recover_source_path(
     original: Path,
     *,
     worker_id: str,
-    stale_lock_hours: float = RECOVERY_STALE_LOCK_HOURS,
+    stale_lock_seconds: float = RECOVERY_STALE_LOCK_SECONDS,
 ) -> str:
     """Single-path swap recovery, run by a worker at claim time.
 
@@ -505,7 +513,7 @@ def recover_source_path(
                             must investigate; hands off, never delete.
     """
     lock, tmp, bak = pipeline_artifacts(original)
-    stale_after = timedelta(hours=stale_lock_hours)
+    stale_after = timedelta(seconds=stale_lock_seconds)
 
     if lock.exists() and _lock_is_active(lock, worker_id=worker_id, stale_after=stale_after):
         return "active"

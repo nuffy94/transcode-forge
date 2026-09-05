@@ -10,7 +10,10 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from transcode_forge.worker import pipeline
 from transcode_forge.worker.storage.filesystem import (
+    LOCK_TOUCH_INTERVAL,
+    RECOVERY_STALE_LOCK_SECONDS,
     LockHeartbeatGuard,
     _touch_lock,
     recover_orphaned_backups,
@@ -19,6 +22,9 @@ from transcode_forge.worker.storage.filesystem import (
 
 WORKER = "worker-self"
 OTHER = "worker-other"
+
+FIVE_MINUTES_HOURS = 5 / 60
+TWENTY_MINUTES_HOURS = 20 / 60
 
 ORIGINAL_BYTES = b"ORIGINAL BYTES"
 ENCODE_BYTES = b"NEW ENCODE"
@@ -167,11 +173,45 @@ class TestStaleLockCleanup:
         assert all(count == 0 for count in stats.values())
 
 
+class TestStaleWindow:
+    """Freshness is measured against the lock heartbeat cadence, not a
+    wall-clock guess. Incident 2026-09-02: a SIGKILLed worker's 22 s old
+    lock blocked every retry of that file for the old 2 h window."""
+
+    def test_foreign_lock_refreshed_five_minutes_ago_is_active(self, tmp_path: Path):
+        original, bak, lock, _ = _stage(tmp_path, lock_owner=OTHER, lock_age=FIVE_MINUTES_HOURS)
+        assert recover_source_path(original, worker_id=WORKER) == "active"
+        stats = recover_orphaned_backups([tmp_path], worker_id=WORKER)
+        assert stats["skipped_active"] == 1
+        assert bak.exists() and lock.exists() and not original.exists()
+
+    def test_foreign_lock_refreshed_twenty_minutes_ago_is_stale(self, tmp_path: Path):
+        original, bak, lock, _ = _stage(tmp_path, lock_owner=OTHER, lock_age=TWENTY_MINUTES_HOURS)
+        assert recover_source_path(original, worker_id=WORKER) == "restored"
+        assert original.read_bytes() == ORIGINAL_BYTES
+        assert not bak.exists()
+        assert not lock.exists()
+
+    def test_stale_window_is_derived_from_the_touch_interval(self):
+        """The window must absorb missed touches (a busy NFS mount, a
+        failed os.replace) without declaring a running pipeline dead, and
+        the pipeline must heartbeat on the SAME cadence the recovery scans
+        measure against. One source of truth, checked here so nobody can
+        tune them apart."""
+        assert RECOVERY_STALE_LOCK_SECONDS >= 2 * LOCK_TOUCH_INTERVAL
+        assert pipeline.LOCK_TOUCH_INTERVAL == LOCK_TOUCH_INTERVAL
+        # find_stale_locks reports against the same window.
+        import inspect
+
+        default_hours = inspect.signature(pipeline.find_stale_locks).parameters["max_age_hours"]
+        assert default_hours.default == RECOVERY_STALE_LOCK_SECONDS / 3600
+
+
 class TestTouchLock:
     """The lock heartbeat: run_pipeline refreshes the lock's timestamp
-    periodically so 'stale' means dead, not just long-running — without
-    it, a restarting neighbor on shared NFS treats a live >2h encode's
-    lock as abandoned and deletes the tmp out from under it."""
+    periodically so 'stale' means dead, not just long-running. Without
+    it, a restarting neighbor on shared NFS treats a live encode's lock
+    as abandoned after 15 min and deletes the tmp out from under it."""
 
     def test_touch_refreshes_timestamp_and_keeps_identity(self, tmp_path: Path):
         lock = tmp_path / "movie.mkv.tf_lock"

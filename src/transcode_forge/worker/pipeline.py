@@ -50,6 +50,8 @@ from transcode_forge.worker.encoder import (
 )
 from transcode_forge.worker.proc import managed_subprocess
 from transcode_forge.worker.storage.filesystem import (
+    LOCK_TOUCH_INTERVAL,
+    RECOVERY_STALE_LOCK_SECONDS,
     LockHeartbeatGuard,
     _acquire_lock,
     _atomic_swap,
@@ -71,10 +73,11 @@ logger = logging.getLogger(__name__)
 LOCK_SUFFIX = ".tf_lock"
 TMP_SUFFIX = ".tf_tmp"
 BAK_SUFFIX = ".tf_bak"
-# Lock heartbeat cadence: the recovery scans treat locks older than 2h as
-# dead, which is only a valid liveness signal because a running pipeline
-# refreshes its lock this often (encodes + VMAF passes routinely run >2h).
-LOCK_TOUCH_INTERVAL = 300.0
+# The lock heartbeat cadence (LOCK_TOUCH_INTERVAL) and the stale window the
+# recovery scans measure against live together in storage/filesystem.py:
+# the window is derived from the cadence, and a running pipeline refreshing
+# its lock this often is what makes "stale" mean dead rather than old
+# (encodes + VMAF passes routinely run for hours).
 DURATION_TOLERANCE = 2.0  # seconds of allowed duration drift
 DECODE_SAMPLE_SECONDS = 10.0  # length of each decode sample in the deep check
 DECODE_SAMPLE_OFFSETS = (0.05, 0.50, 0.95)  # fractions of total duration to sample at
@@ -605,8 +608,11 @@ async def _decode_check(path: Path, duration: float) -> None:
             )
 
 
-def find_stale_locks(root: Path, max_age_hours: float = 2.0) -> list[dict[str, Any]]:
-    """Find .tf_lock files older than max_age_hours.
+def find_stale_locks(
+    root: Path, max_age_hours: float = RECOVERY_STALE_LOCK_SECONDS / 3600
+) -> list[dict[str, Any]]:
+    """Find .tf_lock files older than max_age_hours (default: the recovery
+    stale window, three missed lock touches).
 
     Returns list of dicts with lock file metadata.
     Used by worker on startup to report stale locks.
