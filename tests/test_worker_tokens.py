@@ -1,8 +1,10 @@
 """Worker-token hashing-at-rest tests (M4 Step 13).
 
 Tokens are stored as HMAC-SHA256 hashes; auth looks them up by hash only.
-These guard the migration backfill, expiry, revocation, and the invariant
-that the plaintext column is never consulted for auth.
+These guard expiry, revocation, and the invariant that the raw token is
+never written to the database (migration 0016 dropped the plaintext
+column). The 0004 backfill hook is covered by the upgrade-path tests in
+test_migrations.py. That is the only place the old column still exists.
 """
 
 import asyncio
@@ -13,7 +15,6 @@ from typing import Any
 import asyncpg
 import pytest
 
-from transcode_forge.migrations import _backfill_token_hashes_sqlite
 from transcode_forge.repos import worker_tokens as token_repo
 
 # The unique-binding backstop raises a driver-specific integrity error —
@@ -30,18 +31,18 @@ async def test_create_then_find_active_by_hash(db: Any) -> None:
     assert row["token_hash"] == token_repo.hash_token(raw)
 
 
-async def test_find_active_uses_hash_not_plaintext(db: Any) -> None:
-    """Corrupt the plaintext column and the token still authenticates by hash
-    — proves auth never reads it, so dropping it in v0.7 is safe. Uses a bogus
-    value rather than NULL: `token` is the PRIMARY KEY, which SQLite allows to
-    be NULL but Postgres (where PK implies NOT NULL) does not — and a wrong
-    non-null value is the stronger check anyway."""
+async def test_raw_token_is_never_stored(db: Any) -> None:
+    """Migration 0016 dropped the plaintext column: the stored row has no
+    `token` column at all and no cell in it equals the raw token."""
     raw = await token_repo.create(db, label="node-b")
-    await db.execute(
-        "UPDATE worker_tokens SET token = ? WHERE token_hash = ?",
-        ("CORRUPTED-not-the-real-token", token_repo.hash_token(raw)),
-    )
-    await db.commit()
+    async with db.execute(
+        "SELECT * FROM worker_tokens WHERE token_hash = ?", (token_repo.hash_token(raw),)
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    stored = dict(row)
+    assert "token" not in stored
+    assert raw not in stored.values()
     assert await token_repo.find_active(db, raw) is not None
 
 
@@ -54,6 +55,20 @@ async def test_revoked_token_not_active(db: Any) -> None:
     raw = await token_repo.create(db, label="node-d")
     assert await token_repo.revoke(db, raw[:6] + "…") is True
     assert await token_repo.find_active(db, raw) is None
+
+
+async def test_revoke_by_raw_token(db: Any) -> None:
+    raw = await token_repo.create(db, label="node-d2")
+    assert await token_repo.revoke(db, raw) is True
+    assert await token_repo.find_active(db, raw) is None
+
+
+async def test_touch_stamps_last_used_at(db: Any) -> None:
+    raw = await token_repo.create(db, label="node-d3")
+    await token_repo.touch(db, raw)
+    rows = await token_repo.list_all(db)
+    entry = next(r for r in rows if r["label"] == "node-d3")
+    assert entry["last_used_at"] is not None
 
 
 async def test_expired_token_not_active(db: Any) -> None:
@@ -170,27 +185,3 @@ async def test_unique_worker_binding_enforced_by_schema(db: Any) -> None:
             ("same-worker", token_repo.hash_token(raw_b)),
         )
         await db.commit()
-
-
-@pytest.mark.sqlite_only
-async def test_backfill_hashes_legacy_plaintext_row(db: Any) -> None:
-    """A row that predates 0004 (plaintext only, NULL hash) authenticates
-    after the backfill hook runs. SQLite-only: it drives the SQLite backfill
-    helper directly via db._conn (Postgres has its own _backfill_token_hashes_
-    postgres path, exercised when migration 0004 runs against legacy rows)."""
-    legacy = token_repo.generate()
-    now = datetime.now(UTC).isoformat()
-    await db.execute(
-        "INSERT INTO worker_tokens (token, label, created_at) VALUES (?, ?, ?)",
-        (legacy, "legacy-node", now),
-    )
-    await db.commit()
-    assert await token_repo.find_active(db, legacy) is None  # no hash yet
-
-    await _backfill_token_hashes_sqlite(db._conn)
-    await db.commit()
-
-    row = await token_repo.find_active(db, legacy)
-    assert row is not None
-    assert row["label"] == "legacy-node"
-    assert row["token_prefix"] == legacy[:6]

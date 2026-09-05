@@ -1,9 +1,9 @@
 """Worker token repository — issuance, lookup, revocation.
 
 Tokens are stored as an HMAC-SHA256 hash (key = pepper, see config). Auth
-looks up by hash only — the plaintext `token` column is retained unused for
-one release as a rollback escape hatch and is dropped in v0.7. The 6-char
-`token_prefix` is the fingerprint shown in the UI.
+looks up by hash only. The raw token is never written to the database:
+migration 0016 dropped the plaintext column that 0004 had left behind.
+The 6-char `token_prefix` is the fingerprint shown in the UI.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ async def create(db: DBConnection, label: str, expires_at: str | None = None) ->
     now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT INTO worker_tokens "
-        "(token, token_hash, token_prefix, label, created_at, expires_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (token, hash_token(token), fingerprint_prefix(token), label, now, expires_at),
+        "(token_hash, token_prefix, label, created_at, expires_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (hash_token(token), fingerprint_prefix(token), label, now, expires_at),
     )
     await db.commit()
     return token

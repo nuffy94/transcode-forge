@@ -2,14 +2,17 @@
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 import aiosqlite
 import pytest
 
+from transcode_forge import migrations
 from transcode_forge.migrations import (
     apply_sqlite,
     discover_migrations,
 )
+from transcode_forge.repos import worker_tokens as token_repo
 
 
 async def _table_exists(conn: aiosqlite.Connection, name: str) -> bool:
@@ -23,6 +26,23 @@ async def _table_exists(conn: aiosqlite.Connection, name: str) -> bool:
 async def _applied_versions(conn: aiosqlite.Connection) -> set[int]:
     cur = await conn.execute("SELECT version FROM schema_migrations")
     return {row[0] for row in await cur.fetchall()}
+
+
+async def _apply_through(conn: aiosqlite.Connection, version: int) -> None:
+    """Apply migrations up to and including `version`. The runner has no
+    version cap, so the discovery list is trimmed for this one call."""
+    full = discover_migrations()
+    with patch.object(
+        migrations, "discover_migrations", lambda: [m for m in full if m[0] <= version]
+    ):
+        await apply_sqlite(conn)
+
+
+async def _index_exists(conn: aiosqlite.Connection, name: str) -> bool:
+    cur = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)
+    )
+    return (await cur.fetchone()) is not None
 
 
 class TestDiscover:
@@ -168,16 +188,132 @@ class TestWorkerTokenUniqueBinding:
 
             # Multiple unbound tokens (NULL worker_id) coexist fine.
             await conn.execute(
-                "INSERT INTO worker_tokens (token, label, created_at) VALUES ('t1', 'a', 'x')"
+                "INSERT INTO worker_tokens (token_hash, label, created_at) VALUES ('h1', 'a', 'x')"
             )
             await conn.execute(
-                "INSERT INTO worker_tokens (token, label, created_at) VALUES ('t2', 'b', 'x')"
+                "INSERT INTO worker_tokens (token_hash, label, created_at) VALUES ('h2', 'b', 'x')"
             )
 
             # Two tokens bound to the same worker identity are rejected.
-            await conn.execute("UPDATE worker_tokens SET worker_id = 'w' WHERE token = 't1'")
+            await conn.execute("UPDATE worker_tokens SET worker_id = 'w' WHERE token_hash = 'h1'")
             with pytest.raises(sqlite3.IntegrityError):
-                await conn.execute("UPDATE worker_tokens SET worker_id = 'w' WHERE token = 't2'")
+                await conn.execute(
+                    "UPDATE worker_tokens SET worker_id = 'w' WHERE token_hash = 'h2'"
+                )
+        finally:
+            await conn.close()
+
+
+class TestDropPlaintextWorkerToken:
+    """Migration 0016 rebuilds worker_tokens without the plaintext token
+    column (SQLite cannot DROP COLUMN on a primary key). Hashed rows keep
+    their hash, prefix, label, binding and timestamps. A row with no hash
+    cannot authenticate and is not carried over."""
+
+    async def test_upgrade_keeps_hashed_rows_and_drops_unhashed(self, tmp_path: Path):
+        conn = await aiosqlite.connect(tmp_path / "up.db")
+        try:
+            await conn.execute("PRAGMA foreign_keys=ON")  # the production pragma
+            await _apply_through(conn, 15)
+            cur = await conn.execute("PRAGMA table_info(worker_tokens)")
+            assert "token" in [row[1] for row in await cur.fetchall()]
+
+            # Two rows written the old way (plaintext next to the hash), one
+            # of them bound to a worker, plus one row that never got a hash.
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, token_hash, token_prefix, label, "
+                "worker_id, created_at, revoked_at, last_used_at, expires_at) VALUES "
+                "('raw-1', 'hash-1', 'raw-1p', 'node-1', 'w-1', "
+                "'2026-01-01T00:00:00+00:00', NULL, '2026-01-02T00:00:00+00:00', NULL)"
+            )
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, token_hash, token_prefix, label, "
+                "created_at, revoked_at, expires_at) VALUES "
+                "('raw-2', 'hash-2', 'raw-2p', 'node-2', '2026-01-03T00:00:00+00:00', "
+                "'2026-01-04T00:00:00+00:00', '2027-01-01T00:00:00+00:00')"
+            )
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, label, created_at) "
+                "VALUES ('raw-3', 'never-hashed', '2026-01-05T00:00:00+00:00')"
+            )
+            await conn.commit()
+
+            await apply_sqlite(conn)
+            assert 16 in await _applied_versions(conn)
+
+            # Column set, types, NOT NULL and primary key, in table order.
+            cur = await conn.execute("PRAGMA table_info(worker_tokens)")
+            info = [(row[1], row[2], row[3], row[5]) for row in await cur.fetchall()]
+            assert info == [
+                ("token_hash", "TEXT", 0, 1),
+                ("label", "TEXT", 1, 0),
+                ("worker_id", "TEXT", 0, 0),
+                ("created_at", "TEXT", 1, 0),
+                ("revoked_at", "TEXT", 0, 0),
+                ("last_used_at", "TEXT", 0, 0),
+                ("token_prefix", "TEXT", 0, 0),
+                ("expires_at", "TEXT", 0, 0),
+            ]
+
+            cur = await conn.execute(
+                "SELECT token_hash, token_prefix, label, worker_id, created_at, "
+                "revoked_at, last_used_at, expires_at FROM worker_tokens ORDER BY token_hash"
+            )
+            assert [tuple(row) for row in await cur.fetchall()] == [
+                (
+                    "hash-1",
+                    "raw-1p",
+                    "node-1",
+                    "w-1",
+                    "2026-01-01T00:00:00+00:00",
+                    None,
+                    "2026-01-02T00:00:00+00:00",
+                    None,
+                ),
+                (
+                    "hash-2",
+                    "raw-2p",
+                    "node-2",
+                    None,
+                    "2026-01-03T00:00:00+00:00",
+                    "2026-01-04T00:00:00+00:00",
+                    None,
+                    "2027-01-01T00:00:00+00:00",
+                ),
+            ]
+
+            # The unique binding index survives the rebuild and still bites.
+            # The 0004 hash index is gone: the primary key covers that lookup.
+            assert await _index_exists(conn, "uq_worker_tokens_worker_id")
+            assert not await _index_exists(conn, "idx_worker_tokens_hash")
+            with pytest.raises(sqlite3.IntegrityError):
+                await conn.execute(
+                    "UPDATE worker_tokens SET worker_id = 'w-1' WHERE token_hash = 'hash-2'"
+                )
+        finally:
+            await conn.close()
+
+    async def test_legacy_plaintext_row_is_hashed_then_column_dropped(self, tmp_path: Path):
+        """A row from before 0004 (plaintext only, no hash) is backfilled by
+        the 0004 hook, then carried through 0016 keyed on that hash."""
+        legacy = token_repo.generate()
+        conn = await aiosqlite.connect(tmp_path / "legacy.db")
+        try:
+            await _apply_through(conn, 3)
+            await conn.execute(
+                "INSERT INTO worker_tokens (token, label, created_at) VALUES (?, ?, ?)",
+                (legacy, "legacy-node", "2026-01-01T00:00:00+00:00"),
+            )
+            await conn.commit()
+
+            await apply_sqlite(conn)
+
+            cur = await conn.execute("PRAGMA table_info(worker_tokens)")
+            assert "token" not in [row[1] for row in await cur.fetchall()]
+            cur = await conn.execute("SELECT token_hash, token_prefix, label FROM worker_tokens")
+            assert [tuple(row) for row in await cur.fetchall()] == [
+                (token_repo.hash_token(legacy), legacy[:6], "legacy-node")
+            ]
         finally:
             await conn.close()
 
