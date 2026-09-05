@@ -610,6 +610,16 @@ async def complete_job(
             # self-heal on rescan (the master object is unchanged), so this
             # is their only path out of 'queued'.
             await media_repo.update_status_by_job(tx, job_id, transcode_status="complete")
+            # The swap replaced the file: the row must describe the output
+            # (codec, size, downscaled dimensions), not the last scan, or
+            # it reads complete|h264 until the next rescan re-probes it.
+            await media_repo.update_output_by_job(
+                tx,
+                job_id,
+                video_codec=job.target_codec,
+                file_size=body.output_size,
+                target_height=job.target_height,
+            )
     if not won:
         await _answer_lost_finalize(db, job_id, JobStatus.COMPLETE)
 

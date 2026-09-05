@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from transcode_forge.db import DBConnection
+from transcode_forge.scanner.probe import format_resolution
 
 _VALID_TRANSCODE_STATUSES = frozenset(
     {
@@ -290,6 +291,74 @@ async def update_status_by_job(
         " WHERE job_id = ?",
         (transcode_status, skip_reason, now, job_id),
     )
+    await db.commit()
+
+
+def _scaled_width(width: int | None, height: int | None, target_height: int) -> int | None:
+    """Width of a downscale output: the encoder runs scale=-2:H (aspect
+    kept, width rounded up to even), so the same arithmetic on the scanned
+    source dimensions gives the width the file now has. None when the
+    source dimensions were never scanned."""
+    if not width or not height:
+        return None
+    scaled = round(width * target_height / height)
+    return scaled + (scaled % 2)
+
+
+async def update_output_by_job(
+    db: DBConnection,
+    job_id: str,
+    *,
+    video_codec: str,
+    file_size: int,
+    target_height: int | None = None,
+) -> None:
+    """Describe the swapped-in output file on the media row queued into a
+    completed job: codec, size and (for downscale jobs) dimensions.
+
+    Only the COMPLETE path calls this. update_status_by_job covers the
+    status, but the codec and size it leaves behind are the last scan's,
+    so a swapped file reads complete|h264 until something re-probes it.
+    A no-op when no catalog row points at the job.
+    """
+    now = datetime.now(UTC).isoformat()
+    if target_height is None:
+        await db.execute(
+            "UPDATE media_files SET video_codec = ?, file_size = ?, updated_at = ?"
+            " WHERE job_id = ?",
+            (video_codec, file_size, now, job_id),
+        )
+        await db.commit()
+        return
+    async with db.execute(
+        "SELECT id, width, height FROM media_files WHERE job_id = ?", (job_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        width = _scaled_width(row["width"], row["height"], target_height)
+        if width is None:
+            # The worker does not report output dimensions and the source
+            # was never measured, so the width is unknown: leave width and
+            # resolution as they are and let the next scan reconcile them.
+            await db.execute(
+                "UPDATE media_files SET video_codec = ?, file_size = ?, height = ?,"
+                " updated_at = ? WHERE id = ?",
+                (video_codec, file_size, target_height, now, row["id"]),
+            )
+            continue
+        await db.execute(
+            "UPDATE media_files SET video_codec = ?, file_size = ?, width = ?, height = ?,"
+            " resolution = ?, updated_at = ? WHERE id = ?",
+            (
+                video_codec,
+                file_size,
+                width,
+                target_height,
+                format_resolution(width, target_height),
+                now,
+                row["id"],
+            ),
+        )
     await db.commit()
 
 

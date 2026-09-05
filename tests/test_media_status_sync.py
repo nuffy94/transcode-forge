@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.helpers import register_worker
 
 
-async def _seed_catalog_job(app, path: str = "/m/movie.mkv"):
+async def _seed_catalog_job(app, path: str = "/m/movie.mkv", *, target_height: int | None = None):
     """Library + media row + PENDING job, linked the way /api/media/queue
     links them (media.job_id stamped, status 'queued'). Returns
     (file_id, job)."""
@@ -38,6 +38,9 @@ async def _seed_catalog_job(app, path: str = "/m/movie.mkv"):
         file_path=path,
         filename=path.rsplit("/", 1)[-1],
         video_codec="h264",
+        resolution="3840x2160",
+        width=3840,
+        height=2160,
         file_size=1000,
     )
     job = Job(
@@ -46,6 +49,7 @@ async def _seed_catalog_job(app, path: str = "/m/movie.mkv"):
         source_codec="h264",
         quality_value=21,
         status=JobStatus.PENDING,
+        target_height=target_height,
     )
     await job_repo.create_job(db, job)
     await media_repo.update_media_status(db, file_id, transcode_status="queued", job_id=job.id)
@@ -80,6 +84,67 @@ class TestWorkerOutcomeSyncsMedia:
         row = await _media_row(app, file_id)
         assert row["transcode_status"] == "complete"
         assert row["job_id"] == job.id  # drawer stays linked to the job
+        # The swap replaced the file on disk: the catalog must describe the
+        # new file, not the last scan (live: 299 rows read complete|h264).
+        assert row["video_codec"] == "hevc"
+        assert row["file_size"] == 400
+        # Not a downscale job: dimensions stay as scanned.
+        assert row["width"] == 3840
+        assert row["height"] == 2160
+        assert row["resolution"] == "3840x2160"
+
+    async def test_complete_with_downscale_updates_dimensions(self, client: AsyncClient, app):
+        file_id, job = await _seed_catalog_job(app, target_height=1080)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await register_worker(client, c, "w", supports_downscale=True)
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 400, "space_saved": 600, "source_size": 1000},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        row = await _media_row(app, file_id)
+        assert row["video_codec"] == "hevc"
+        assert row["file_size"] == 400
+        assert row["height"] == 1080
+        # Width follows the source aspect (the encoder's scale=-2:H), so
+        # resolution reads the way the scanner would write it.
+        assert row["width"] == 1920
+        assert row["resolution"] == "1920x1080"
+
+    async def test_complete_with_downscale_and_unknown_source_dims(self, client: AsyncClient, app):
+        """No scanned width/height: height still lands, width and resolution
+        are left for the next scan instead of guessing."""
+        file_id, job = await _seed_catalog_job(app, target_height=720)
+        await app.state.db.execute(
+            "UPDATE media_files SET width = NULL, height = NULL, resolution = NULL WHERE id = ?",
+            (file_id,),
+        )
+        await app.state.db.commit()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await register_worker(client, c, "w", supports_downscale=True)
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 400, "space_saved": 600, "source_size": 1000},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        row = await _media_row(app, file_id)
+        assert row["height"] == 720
+        assert row["width"] is None
+        assert row["resolution"] is None
 
     async def test_worker_skip_marks_media_skipped_with_reason(self, client: AsyncClient, app):
         file_id, job = await _seed_catalog_job(app)
@@ -104,6 +169,9 @@ class TestWorkerOutcomeSyncsMedia:
         row = await _media_row(app, file_id)
         assert row["transcode_status"] == "skipped"
         assert row["skip_reason"] == "below_vmaf_floor"
+        # Original kept: the catalog still describes the source file.
+        assert row["video_codec"] == "h264"
+        assert row["file_size"] == 1000
 
     async def test_worker_fail_returns_media_to_needs_transcode(self, client: AsyncClient, app):
         file_id, job = await _seed_catalog_job(app)
@@ -124,6 +192,9 @@ class TestWorkerOutcomeSyncsMedia:
         row = await _media_row(app, file_id)
         assert row["transcode_status"] == "needs_transcode"
         assert row["job_id"] == job.id  # failed job stays inspectable
+        # Original kept: the catalog still describes the source file.
+        assert row["video_codec"] == "h264"
+        assert row["file_size"] == 1000
 
 
 class TestSchedulerActionsSyncMedia:
