@@ -124,6 +124,26 @@ class TestWorkerEndpointAuth:
 
 
 class TestRegisterFlow:
+    async def test_register_advertises_orphan_grace(self, client: AsyncClient, app):
+        """Workers derive their partition self-fence from the grace this
+        scheduler waits before requeuing a silent worker's job, so the
+        register response carries it."""
+        issue = await client.post("/api/worker-tokens", json={"label": "ws-grace"})
+        token = issue.json()["token"]
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            resp = await c.post(
+                "/api/worker/register",
+                json={"name": "remote-1", "host": "remote-host", "capabilities": ["cpu"]},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["orphan_grace_seconds"] == 600
+
     async def test_register_creates_worker(self, client: AsyncClient, app):
         issue = await client.post("/api/worker-tokens", json={"label": "ws-1"})
         token = issue.json()["token"]

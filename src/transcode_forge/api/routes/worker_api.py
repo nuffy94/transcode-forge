@@ -384,6 +384,9 @@ async def register(
         "worker_id": worker.id,
         "name": worker.name,
         "redis_progress_channel": _progress_channel(request),
+        # Workers fence their in-flight job a margin before this grace
+        # expires (partition self-fence); older workers ignore the field.
+        "orphan_grace_seconds": job_repo.ORPHAN_REQUEUE_GRACE_SECONDS,
     }
 
 

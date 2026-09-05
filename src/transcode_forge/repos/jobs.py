@@ -309,9 +309,12 @@ async def requeue_orphan_active_jobs(
     Only jobs idle for min_idle_seconds are touched: progress reports bump
     updated_at, so idleness means no signs of life, and the grace keeps a
     briefly-partitioned worker from losing its job the moment it's marked
-    dead. If a zombie does lose its job this way, the ownership checks
-    reject its stale reports and its heartbeated .tf_lock makes the retry
-    decline until it finishes or dies for real.
+    dead. A worker that stays cut off fences itself first: /register
+    advertises this grace as orphan_grace_seconds and the worker aborts
+    its in-flight job a margin before it expires, dropping its .tf_lock.
+    If a zombie still loses its job this way, the ownership checks reject
+    its stale reports, and a retry claimer waits on a fresh foreign lock
+    (worker/http_agent.py) instead of declining.
 
     The status/idleness guard is duplicated on the OUTER where-clause, not
     just the subquery: under Postgres READ COMMITTED the subquery's id list
@@ -359,6 +362,12 @@ async def requeue_orphan_active_jobs(
     await db.commit()
     return [dict(r) for r in rows]
 
+
+# Seconds of silence (no progress report) before a dead, offline or
+# missing worker's active job is requeued by main._orphan_requeue_loop.
+# Advertised to workers at /register as orphan_grace_seconds so a
+# partitioned worker can fence its own job before this expires.
+ORPHAN_REQUEUE_GRACE_SECONDS = 600
 
 # The reconciliation grace (worker-resilience spec D3): how long a LIVE
 # worker must have been heartbeating a different (or no) job before an

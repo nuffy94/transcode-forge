@@ -17,12 +17,13 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from transcode_forge.models.job import Job
 from transcode_forge.worker.encoder import run_encode
 from transcode_forge.worker.hardware import HardwareCapabilities
-from transcode_forge.worker.http_agent import HttpWorkerAgent
+from transcode_forge.worker.http_agent import HttpWorkerAgent, fence_after_seconds
 from transcode_forge.worker.proc import managed_subprocess
 
 # A child that runs "forever" (far longer than any test timeout).
@@ -322,3 +323,226 @@ class TestHeartbeatDuringDrain:
         agent._current_job_id = None
         await asyncio.wait_for(agent._heartbeat_loop(), timeout=2.0)
         agent._client.heartbeat.assert_not_called()
+
+
+_REAL_SLEEP = asyncio.sleep
+_UNREACHABLE = httpx.ConnectError("scheduler unreachable")
+_FENCE_PREFIX = "Aborted: lost contact with the scheduler for "
+
+
+async def _fast_sleep(_seconds: float) -> None:
+    """Stand-in for the agent loops' asyncio.sleep: real time still
+    passes (the fence measures it with time.monotonic), just quickly."""
+    await _REAL_SLEEP(0.001)
+
+
+async def _run_heartbeats_for(agent: HttpWorkerAgent, seconds: float) -> None:
+    """Drive _heartbeat_loop for a stretch of real time, then stop it."""
+    task = asyncio.create_task(agent._heartbeat_loop())
+    try:
+        await _REAL_SLEEP(seconds)
+        assert not task.done()  # the loop never exits on its own
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+class TestPartitionFence:
+    """A worker that has lost the scheduler must not keep encoding past
+    the point where the scheduler requeues its job. Incident 2026-09-02:
+    a worker with a wedged network encoded, and kept its .tf_lock fresh,
+    for 44 min after the scheduler marked it dead at 90 s, so the retry
+    claimer met a live lock. The fence aborts the in-flight job the way
+    the second shutdown signal does, a margin before the scheduler's
+    orphan grace runs out, and the worker itself keeps running."""
+
+    async def test_fence_aborts_in_flight_job_and_keeps_the_worker_running(
+        self, test_settings, tmp_path
+    ):
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.05
+        agent._client.heartbeat = AsyncMock(side_effect=_UNREACHABLE)
+        job = _job()
+        started = asyncio.Event()
+
+        async def never_finishes(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline", new=never_finishes),
+            patch.object(agent, "_get_backend_for_job", return_value=_mock_storage(tmp_path)),
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            heartbeats = asyncio.create_task(agent._heartbeat_loop())
+            task = asyncio.create_task(agent._process_job(job))
+            await started.wait()
+            await asyncio.wait_for(task, timeout=5.0)  # fenced, no raise
+            assert not heartbeats.done()  # the worker keeps beating
+            heartbeats.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeats
+
+        assert not agent._shutting_down
+        agent._client.failed.assert_awaited_once()
+        kwargs = agent._client.failed.call_args.kwargs
+        assert kwargs["error_message"].startswith(_FENCE_PREFIX)
+        # Not the file's fault: the retry is not burned.
+        assert kwargs["retry_count"] == job.retry_count
+        assert agent._current_job_id is None
+
+    async def test_worker_claims_again_after_a_fence(self, test_settings, tmp_path):
+        """The fence is consumed with the job it aborted: once the
+        scheduler answers again the next claim runs to completion, and
+        the shutdown ladder is back at its first rung."""
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.05
+        first, second = _job(), _job()
+
+        async def heartbeat(**kwargs):
+            if agent._current_job_id == first.id:
+                raise _UNREACHABLE
+
+        claims = [
+            first.model_dump(mode="json") | {"_backend_type": "filesystem"},
+            second.model_dump(mode="json") | {"_backend_type": "filesystem"},
+        ]
+
+        async def claim_job(**kwargs):
+            return claims.pop(0) if claims else None
+
+        agent._client.heartbeat = AsyncMock(side_effect=heartbeat)
+        agent._client.claim_job = AsyncMock(side_effect=claim_job)
+
+        async def pipeline(**kwargs):
+            if kwargs["job_id"] == first.id:
+                await asyncio.Event().wait()
+            return {"source_size": 10, "space_saved": 5}
+
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline", new=pipeline),
+            patch.object(agent, "_get_backend_for_job", return_value=_mock_storage(tmp_path)),
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            loops = asyncio.gather(agent._heartbeat_loop(), agent._job_loop())
+            try:
+                await _wait_for(lambda: agent._client.complete.await_count >= 1)
+            finally:
+                loops.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await loops
+
+        agent._client.failed.assert_awaited_once()
+        assert agent._client.failed.call_args.kwargs["job_id"] == first.id
+        assert agent._client.complete.call_args.kwargs["job_id"] == second.id
+        assert not agent._abort_requested
+        assert not agent._shutting_down
+        agent._handle_shutdown()  # first rung: drain, not force-exit
+        assert agent._shutting_down and not agent._abort_requested
+
+    async def test_fence_fires_once_per_outage(self, test_settings):
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.05
+        agent._current_job_id = "j1"
+        down = True
+
+        async def heartbeat(**kwargs):
+            if down:
+                raise _UNREACHABLE
+
+        agent._client.heartbeat = AsyncMock(side_effect=heartbeat)
+        with (
+            patch.object(agent, "_abort_current_job", wraps=agent._abort_current_job) as fence,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            task = asyncio.create_task(agent._heartbeat_loop())
+            try:
+                await _wait_for(lambda: fence.call_count == 1)
+                await _REAL_SLEEP(0.2)  # the outage goes on: no second fence
+                assert fence.call_count == 1
+                down = False  # contact returns
+                await _REAL_SLEEP(0.05)
+                down = True  # a new outage fences again
+                await _wait_for(lambda: fence.call_count == 2)
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        assert fence.call_args.args[0].startswith(_FENCE_PREFIX)
+
+    async def test_no_fence_when_heartbeats_recover_in_time(self, test_settings):
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.2
+        agent._current_job_id = "j1"
+        failures_left = 3
+
+        async def heartbeat(**kwargs):
+            nonlocal failures_left
+            if failures_left:
+                failures_left -= 1
+                raise _UNREACHABLE
+
+        agent._client.heartbeat = AsyncMock(side_effect=heartbeat)
+        with (
+            patch.object(agent, "_abort_current_job") as fence,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            # Three failures in a few ms, then a healthy scheduler for
+            # longer than the threshold.
+            await _run_heartbeats_for(agent, 0.3)
+        fence.assert_not_called()
+        assert agent._client.heartbeat.await_count > 3
+
+    async def test_one_signal_during_a_fence_drains_instead_of_force_exiting(self, test_settings):
+        """The fence sets _abort_requested with no shutdown in progress. A
+        single SIGTERM in that window must land on rung 1 (drain), not on
+        rung 3; the second signal then force-exits as documented."""
+        agent = _agent(test_settings)
+        agent._abort_current_job("Aborted: lost contact with the scheduler for 480 s")
+        agent._handle_shutdown()
+        assert agent._shutting_down is True
+        with pytest.raises(SystemExit):
+            agent._handle_shutdown()
+
+    async def test_worker_state_read_error_skips_the_beat_and_keeps_the_loop(self, test_settings):
+        """A failing outbox read (a stale state-dir mount) is not lost
+        contact with the scheduler. The beat is skipped, the loop keeps
+        running, and the fence is untouched. The outbox is only consulted
+        while no job is in flight, so this can never abort an encode."""
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.0
+        agent._current_job_id = None
+        agent._client.heartbeat = AsyncMock()
+
+        def broken_outbox_read() -> str | None:
+            raise OSError("state dir mount gone")
+
+        agent.outbox.oldest_pending_job_id = broken_outbox_read  # type: ignore[method-assign]
+        with (
+            patch.object(agent, "_abort_current_job") as fence,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            await _run_heartbeats_for(agent, 0.1)
+        fence.assert_not_called()
+        agent._client.heartbeat.assert_not_awaited()
+
+    async def test_no_fence_without_a_job_in_flight(self, test_settings):
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.02
+        agent._current_job_id = None
+        agent._client.heartbeat = AsyncMock(side_effect=_UNREACHABLE)
+        with (
+            patch.object(agent, "_abort_current_job") as fence,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            await _run_heartbeats_for(agent, 0.2)
+        fence.assert_not_called()
+
+    def test_threshold_comes_from_the_advertised_orphan_grace(self):
+        """The scheduler advertises its orphan grace at /register; the
+        worker fences a margin before it. A scheduler predating the field
+        enforces 600 s, so its absence means the same 480 s."""
+        assert fence_after_seconds({"worker_id": "w"}) == 480.0
+        assert fence_after_seconds({"worker_id": "w", "orphan_grace_seconds": 600}) == 480.0
+        assert fence_after_seconds({"worker_id": "w", "orphan_grace_seconds": 900}) == 780.0

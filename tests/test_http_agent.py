@@ -1,5 +1,6 @@
 """Tests for HTTP worker agent and storage backends integration."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -380,42 +381,171 @@ class TestClaimTimeRecovery:
         mock_pipeline.assert_called_once()
         agent._client.complete.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_fresh_foreign_lock_declines_without_burning_retry(self, test_settings, tmp_path):
-        """A fresh (heartbeated) foreign lock means another worker is
-        encoding this path right now — decline the job with the retry
-        count UNCHANGED (not the file's fault) and touch nothing."""
+    @staticmethod
+    def _write_foreign_lock(tmp_path: Path, age_seconds: float = 22.0) -> Path:
         import json
-        from datetime import UTC, datetime
+        from datetime import UTC, datetime, timedelta
 
-        source = tmp_path / "movie.mkv"
-        source.write_bytes(b"the original")
         lock = tmp_path / "movie.mkv.tf_lock"
         lock.write_text(
             json.dumps(
                 {
                     "job_id": "job-other",
-                    "worker_id": "worker-other",
-                    "timestamp": datetime.now(UTC).isoformat(),
+                    "worker_id": "worker-other-1234",
+                    "timestamp": (datetime.now(UTC) - timedelta(seconds=age_seconds)).isoformat(),
                 }
             )
         )
+        return lock
+
+    @pytest.mark.asyncio
+    async def test_fresh_foreign_lock_is_waited_on_then_job_proceeds(self, test_settings, tmp_path):
+        """A fresh foreign lock is a WAIT, not a failure: the claimer polls
+        recover_source_path until the lock clears (the other pipeline
+        finished, or its lock went stale) and then runs the encode.
+        Incident 2026-09-02 case 1: a SIGKILLed worker's 22 s old lock
+        made the retry fail outright."""
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        lock = self._write_foreign_lock(tmp_path)
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        mock_backend = AsyncMock()
+        mock_backend.fetch = AsyncMock(return_value=source)
+        mock_backend.commit = AsyncMock(return_value=MagicMock(output_size=5, space_saved=5))
+        mock_backend.cleanup = AsyncMock()
+
+        polls = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal polls
+            polls += 1
+            if polls == 2:
+                lock.unlink()  # the other pipeline finished between polls
+
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=fake_sleep),
+            patch.object(agent, "_get_backend_for_job", return_value=mock_backend),
+        ):
+            mock_pipeline.return_value = {"source_size": 10, "space_saved": 5}
+            await agent._process_job(job)
+
+        assert polls == 2  # active, active, clean
+        mock_pipeline.assert_called_once()
+        agent._client.complete.assert_called_once()
+        agent._client.failed.assert_not_called()
+        # Each poll reported what it was waiting on, within the 16-char cap.
+        details = [
+            c.kwargs["phase_detail"]
+            for c in agent._client.progress.call_args_list
+            if c.kwargs.get("phase") == "wait"
+        ]
+        assert len(details) == 2
+        assert all(d.startswith("worker-o") and d.endswith("s") for d in details)
+        assert all(len(d) <= 16 for d in details)
+
+    @pytest.mark.asyncio
+    async def test_lock_still_refreshed_past_the_cap_fails_without_burning_retry(
+        self, test_settings, tmp_path
+    ):
+        """The wait is bounded: past the cap the job fails with a message
+        that names the owner and the lock age and never calls it live.
+        Incident case 2: the owner was still encoding 44 min after the
+        scheduler marked it dead, and the old message said 'live worker'
+        while the workers page said 'dead'. Retry count unchanged."""
+        from transcode_forge.worker import http_agent
+
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        lock = self._write_foreign_lock(tmp_path, age_seconds=22.0)
 
         agent = self._agent(test_settings)
         job = self._fs_job(source)
         job.retry_count = 2
 
         mock_backend = AsyncMock()
-        with patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline:
-            with patch.object(agent, "_get_backend_for_job", return_value=mock_backend):
-                await agent._process_job(job)
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=AsyncMock()),
+            patch.object(http_agent, "LOCK_WAIT_MAX_SECONDS", 0.0),
+            patch.object(agent, "_get_backend_for_job", return_value=mock_backend),
+        ):
+            await agent._process_job(job)
 
         mock_pipeline.assert_not_called()
         agent._client.failed.assert_called_once()
         kwargs = agent._client.failed.call_args.kwargs
         assert kwargs["retry_count"] == 2  # unchanged
+        message = kwargs["error_message"]
+        assert "worker-o" in message  # the owner's id, first 8 chars
+        assert "still being refreshed" in message
+        assert "live" not in message.lower()
         assert lock.exists()
         assert source.read_bytes() == b"the original"
+        assert agent._current_job_id is None
+
+    @pytest.mark.asyncio
+    async def test_abort_during_lock_wait_never_starts_the_encode(self, test_settings, tmp_path):
+        """A shutdown landing mid-wait ends the wait: the job is released
+        (failed, retry not burned) and no encode starts."""
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        self._write_foreign_lock(tmp_path)
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        async def sleep_then_abort(_seconds):
+            agent._handle_shutdown()  # 1st: drain
+            agent._handle_shutdown()  # 2nd: abort
+
+        mock_backend = AsyncMock()
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=sleep_then_abort),
+            patch.object(agent, "_get_backend_for_job", return_value=mock_backend),
+        ):
+            await asyncio.wait_for(agent._process_job(job), timeout=5.0)
+
+        mock_pipeline.assert_not_called()
+        agent._client.failed.assert_called_once()
+        kwargs = agent._client.failed.call_args.kwargs
+        assert kwargs["retry_count"] == job.retry_count
+        assert "shutdown" in kwargs["error_message"].lower()
+        assert agent._current_job_id is None
+
+    @pytest.mark.asyncio
+    async def test_fence_during_lock_wait_releases_the_job(self, test_settings, tmp_path):
+        """The partition self-fence lands mid-wait: the job is released
+        with the fence's message, not the shutdown one, and the worker is
+        not shutting down."""
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        self._write_foreign_lock(tmp_path)
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        async def sleep_then_fence(_seconds):
+            agent._abort_current_job("Aborted: lost contact with the scheduler for 480 s")
+
+        mock_backend = AsyncMock()
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=sleep_then_fence),
+            patch.object(agent, "_get_backend_for_job", return_value=mock_backend),
+        ):
+            await asyncio.wait_for(agent._process_job(job), timeout=5.0)
+
+        mock_pipeline.assert_not_called()
+        agent._client.failed.assert_called_once()
+        kwargs = agent._client.failed.call_args.kwargs
+        assert kwargs["retry_count"] == job.retry_count
+        assert kwargs["error_message"] == "Aborted: lost contact with the scheduler for 480 s"
+        assert not agent._shutting_down
         assert agent._current_job_id is None
 
     @pytest.mark.asyncio
