@@ -41,6 +41,11 @@ class JobPhase(StrEnum):
     VERIFY = "verify"  # ffprobe + decode samples on the output
     GAUGE = "gauge"  # full-file VMAF vs the original (COMPARE's long half)
     SWAP = "swap"  # atomic swap + post-swap confirm
+    # Before LOCK: the claimer is waiting for another worker's fresh
+    # .tf_lock on this path to clear. Not a station; the station bar
+    # renders the plain meter for it, the job row carries the detail
+    # ("<owner id8> <age>s").
+    WAIT = "wait"
 
 
 class Job(BaseModel):

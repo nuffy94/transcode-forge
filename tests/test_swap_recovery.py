@@ -16,6 +16,7 @@ from transcode_forge.worker.storage.filesystem import (
     RECOVERY_STALE_LOCK_SECONDS,
     LockHeartbeatGuard,
     _touch_lock,
+    lock_holder,
     recover_orphaned_backups,
     recover_source_path,
 )
@@ -191,6 +192,20 @@ class TestStaleWindow:
         assert original.read_bytes() == ORIGINAL_BYTES
         assert not bak.exists()
         assert not lock.exists()
+
+    def test_lock_holder_reports_owner_and_age(self, tmp_path: Path):
+        """The claim-time wait names who holds the lock and how long ago
+        it was refreshed; an unreadable or missing lock reads as None."""
+        original, _, lock, _ = _stage(tmp_path, lock_owner=OTHER, lock_age=FIVE_MINUTES_HOURS)
+        holder = lock_holder(original)
+        assert holder is not None
+        owner, age = holder
+        assert owner == OTHER
+        assert 299 <= age <= 302
+        lock.write_text("not json at all")
+        assert lock_holder(original) is None
+        lock.unlink()
+        assert lock_holder(original) is None
 
     def test_stale_window_is_derived_from_the_touch_interval(self):
         """The window must absorb missed touches (a busy NFS mount, a

@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 
 from transcode_forge.config import Settings
-from transcode_forge.models.job import Job
+from transcode_forge.models.job import Job, JobPhase
 from transcode_forge.models.library import StorageBackendType
 from transcode_forge.worker.hardware import HardwareCapabilities, detect_capabilities
 from transcode_forge.worker.http_client import WorkerHttpClient
@@ -33,12 +33,25 @@ from transcode_forge.worker.pipeline import (
 )
 from transcode_forge.worker.reliability import Backoff, ErrorClass, classify_error
 from transcode_forge.worker.storage.filesystem import (
+    RECOVERY_STALE_LOCK_SECONDS,
+    lock_holder,
     recover_orphaned_backups,
     recover_source_path,
 )
 from transcode_forge.worker.vmaf import has_libvmaf
 
 logger = logging.getLogger(__name__)
+
+# Claim-time lock wait. A fresh foreign .tf_lock proves some pipeline is
+# still refreshing it, whatever the scheduler currently believes about
+# that worker: a partitioned worker keeps encoding (incident 2026-09-02,
+# 44 min past its dead-marking), and a dead worker's lock ages out within
+# the stale window. Either way the claimer WAITS for the lock to clear,
+# re-running recovery every poll, and gives up only after twice the stale
+# window so a worker slot is never held forever.
+LOCK_WAIT_POLL_SECONDS = 30.0
+LOCK_WAIT_MAX_SECONDS = 2 * RECOVERY_STALE_LOCK_SECONDS
+SHUTDOWN_ABORT_MESSAGE = "Aborted by worker shutdown"
 
 
 # Poison parking: a report the scheduler PERSISTENTLY refuses with a
@@ -328,16 +341,9 @@ class HttpWorkerAgent:
         # leftovers on this path before touching it. The startup scan
         # can't help when the crashed worker never comes back.
         if not is_s3:
-            recovery = await asyncio.to_thread(
-                recover_source_path, Path(source_ref), worker_id=self.worker_id
-            )
-            if recovery in ("active", "attention", "restore_failed"):
+            recovery, decline = await self._recover_source_path_waiting(job, Path(source_ref))
+            if recovery in ("active", "aborted", "attention", "restore_failed"):
                 messages = {
-                    "active": (
-                        "Source path is locked by another live worker — likely still "
-                        "encoding it; retry after that pipeline finishes or its lock "
-                        "goes stale."
-                    ),
                     "attention": (
                         "A .tf_bak backup and a finished-looking media file both exist "
                         "for this source — refusing to encode over the backup. Verify "
@@ -355,7 +361,7 @@ class HttpWorkerAgent:
                     job.id,
                     "failed",
                     {
-                        "error_message": messages[recovery],
+                        "error_message": decline or messages[recovery],
                         # None of these are the file's fault — never burn a retry.
                         "retry_count": job.retry_count,
                     },
@@ -554,7 +560,7 @@ class HttpWorkerAgent:
                         job.id,
                         "failed",
                         {
-                            "error_message": "Aborted by worker shutdown",
+                            "error_message": SHUTDOWN_ABORT_MESSAGE,
                             # A shutdown abort is not the file's fault —
                             # never burn a retry on it.
                             "retry_count": job.retry_count,
@@ -620,6 +626,66 @@ class HttpWorkerAgent:
             self._current_job_id = None
             self._current_progress = 0.0
             await storage.cleanup(job)
+
+    async def _recover_source_path_waiting(self, job: Job, source: Path) -> tuple[str, str | None]:
+        """Claim-time recovery that WAITS on a fresh foreign lock instead
+        of declining the job.
+
+        The lock's freshness says a pipeline is still refreshing it; it
+        says nothing about whether the scheduler can reach that worker.
+        So the claimer re-runs recover_source_path every
+        LOCK_WAIT_POLL_SECONDS until the lock clears (the pipeline
+        finished) or ages out (its worker died), reporting what it waits
+        on as job phase progress, and gives up after LOCK_WAIT_MAX_SECONDS.
+
+        Returns (outcome, decline message). The outcome is
+        recover_source_path's, with "active" meaning the cap passed, or
+        "aborted" when a shutdown landed mid-wait; the message is set for
+        those two outcomes and None otherwise.
+        """
+        if self.worker_id is None:
+            raise RuntimeError("worker_id is unset: registration must succeed before this runs")
+        started = time.monotonic()
+        while True:
+            recovery = await asyncio.to_thread(
+                recover_source_path, source, worker_id=self.worker_id
+            )
+            if recovery != "active":
+                return recovery, None
+            if self._shutting_down or self._abort_requested:
+                return "aborted", SHUTDOWN_ABORT_MESSAGE
+            holder = await asyncio.to_thread(lock_holder, source)
+            owner, age = holder if holder is not None else ("unknown", 0)
+            waited = time.monotonic() - started
+            if waited >= LOCK_WAIT_MAX_SECONDS:
+                return "active", (
+                    f"Source lock is still being refreshed by worker {owner[:8]} "
+                    f"(last refresh {age} s ago) after waiting "
+                    f"{int(LOCK_WAIT_MAX_SECONDS // 60)} min. That worker is still "
+                    "running the pipeline on this file even if the scheduler lost "
+                    "contact with it. Retry after it finishes or is stopped."
+                )
+            logger.info(
+                "Job %s: waiting for the lock on %s held by worker %s, refreshed %d s ago "
+                "(%d s waited so far)",
+                job.id,
+                source,
+                owner[:8],
+                age,
+                waited,
+            )
+            try:
+                # The scheduler caps phase_detail at 16 chars: owner id8 + age.
+                await self._client.progress(
+                    job_id=job.id,
+                    progress=self._current_progress,
+                    speed=None,
+                    phase=JobPhase.WAIT,
+                    phase_detail=f"{owner[:8]} {age}s",
+                )
+            except (httpx.HTTPError, OSError):
+                logger.debug("Lock-wait progress update failed", exc_info=True)
+            await asyncio.sleep(LOCK_WAIT_POLL_SECONDS)
 
     async def _register_with_retry(self) -> dict[str, Any]:
         """Register with the scheduler; retry transport/5xx forever.

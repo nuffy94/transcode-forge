@@ -408,6 +408,20 @@ def _safe_delete(path: Path) -> None:
 # The worker runs this scan over its local media roots at startup.
 
 
+def _read_lock(lock_path: Path) -> tuple[str | None, datetime] | None:
+    """(owning worker_id, last refresh) from a lock file, or None when the
+    lock is missing or unreadable."""
+    try:
+        content = json.loads(lock_path.read_text())
+        lock_worker = content.get("worker_id")
+        ts = datetime.fromisoformat(str(content["timestamp"]))
+    except (OSError, ValueError, KeyError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return lock_worker, ts
+
+
 def _lock_is_active(lock_path: Path, *, worker_id: str, stale_after: timedelta) -> bool:
     """True when a lock belongs to a DIFFERENT worker and is still fresh.
 
@@ -416,17 +430,26 @@ def _lock_is_active(lock_path: Path, *, worker_id: str, stale_after: timedelta) 
     stale at startup (a freshly started worker has no pipeline in flight),
     and unreadable or ancient locks are treated as stale too.
     """
-    try:
-        content = json.loads(lock_path.read_text())
-        lock_worker = content.get("worker_id")
-        ts = datetime.fromisoformat(str(content["timestamp"]))
-    except (OSError, ValueError, KeyError):
+    parsed = _read_lock(lock_path)
+    if parsed is None:
         return False
+    lock_worker, ts = parsed
     if lock_worker == worker_id:
         return False
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=UTC)
     return datetime.now(UTC) - ts < stale_after
+
+
+def lock_holder(original: Path) -> tuple[str, int] | None:
+    """(owning worker_id, seconds since the last refresh) for the lock on
+    ``original``, or None when there is no readable lock. What a worker
+    waiting on a foreign lock reports and logs while it waits."""
+    lock, _tmp, _bak = pipeline_artifacts(original)
+    parsed = _read_lock(lock)
+    if parsed is None:
+        return None
+    lock_worker, ts = parsed
+    age = max(0, int((datetime.now(UTC) - ts).total_seconds()))
+    return str(lock_worker or "unknown"), age
 
 
 def recover_orphaned_backups(
