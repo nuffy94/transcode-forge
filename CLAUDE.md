@@ -207,10 +207,13 @@ Common knobs:
   (not a gate). `TF_VMAF_SAFETY_MEAN` / `TF_VMAF_SAFETY_PERC5` — absolute
   "refuse to keep" floors for the full-file gate (91.5/86 defaults on
   the VMAF v1 scale, calibrated in plans/vmaf-v1-gate1-results.md), never
-  derived from the target. `TF_CRF_SEARCH_ENABLED` toggles the per-file
-  CRF search. These plus the quality presets are DB-overridable from the
-  Settings page (`repos/settings.py`, `effective(key)` = DB override
-  else env). The old `TF_VMAF_MIN_FLOOR` knob is retired and ignored.
+  derived from the target. These, `TF_DEFAULT_CODEC` and the quality
+  presets are DB-overridable from the Settings page (`repos/settings.py`,
+  `effective(key)` = DB override else env). The old `TF_VMAF_MIN_FLOOR`
+  knob is retired and ignored.
+- `TF_CRF_SEARCH_ENABLED` toggles the per-file CRF search. Worker-side
+  env only: each worker reads its own value at boot. It is not a
+  Settings-page knob and the scheduler never sends it.
 - `TF_S3_ENDPOINT_URL`, `TF_S3_REGION`, `TF_S3_ACCESS_KEY_ID`,
   `TF_S3_SECRET_ACCESS_KEY` — optional S3-compatible object storage for
   S3 library backends (scheduler and workers both need them).
