@@ -1,5 +1,6 @@
 """Tests for the media scanner and ffprobe wrapper."""
 
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -366,3 +367,47 @@ class TestScanLibrary:
         second = await scan_repo.get_scan(db, scan2.id)
         assert second.files_updated == 1
         assert second.files_skipped == 0
+
+    async def test_swapped_file_heals_status_on_rescan(self, db, tmp_path):
+        """A file the fleet swapped to HEVC (new size; the swap keeps the mtime) is re-probed
+        on the next scan; the row's status must follow the new codec instead
+        of staying at what the queue-time stamp left behind (live: queued|hevc)."""
+        from transcode_forge.repos import media as media_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        target = lib / "a.mkv"
+        target.write_bytes(b"x" * 100)
+
+        await self._scan(db, lib)
+        files, _total = await media_repo.list_media_files(db)
+        assert files[0]["transcode_status"] == "needs_transcode"
+        await media_repo.update_media_status(
+            db, files[0]["id"], transcode_status="queued", job_id="job-1"
+        )
+
+        # The swap: a smaller HEVC file lands at the same path.
+        target.write_bytes(b"y" * 40)
+
+        def hevc_probe(path) -> ProbeResult:
+            return dataclasses.replace(_fake_probe(path), video_codec="hevc")
+
+        with patch(
+            "transcode_forge.scanner.scanner.ffprobe",
+            new=AsyncMock(side_effect=hevc_probe),
+        ):
+            await scan_library(
+                library_id="whatever",
+                library_name="movies",
+                library_path=str(lib),
+                media_type="movies",
+                db=db,
+            )
+
+        row = await media_repo.get_media_file(db, files[0]["id"])
+        assert row is not None
+        assert row["video_codec"] == "hevc"
+        assert row["file_size"] == 40
+        assert row["transcode_status"] == "complete"
+        assert row["skip_reason"] == "already_hevc"

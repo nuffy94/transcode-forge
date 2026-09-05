@@ -25,6 +25,12 @@ VIDEO_EXTENSIONS = frozenset(
 )
 
 
+def format_resolution(width: int, height: int) -> str:
+    """The catalog's resolution string ("1920x1080"). One home so the
+    scanner and the job-complete catalog sync write the same shape."""
+    return f"{width}x{height}"
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     """Parsed ffprobe output for a single video file."""
@@ -39,7 +45,7 @@ class ProbeResult:
 
     @property
     def resolution(self) -> str:
-        return f"{self.width}x{self.height}"
+        return format_resolution(self.width, self.height)
 
     @property
     def is_10bit(self) -> bool:
