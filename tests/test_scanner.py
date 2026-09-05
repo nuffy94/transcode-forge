@@ -369,7 +369,7 @@ class TestScanLibrary:
         assert second.files_skipped == 0
 
     async def test_swapped_file_heals_status_on_rescan(self, db, tmp_path):
-        """A file the fleet swapped to HEVC (new size and mtime) is re-probed
+        """A file the fleet swapped to HEVC (new size; the swap keeps the mtime) is re-probed
         on the next scan; the row's status must follow the new codec instead
         of staying at what the queue-time stamp left behind (live: queued|hevc)."""
         from transcode_forge.repos import media as media_repo

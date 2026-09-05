@@ -68,6 +68,20 @@ class TestLibrariesEndpoint:
         assert bool(lib["auto_scan"]) is True
         assert lib["scan_interval_hours"] == 24
 
+    async def test_put_auto_scan_flips_the_flag(self, client: AsyncClient):
+        """Pre-existing rows are flipped with PUT {"auto_scan": true}; the
+        bool has to survive the INTEGER column on both dialects."""
+        resp = await client.post(
+            "/api/libraries", json={"name": "Lib", "media_type": "movies", "path": "/tmp/lib-put"}
+        )
+        lib_id = resp.json()["data"]["id"]
+        off = await client.put(f"/api/libraries/{lib_id}", json={"auto_scan": False})
+        assert off.status_code == 200
+        assert bool(off.json()["data"]["auto_scan"]) is False
+        on = await client.put(f"/api/libraries/{lib_id}", json={"auto_scan": True})
+        assert on.status_code == 200
+        assert bool(on.json()["data"]["auto_scan"]) is True
+
     async def test_create_filesystem_requires_path(self, client: AsyncClient):
         resp = await client.post("/api/libraries", json={"name": "Lib", "media_type": "movies"})
         assert resp.status_code == 422

@@ -357,7 +357,11 @@ async def update_output_by_job(
         if width is None:
             # The worker does not report output dimensions and the source
             # was never measured, so the width is unknown: leave width and
-            # resolution as they are and let the next scan reconcile them.
+            # resolution as they are. A later scan will not fill them in
+            # (the swap keeps the mtime and this write records the new
+            # size, so the scanner sees the file as unchanged). This branch
+            # is a guard: the API and the worker both refuse a downscale
+            # when the source height is unknown.
             await db.execute(
                 "UPDATE media_files SET video_codec = ?, file_size = ?, height = ?,"
                 " updated_at = ? WHERE id = ?",
