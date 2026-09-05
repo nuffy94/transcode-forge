@@ -53,6 +53,28 @@ LOCK_WAIT_POLL_SECONDS = 30.0
 LOCK_WAIT_MAX_SECONDS = 2 * RECOVERY_STALE_LOCK_SECONDS
 SHUTDOWN_ABORT_MESSAGE = "Aborted by worker shutdown"
 
+# Partition self-fence. A worker cut off from the scheduler cannot tell a
+# scheduler outage from its own partition, but the scheduler's side of
+# the contract is known: it requeues this worker's job once nothing has
+# been heard for its orphan grace (advertised at /register as
+# orphan_grace_seconds), and the retry claimer then meets this worker's
+# still-fresh .tf_lock (incident 2026-09-02: 44 min of encoding past the
+# dead mark). So a worker whose heartbeats have failed for the grace
+# minus this margin aborts its own in-flight job first, the same orderly
+# abort the second shutdown signal performs, then keeps heartbeating and
+# claims again once the scheduler answers.
+FENCE_MARGIN_SECONDS = 120.0
+# The grace a scheduler predating the register field enforces.
+DEFAULT_ORPHAN_GRACE_SECONDS = 600.0
+
+
+def fence_after_seconds(registration: dict[str, Any]) -> float:
+    """Seconds of failed heartbeats after which a worker fences its
+    in-flight job, from the grace the scheduler advertised at /register
+    (absent on older schedulers: the pre-field default applies)."""
+    grace = float(registration.get("orphan_grace_seconds", DEFAULT_ORPHAN_GRACE_SECONDS))
+    return grace - FENCE_MARGIN_SECONDS
+
 
 # Poison parking: a report the scheduler PERSISTENTLY refuses with a
 # retryable error (a 500 from a server-side bug) must never be dropped —
@@ -83,6 +105,8 @@ class HttpWorkerAgent:
         self.host = socket.gethostname()
         self._shutting_down = False
         self._abort_requested = False
+        self._abort_message = SHUTDOWN_ABORT_MESSAGE
+        self._fence_after_seconds = fence_after_seconds({})
         self._pipeline_task: asyncio.Task[dict[str, Any]] | None = None
         self.worker_id: str | None = None
         self._current_job_id: str | None = None
@@ -143,7 +167,13 @@ class HttpWorkerAgent:
 
         registration = await self._register_with_retry()
         self.worker_id = registration["worker_id"]
-        logger.info("Registered as worker_id=%s", self.worker_id)
+        self._fence_after_seconds = fence_after_seconds(registration)
+        logger.info(
+            "Registered as worker_id=%s (self-fence: an in-flight job is aborted after %d s "
+            "without the scheduler)",
+            self.worker_id,
+            self._fence_after_seconds,
+        )
 
         # Crash recovery (filesystem backend only): a power loss inside the
         # pipeline's SWAP window leaves the original hidden as .tf_bak with a
@@ -199,16 +229,37 @@ class HttpWorkerAgent:
             raise SystemExit(1)
         if self._shutting_down:
             logger.warning("Second shutdown signal — aborting the current encode")
-            self._abort_requested = True
-            if self._pipeline_task is not None and not self._pipeline_task.done():
-                self._pipeline_task.cancel()
+            self._abort_current_job(SHUTDOWN_ABORT_MESSAGE)
             return
         logger.info("Shutdown requested — finishing current job (signal again to abort it)")
         self._shutting_down = True
 
+    def _abort_current_job(self, message: str) -> None:
+        """Abort the in-flight job orderly: cancelling the pipeline task
+        kills its ffmpeg tree and runs the pipeline's own cleanup (original
+        restored from .tf_bak, lock dropped), and _process_job then reports
+        the job failed with `message`, retry count not burned. The lock
+        wait and the pre-pipeline check read the same flag. Shared by the
+        second shutdown signal and the partition self-fence."""
+        self._abort_requested = True
+        self._abort_message = message
+        if self._pipeline_task is not None and not self._pipeline_task.done():
+            self._pipeline_task.cancel()
+
+    def _clear_consumed_abort(self) -> None:
+        """A fence abort ends with the job it aborted: the worker goes on
+        to claim again, so the request must not outlive the job and abort
+        the next one on sight. A shutdown abort stays armed: the job loop
+        is exiting and the third signal still force-exits."""
+        if not self._shutting_down:
+            self._abort_requested = False
+            self._abort_message = SHUTDOWN_ABORT_MESSAGE
+
     async def _heartbeat_loop(self) -> None:
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset — registration must succeed before this runs")
+        last_contact = time.monotonic()
+        fenced = False
         # Keep beating while a job is draining after the first shutdown
         # signal — otherwise the scheduler shows "heartbeat lost" (and may
         # treat the worker as dead) for the entire tail of the encode.
@@ -229,8 +280,29 @@ class HttpWorkerAgent:
                     status=status,
                     current_job_id=named_job,
                 )
+                last_contact = time.monotonic()
+                fenced = False
             except Exception as e:
                 logger.warning("Heartbeat failed (will retry): %r", e)
+                # Partition self-fence: once per outage, only with a job in
+                # flight, a margin before the scheduler requeues that job.
+                lost_for = time.monotonic() - last_contact
+                if (
+                    not fenced
+                    and lost_for >= self._fence_after_seconds
+                    and self._current_job_id is not None
+                ):
+                    fenced = True
+                    logger.error(
+                        "No contact with the scheduler for %d s (fence at %d s): aborting "
+                        "job %s before the scheduler requeues it",
+                        lost_for,
+                        self._fence_after_seconds,
+                        self._current_job_id,
+                    )
+                    self._abort_current_job(
+                        f"Aborted: lost contact with the scheduler for {int(lost_for)} s"
+                    )
             await asyncio.sleep(self.settings.heartbeat_interval)
 
     async def _job_loop(self) -> None:
@@ -265,13 +337,18 @@ class HttpWorkerAgent:
                 # doesn't send them, so fall back to this worker's env defaults.
                 # The legacy _vmaf_min_floor stamp is deliberately ignored — it
                 # carries the old target-coupled bar this design retired.
-                await self._process_job(
-                    job,
-                    safety_mean=job_dict.get("_vmaf_safety_mean", self.settings.vmaf_safety_mean),
-                    safety_perc5=job_dict.get(
-                        "_vmaf_safety_perc5", self.settings.vmaf_safety_perc5
-                    ),
-                )
+                try:
+                    await self._process_job(
+                        job,
+                        safety_mean=job_dict.get(
+                            "_vmaf_safety_mean", self.settings.vmaf_safety_mean
+                        ),
+                        safety_perc5=job_dict.get(
+                            "_vmaf_safety_perc5", self.settings.vmaf_safety_perc5
+                        ),
+                    )
+                finally:
+                    self._clear_consumed_abort()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -541,16 +618,17 @@ class HttpWorkerAgent:
                 int(commit_result.space_saved),
             )
         except asyncio.CancelledError:
-            # Deliberate shutdown abort (second signal): the encoder's
-            # managed subprocess has already killed its ffmpeg tree — report
-            # the job so it doesn't strand in 'transcoding', then return so
-            # the job loop can exit orderly. Cancellation we did NOT request
+            # Deliberate abort (second shutdown signal, or the partition
+            # self-fence): the encoder's managed subprocess has already
+            # killed its ffmpeg tree — report the job so it doesn't strand
+            # in 'transcoding', then return so the job loop can go on (or
+            # exit orderly on shutdown). Cancellation we did NOT request
             # (event-loop teardown) must keep propagating.
             if not self._abort_requested:
                 if self._pipeline_task is not None and not self._pipeline_task.done():
                     self._pipeline_task.cancel()
                 raise
-            logger.warning("Job %s aborted by shutdown", job.id)
+            logger.warning("Job %s aborted: %s", job.id, self._abort_message)
             # The entry is journaled either way; the timeout only bounds
             # the opportunistic send so shutdown stays snappy — an
             # unsent abort report survives to the next boot's drain.
@@ -560,8 +638,8 @@ class HttpWorkerAgent:
                         job.id,
                         "failed",
                         {
-                            "error_message": SHUTDOWN_ABORT_MESSAGE,
-                            # A shutdown abort is not the file's fault —
+                            "error_message": self._abort_message,
+                            # An abort is not the file's fault —
                             # never burn a retry on it.
                             "retry_count": job.retry_count,
                         },
@@ -640,8 +718,8 @@ class HttpWorkerAgent:
 
         Returns (outcome, decline message). The outcome is
         recover_source_path's, with "active" meaning the cap passed, or
-        "aborted" when a shutdown landed mid-wait; the message is set for
-        those two outcomes and None otherwise.
+        "aborted" when a shutdown or the partition fence landed mid-wait;
+        the message is set for those two outcomes and None otherwise.
         """
         if self.worker_id is None:
             raise RuntimeError("worker_id is unset: registration must succeed before this runs")
@@ -653,7 +731,9 @@ class HttpWorkerAgent:
             if recovery != "active":
                 return recovery, None
             if self._shutting_down or self._abort_requested:
-                return "aborted", SHUTDOWN_ABORT_MESSAGE
+                # The fence sets its own message; a plain shutdown keeps
+                # the default.
+                return "aborted", self._abort_message
             holder = await asyncio.to_thread(lock_holder, source)
             owner, age = holder if holder is not None else ("unknown", 0)
             waited = time.monotonic() - started

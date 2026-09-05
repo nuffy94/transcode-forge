@@ -148,7 +148,8 @@ async def _stale_worker_loop(db: DBConnection, heartbeat_timeout: int) -> None:
 # A job is only requeued after this long with no signs of life (progress
 # reports bump updated_at) — well past the ~90s dead-marking, so a brief
 # network partition can't cost a worker its job the moment it's marked dead.
-ORPHAN_REQUEUE_GRACE_SECONDS = 600
+# Owned by repos/jobs.py because /register advertises it to workers.
+ORPHAN_REQUEUE_GRACE_SECONDS = job_repo.ORPHAN_REQUEUE_GRACE_SECONDS
 
 
 async def _orphan_requeue_loop(db: DBConnection) -> None:

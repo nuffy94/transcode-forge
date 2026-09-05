@@ -518,6 +518,37 @@ class TestClaimTimeRecovery:
         assert agent._current_job_id is None
 
     @pytest.mark.asyncio
+    async def test_fence_during_lock_wait_releases_the_job(self, test_settings, tmp_path):
+        """The partition self-fence lands mid-wait: the job is released
+        with the fence's message, not the shutdown one, and the worker is
+        not shutting down."""
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(b"the original")
+        self._write_foreign_lock(tmp_path)
+
+        agent = self._agent(test_settings)
+        job = self._fs_job(source)
+
+        async def sleep_then_fence(_seconds):
+            agent._abort_current_job("Aborted: lost contact with the scheduler for 480 s")
+
+        mock_backend = AsyncMock()
+        with (
+            patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=sleep_then_fence),
+            patch.object(agent, "_get_backend_for_job", return_value=mock_backend),
+        ):
+            await asyncio.wait_for(agent._process_job(job), timeout=5.0)
+
+        mock_pipeline.assert_not_called()
+        agent._client.failed.assert_called_once()
+        kwargs = agent._client.failed.call_args.kwargs
+        assert kwargs["retry_count"] == job.retry_count
+        assert kwargs["error_message"] == "Aborted: lost contact with the scheduler for 480 s"
+        assert not agent._shutting_down
+        assert agent._current_job_id is None
+
+    @pytest.mark.asyncio
     async def test_needs_attention_state_declines_job(self, test_settings, tmp_path):
         """bak + finished-looking media file + no lock: the bak is the last
         copy of the true original — the job must decline, not encode over
