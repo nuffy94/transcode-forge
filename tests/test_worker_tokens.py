@@ -4,7 +4,7 @@ Tokens are stored as HMAC-SHA256 hashes; auth looks them up by hash only.
 These guard expiry, revocation, and the invariant that the raw token is
 never written to the database (migration 0016 dropped the plaintext
 column). The 0004 backfill hook is covered by the upgrade-path tests in
-test_migrations.py, the only place the old column still exists.
+test_migrations.py. That is the only place the old column still exists.
 """
 
 import asyncio
