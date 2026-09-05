@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from transcode_forge.db import DBConnection
+from transcode_forge.scanner.probe import format_resolution
 
 _VALID_TRANSCODE_STATUSES = frozenset(
     {
@@ -41,7 +42,11 @@ async def upsert_media_file(
     now = datetime.now(UTC).isoformat()
     file_id = str(uuid4())
 
-    # Determine initial transcode status based on codec
+    # Determine initial transcode status based on codec. On a rescan of a
+    # known path the ON CONFLICT clause adopts these only when the probed
+    # codec changed (the swap landed); the same codec or a NULL probe keeps
+    # the existing status and skip_reason, so a queued job stays queued and
+    # a VMAF-gate skip survives.
     status = "pending"
     skip_reason = None
     if video_codec == "hevc":
@@ -70,6 +75,16 @@ async def upsert_media_file(
             bitrate = excluded.bitrate,
             duration = excluded.duration,
             file_size = excluded.file_size,
+            transcode_status = CASE
+                WHEN excluded.video_codec IS NULL
+                    OR excluded.video_codec = media_files.video_codec
+                THEN media_files.transcode_status
+                ELSE excluded.transcode_status END,
+            skip_reason = CASE
+                WHEN excluded.video_codec IS NULL
+                    OR excluded.video_codec = media_files.video_codec
+                THEN media_files.skip_reason
+                ELSE excluded.skip_reason END,
             file_modified_at = excluded.file_modified_at,
             scanned_at = excluded.scanned_at,
             updated_at = excluded.updated_at
@@ -290,6 +305,82 @@ async def update_status_by_job(
         " WHERE job_id = ?",
         (transcode_status, skip_reason, now, job_id),
     )
+    await db.commit()
+
+
+def _scaled_width(width: int | None, height: int | None, target_height: int) -> int | None:
+    """Width of a downscale output: the encoder runs scale=-2:H (aspect
+    kept, width snapped to the nearest even value), so the same arithmetic
+    on the scanned source dimensions gives the width the file now has.
+    ffmpeg computes av_rescale(H, iw, ih * 2) * 2 (libavfilter/scale_eval.c)
+    and av_rescale rounds to nearest, so this is nearest-even, not round-up.
+    None when the source dimensions were never scanned."""
+    if not width or not height:
+        return None
+    return (width * target_height + height) // (2 * height) * 2
+
+
+async def update_output_by_job(
+    db: DBConnection,
+    job_id: str,
+    *,
+    video_codec: str,
+    file_size: int,
+    target_height: int | None = None,
+) -> None:
+    """Describe the swapped-in output file on the media row queued into a
+    completed job: codec, size and (for downscale jobs) dimensions.
+
+    Only the COMPLETE path calls this. update_status_by_job covers the
+    status, but the codec and size it leaves behind are the last scan's,
+    so a swapped file reads complete|h264 until something re-probes it.
+    S3 rows are left alone: a job never replaces the master object the
+    row describes (the output is a derivative), so the scan's codec and
+    size still hold. A no-op when no catalog row points at the job.
+    """
+    now = datetime.now(UTC).isoformat()
+    swapped = "job_id = ? AND library_id IN (SELECT id FROM libraries WHERE backend != 's3')"
+    if target_height is None:
+        await db.execute(
+            "UPDATE media_files SET video_codec = ?, file_size = ?, updated_at = ?"
+            f" WHERE {swapped}",
+            (video_codec, file_size, now, job_id),
+        )
+        await db.commit()
+        return
+    async with db.execute(
+        f"SELECT id, width, height FROM media_files WHERE {swapped}", (job_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        width = _scaled_width(row["width"], row["height"], target_height)
+        if width is None:
+            # The worker does not report output dimensions and the source
+            # was never measured, so the width is unknown: leave width and
+            # resolution as they are. A later scan will not fill them in
+            # (the swap keeps the mtime and this write records the new
+            # size, so the scanner sees the file as unchanged). This branch
+            # is a guard: the API and the worker both refuse a downscale
+            # when the source height is unknown.
+            await db.execute(
+                "UPDATE media_files SET video_codec = ?, file_size = ?, height = ?,"
+                " updated_at = ? WHERE id = ?",
+                (video_codec, file_size, target_height, now, row["id"]),
+            )
+            continue
+        await db.execute(
+            "UPDATE media_files SET video_codec = ?, file_size = ?, width = ?, height = ?,"
+            " resolution = ?, updated_at = ? WHERE id = ?",
+            (
+                video_codec,
+                file_size,
+                width,
+                target_height,
+                format_resolution(width, target_height),
+                now,
+                row["id"],
+            ),
+        )
     await db.commit()
 
 

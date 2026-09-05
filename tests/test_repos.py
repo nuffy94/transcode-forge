@@ -180,6 +180,156 @@ class TestMediaRepo:
         if media:
             assert media["file_size"] == 2000000 or media["file_size"] == 1000000
 
+    async def _row_by_path(self, db, path: str) -> dict:
+        async with db.execute("SELECT * FROM media_files WHERE file_path = ?", (path,)) as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        return dict(row)
+
+    async def test_upsert_conflict_codec_change_recomputes_status(self, db, test_library):
+        """A rescan that probes a different codec (the swap landed) adopts
+        the freshly computed status: queued|h264 becomes complete|already_hevc.
+        Live: swapped files rescanned to queued|hevc and never healed."""
+        path = "/media/movies/swapped.mkv"
+        file_id = await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="swapped.mkv",
+            video_codec="h264",
+            file_size=1000,
+        )
+        await media_repo.update_media_status(db, file_id, transcode_status="queued", job_id="job-1")
+
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="swapped.mkv",
+            video_codec="hevc",
+            file_size=400,
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["video_codec"] == "hevc"
+        assert row["file_size"] == 400
+        assert row["transcode_status"] == "complete"
+        assert row["skip_reason"] == "already_hevc"
+        assert row["job_id"] == "job-1"  # the drawer link survives the rescan
+
+    async def test_upsert_conflict_same_codec_keeps_status(self, db, test_library):
+        """Same codec on rescan (a same-codec replacement changed size or
+        mtime): the existing status stands, a queued job stays queued."""
+        path = "/media/movies/same.mkv"
+        file_id = await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="same.mkv",
+            video_codec="h264",
+            file_size=1000,
+        )
+        await media_repo.update_media_status(db, file_id, transcode_status="queued", job_id="job-2")
+
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="same.mkv",
+            video_codec="h264",
+            file_size=2000,
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["file_size"] == 2000
+        assert row["transcode_status"] == "queued"
+        assert row["skip_reason"] is None
+
+    async def test_upsert_conflict_same_codec_keeps_skip_reason(self, db, test_library):
+        """A worker-decided skip (VMAF gate) must survive a same-codec rescan;
+        recomputing it would turn the row back into needs_transcode."""
+        path = "/media/movies/gated.mkv"
+        file_id = await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="gated.mkv",
+            video_codec="h264",
+            file_size=1000,
+        )
+        await media_repo.update_media_status(
+            db, file_id, transcode_status="skipped", skip_reason="below_vmaf_floor"
+        )
+
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="gated.mkv",
+            video_codec="h264",
+            file_size=1000,
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["transcode_status"] == "skipped"
+        assert row["skip_reason"] == "below_vmaf_floor"
+
+    async def test_upsert_conflict_null_codec_keeps_status(self, db, test_library):
+        """A probe with no codec says nothing about the file: the existing
+        status and skip_reason stand."""
+        path = "/media/movies/unprobed.mkv"
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="unprobed.mkv",
+            video_codec="hevc",
+            file_size=1000,
+        )
+
+        await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="unprobed.mkv",
+            video_codec=None,
+            file_size=1000,
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["transcode_status"] == "complete"
+        assert row["skip_reason"] == "already_hevc"
+
+    async def test_update_output_by_job_rounds_width_like_ffmpeg(self, db, test_library):
+        """scale=-2:H picks the even width NEAREST the aspect-true one
+        (av_rescale(H, iw, ih * 2) * 2 in libavfilter/scale_eval.c). A
+        1920x1028 source at 720p is 1344.75 wide by aspect: ffmpeg writes
+        1344, round-then-bump-to-even would say 1346."""
+        path = "/media/movies/odd-aspect.mkv"
+        file_id = await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="odd-aspect.mkv",
+            video_codec="h264",
+            resolution="1920x1028",
+            width=1920,
+            height=1028,
+            file_size=1000,
+        )
+        await media_repo.update_media_status(
+            db, file_id, transcode_status="queued", job_id="job-odd"
+        )
+
+        await media_repo.update_output_by_job(
+            db, "job-odd", video_codec="hevc", file_size=400, target_height=720
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["width"] == 1344
+        assert row["height"] == 720
+        assert row["resolution"] == "1344x720"
+
     async def test_get_media_file_found(self, db, test_library):
         """Test retrieving an existing media file."""
         file_id = await media_repo.upsert_media_file(

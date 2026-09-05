@@ -22,7 +22,9 @@ class LibraryCreate(BaseModel):
     # Required for filesystem libraries; derived (s3://bucket/prefix) for S3.
     path: str = ""
     quality_preset: int = Field(default=21, ge=1, le=51)
-    auto_scan: bool = False
+    # Scheduled scans on by default; a library nobody rescans drifts from
+    # disk. Existing rows are untouched: flip them with PUT /api/libraries/{id}.
+    auto_scan: bool = True
     scan_interval_hours: int = Field(default=24, ge=1)
     backend: StorageBackendType = StorageBackendType.FILESYSTEM
     s3_bucket: str | None = Field(default=None, max_length=63)

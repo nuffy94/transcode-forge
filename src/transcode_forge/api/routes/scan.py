@@ -44,7 +44,9 @@ async def trigger_scan(
     db_libs = await lib_repo.list_libraries(db, enabled_only=True)
 
     if not db_libs:
-        # Seed libraries from config on first scan
+        # Seed libraries from config on first scan. Scheduled scans on by
+        # default: without them the catalog only ever reflects this one
+        # manual scan (live: no scan since 2026-05-05, both rows auto_scan=0).
         config_libs = settings.libraries
         for name, (path, quality) in config_libs.items():
             media_type = name  # movies, tv, anime map directly
@@ -54,6 +56,7 @@ async def trigger_scan(
                 media_type=media_type,
                 path=path,
                 quality_preset=quality,
+                auto_scan=True,
             )
         db_libs = await lib_repo.list_libraries(db, enabled_only=True)
 
