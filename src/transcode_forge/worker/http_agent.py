@@ -64,6 +64,10 @@ SHUTDOWN_ABORT_MESSAGE = "Aborted by worker shutdown"
 # abort the second shutdown signal performs, then keeps heartbeating and
 # claims again once the scheduler answers.
 FENCE_MARGIN_SECONDS = 120.0
+# One heartbeat attempt takes up to heartbeat_interval plus the client's
+# request timeout (WorkerHttpClient default) to fail, so the fence can
+# fire that late after the threshold. The margin must cover it.
+HEARTBEAT_REQUEST_TIMEOUT_SECONDS = 30.0
 # The grace a scheduler predating the register field enforces.
 DEFAULT_ORPHAN_GRACE_SECONDS = 600.0
 
@@ -73,7 +77,7 @@ def fence_after_seconds(registration: dict[str, Any]) -> float:
     in-flight job, from the grace the scheduler advertised at /register
     (absent on older schedulers: the pre-field default applies)."""
     grace = float(registration.get("orphan_grace_seconds", DEFAULT_ORPHAN_GRACE_SECONDS))
-    return grace - FENCE_MARGIN_SECONDS
+    return max(0.0, grace - FENCE_MARGIN_SECONDS)
 
 
 # Poison parking: a report the scheduler PERSISTENTLY refuses with a
@@ -174,6 +178,16 @@ class HttpWorkerAgent:
             self.worker_id,
             self._fence_after_seconds,
         )
+        slowest_attempt = self.settings.heartbeat_interval + HEARTBEAT_REQUEST_TIMEOUT_SECONDS
+        if slowest_attempt > FENCE_MARGIN_SECONDS:
+            logger.warning(
+                "TF_HEARTBEAT_INTERVAL=%d s plus the %d s request timeout exceeds the %d s "
+                "fence margin: the self-fence can fire after the scheduler has already "
+                "requeued the job. Lower the interval.",
+                self.settings.heartbeat_interval,
+                HEARTBEAT_REQUEST_TIMEOUT_SECONDS,
+                FENCE_MARGIN_SECONDS,
+            )
 
         # Crash recovery (filesystem backend only): a power loss inside the
         # pipeline's SWAP window leaves the original hidden as .tf_bak with a
@@ -223,8 +237,13 @@ class HttpWorkerAgent:
         2nd aborts the in-flight encode ORDERLY (ffmpeg killed, job reported,
         loops exit), 3rd force-exits. The old two-stage version raised
         SystemExit straight out of the signal callback, which tore the event
-        loop down around a still-running ffmpeg — the 2026-07-06 orphan."""
-        if self._abort_requested:
+        loop down around a still-running ffmpeg (the 2026-07-06 orphan).
+        Rung 3 needs BOTH flags: the partition fence also sets
+        _abort_requested, and one signal during a fence must drain, not
+        force-exit. While a fence abort is in flight the second signal
+        therefore lands on rung 3, since rung 2 would only re-cancel a task
+        that is already cancelling."""
+        if self._shutting_down and self._abort_requested:
             logger.warning("Force shutdown")
             raise SystemExit(1)
         if self._shutting_down:
@@ -275,6 +294,14 @@ class HttpWorkerAgent:
                 # a delivery merely delayed by an outage must not read as
                 # abandonment, or the sweep would re-run finished work.
                 named_job = self._current_job_id or self.outbox.oldest_pending_job_id()
+            except Exception:
+                # A worker-state read failed (a stale state-dir mount). That
+                # is not lost contact with the scheduler, so it never counts
+                # toward the fence.
+                logger.exception("Heartbeat skipped: could not read worker state")
+                await asyncio.sleep(self.settings.heartbeat_interval)
+                continue
+            try:
                 await self._client.heartbeat(
                     worker_id=self.worker_id,
                     status=status,
@@ -620,7 +647,7 @@ class HttpWorkerAgent:
         except asyncio.CancelledError:
             # Deliberate abort (second shutdown signal, or the partition
             # self-fence): the encoder's managed subprocess has already
-            # killed its ffmpeg tree — report the job so it doesn't strand
+            # killed its ffmpeg tree. Report the job so it doesn't strand
             # in 'transcoding', then return so the job loop can go on (or
             # exit orderly on shutdown). Cancellation we did NOT request
             # (event-loop teardown) must keep propagating.
@@ -639,7 +666,7 @@ class HttpWorkerAgent:
                         "failed",
                         {
                             "error_message": self._abort_message,
-                            # An abort is not the file's fault —
+                            # An abort is not the file's fault:
                             # never burn a retry on it.
                             "retry_count": job.retry_count,
                         },

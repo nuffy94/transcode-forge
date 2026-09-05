@@ -596,7 +596,9 @@ def _recover_backups_under(
         tmp = original.with_name(original.stem + TMP_SUFFIX + original.suffix)
 
         if lock.exists() and _lock_is_active(lock, worker_id=worker_id, stale_after=stale_after):
-            logger.info("[RECOVERY] %s: lock held by another live worker — leaving it alone", bak)
+            logger.info(
+                "[RECOVERY] %s: another worker's lock is still fresh, leaving it alone", bak
+            )
             stats["skipped_active"] += 1
             continue
 
@@ -647,7 +649,7 @@ def _remove_stale_locks_under(
             # Another worker is (or recently was) mid-pipeline here. Counted
             # by the backups pass when a .tf_bak is involved — don't double
             # count, just leave the lock in place.
-            logger.info("[RECOVERY] %s: held by another live worker — leaving it", lock)
+            logger.info("[RECOVERY] %s: another worker's lock is still fresh, leaving it", lock)
             continue
         original = lock.with_name(lock.name.removesuffix(LOCK_SUFFIX))
         tmp = original.with_name(original.stem + TMP_SUFFIX + original.suffix)

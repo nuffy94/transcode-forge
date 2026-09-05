@@ -494,6 +494,39 @@ class TestPartitionFence:
         fence.assert_not_called()
         assert agent._client.heartbeat.await_count > 3
 
+    async def test_one_signal_during_a_fence_drains_instead_of_force_exiting(self, test_settings):
+        """The fence sets _abort_requested with no shutdown in progress. A
+        single SIGTERM in that window must land on rung 1 (drain), not on
+        rung 3; the second signal then force-exits as documented."""
+        agent = _agent(test_settings)
+        agent._abort_current_job("Aborted: lost contact with the scheduler for 480 s")
+        agent._handle_shutdown()
+        assert agent._shutting_down is True
+        with pytest.raises(SystemExit):
+            agent._handle_shutdown()
+
+    async def test_worker_state_read_error_skips_the_beat_and_keeps_the_loop(self, test_settings):
+        """A failing outbox read (a stale state-dir mount) is not lost
+        contact with the scheduler. The beat is skipped, the loop keeps
+        running, and the fence is untouched. The outbox is only consulted
+        while no job is in flight, so this can never abort an encode."""
+        agent = _agent(test_settings)
+        agent._fence_after_seconds = 0.0
+        agent._current_job_id = None
+        agent._client.heartbeat = AsyncMock()
+
+        def broken_outbox_read() -> str | None:
+            raise OSError("state dir mount gone")
+
+        agent.outbox.oldest_pending_job_id = broken_outbox_read  # type: ignore[method-assign]
+        with (
+            patch.object(agent, "_abort_current_job") as fence,
+            patch("transcode_forge.worker.http_agent.asyncio.sleep", new=_fast_sleep),
+        ):
+            await _run_heartbeats_for(agent, 0.1)
+        fence.assert_not_called()
+        agent._client.heartbeat.assert_not_awaited()
+
     async def test_no_fence_without_a_job_in_flight(self, test_settings):
         agent = _agent(test_settings)
         agent._fence_after_seconds = 0.02

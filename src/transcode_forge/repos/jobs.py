@@ -363,6 +363,12 @@ async def requeue_orphan_active_jobs(
     return [dict(r) for r in rows]
 
 
+# Seconds of silence (no progress report) before a dead, offline or
+# missing worker's active job is requeued by main._orphan_requeue_loop.
+# Advertised to workers at /register as orphan_grace_seconds so a
+# partitioned worker can fence its own job before this expires.
+ORPHAN_REQUEUE_GRACE_SECONDS = 600
+
 # The reconciliation grace (worker-resilience spec D3): how long a LIVE
 # worker must have been heartbeating a different (or no) job before an
 # active job assigned to it counts as abandoned. The spec floor is 3
@@ -370,11 +376,6 @@ async def requeue_orphan_active_jobs(
 # dead-worker 600s is safe here — the evidence is a live worker actively
 # denying the job every ~10s, not mere silence. Shared by the requeue
 # sweep (main.py) and the audit report so they never disagree.
-# Seconds of silence (no progress report) before a dead, offline or
-# missing worker's active job is requeued by main._orphan_requeue_loop.
-# Advertised to workers at /register as orphan_grace_seconds so a
-# partitioned worker can fence its own job before this expires.
-ORPHAN_REQUEUE_GRACE_SECONDS = 600
 ABANDONED_GRACE_SECONDS = 120
 
 # The sustained-mismatch condition, shared verbatim by the find/requeue

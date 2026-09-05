@@ -213,7 +213,7 @@ class TestStaleWindow:
         the pipeline must heartbeat on the SAME cadence the recovery scans
         measure against. One source of truth, checked here so nobody can
         tune them apart."""
-        assert RECOVERY_STALE_LOCK_SECONDS >= 2 * LOCK_TOUCH_INTERVAL
+        assert RECOVERY_STALE_LOCK_SECONDS == 3 * LOCK_TOUCH_INTERVAL
         assert pipeline.LOCK_TOUCH_INTERVAL == LOCK_TOUCH_INTERVAL
         # find_stale_locks reports against the same window.
         import inspect
