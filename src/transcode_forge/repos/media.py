@@ -310,13 +310,14 @@ async def update_status_by_job(
 
 def _scaled_width(width: int | None, height: int | None, target_height: int) -> int | None:
     """Width of a downscale output: the encoder runs scale=-2:H (aspect
-    kept, width rounded up to even), so the same arithmetic on the scanned
-    source dimensions gives the width the file now has. None when the
-    source dimensions were never scanned."""
+    kept, width snapped to the nearest even value), so the same arithmetic
+    on the scanned source dimensions gives the width the file now has.
+    ffmpeg computes av_rescale(H, iw, ih * 2) * 2 (libavfilter/scale_eval.c)
+    and av_rescale rounds to nearest, so this is nearest-even, not round-up.
+    None when the source dimensions were never scanned."""
     if not width or not height:
         return None
-    scaled = round(width * target_height / height)
-    return scaled + (scaled % 2)
+    return (width * target_height + height) // (2 * height) * 2
 
 
 async def update_output_by_job(

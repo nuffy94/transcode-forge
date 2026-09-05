@@ -199,9 +199,7 @@ class TestMediaRepo:
             video_codec="h264",
             file_size=1000,
         )
-        await media_repo.update_media_status(
-            db, file_id, transcode_status="queued", job_id="job-1"
-        )
+        await media_repo.update_media_status(db, file_id, transcode_status="queued", job_id="job-1")
 
         await media_repo.upsert_media_file(
             db,
@@ -231,9 +229,7 @@ class TestMediaRepo:
             video_codec="h264",
             file_size=1000,
         )
-        await media_repo.update_media_status(
-            db, file_id, transcode_status="queued", job_id="job-2"
-        )
+        await media_repo.update_media_status(db, file_id, transcode_status="queued", job_id="job-2")
 
         await media_repo.upsert_media_file(
             db,
@@ -303,6 +299,36 @@ class TestMediaRepo:
         row = await self._row_by_path(db, path)
         assert row["transcode_status"] == "complete"
         assert row["skip_reason"] == "already_hevc"
+
+    async def test_update_output_by_job_rounds_width_like_ffmpeg(self, db, test_library):
+        """scale=-2:H picks the even width NEAREST the aspect-true one
+        (av_rescale(H, iw, ih * 2) * 2 in libavfilter/scale_eval.c). A
+        1920x1028 source at 720p is 1344.75 wide by aspect: ffmpeg writes
+        1344, round-then-bump-to-even would say 1346."""
+        path = "/media/movies/odd-aspect.mkv"
+        file_id = await media_repo.upsert_media_file(
+            db,
+            library_id=test_library,
+            file_path=path,
+            filename="odd-aspect.mkv",
+            video_codec="h264",
+            resolution="1920x1028",
+            width=1920,
+            height=1028,
+            file_size=1000,
+        )
+        await media_repo.update_media_status(
+            db, file_id, transcode_status="queued", job_id="job-odd"
+        )
+
+        await media_repo.update_output_by_job(
+            db, "job-odd", video_codec="hevc", file_size=400, target_height=720
+        )
+
+        row = await self._row_by_path(db, path)
+        assert row["width"] == 1344
+        assert row["height"] == 720
+        assert row["resolution"] == "1344x720"
 
     async def test_get_media_file_found(self, db, test_library):
         """Test retrieving an existing media file."""
