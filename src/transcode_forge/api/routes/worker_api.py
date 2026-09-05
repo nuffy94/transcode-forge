@@ -613,6 +613,8 @@ async def complete_job(
             # The swap replaced the file: the row must describe the output
             # (codec, size, downscaled dimensions), not the last scan, or
             # it reads complete|h264 until the next rescan re-probes it.
+            # Filesystem rows only: the repo skips S3 masters, which a job
+            # never replaces.
             await media_repo.update_output_by_job(
                 tx,
                 job_id,

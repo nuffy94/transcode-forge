@@ -333,19 +333,22 @@ async def update_output_by_job(
     Only the COMPLETE path calls this. update_status_by_job covers the
     status, but the codec and size it leaves behind are the last scan's,
     so a swapped file reads complete|h264 until something re-probes it.
-    A no-op when no catalog row points at the job.
+    S3 rows are left alone: a job never replaces the master object the
+    row describes (the output is a derivative), so the scan's codec and
+    size still hold. A no-op when no catalog row points at the job.
     """
     now = datetime.now(UTC).isoformat()
+    swapped = "job_id = ? AND library_id IN (SELECT id FROM libraries WHERE backend != 's3')"
     if target_height is None:
         await db.execute(
             "UPDATE media_files SET video_codec = ?, file_size = ?, updated_at = ?"
-            " WHERE job_id = ?",
+            f" WHERE {swapped}",
             (video_codec, file_size, now, job_id),
         )
         await db.commit()
         return
     async with db.execute(
-        "SELECT id, width, height FROM media_files WHERE job_id = ?", (job_id,)
+        f"SELECT id, width, height FROM media_files WHERE {swapped}", (job_id,)
     ) as cur:
         rows = await cur.fetchall()
     for row in rows:
