@@ -56,6 +56,18 @@ class TestLibrariesEndpoint:
         second = await client.post("/api/libraries", json={**body, "name": "Lib B"})
         assert second.status_code == 409
 
+    async def test_create_defaults_to_scheduled_scans(self, client: AsyncClient):
+        """A library created without an auto_scan value is scanned on the
+        24 h schedule. Live: both production libraries sat at auto_scan=0
+        and no scan had run since 2026-05-05."""
+        resp = await client.post(
+            "/api/libraries", json={"name": "Lib", "media_type": "movies", "path": "/tmp/lib-auto"}
+        )
+        assert resp.status_code == 201
+        lib = resp.json()["data"]
+        assert bool(lib["auto_scan"]) is True
+        assert lib["scan_interval_hours"] == 24
+
     async def test_create_filesystem_requires_path(self, client: AsyncClient):
         resp = await client.post("/api/libraries", json={"name": "Lib", "media_type": "movies"})
         assert resp.status_code == 422
@@ -366,6 +378,23 @@ class TestScanEndpoint:
         assert response.status_code == 202
         data = response.json()
         assert len(data["scan_ids"]) == 3
+
+    async def test_config_seeded_libraries_are_scheduled(self, client: AsyncClient, tmp_path):
+        """The first scan turns TF_LIBRARY_* into library rows; those rows
+        must be on the 24 h scan schedule, or the catalog only ever reflects
+        the one manual scan that created it."""
+        (tmp_path / "movies").mkdir(exist_ok=True)
+        (tmp_path / "tv").mkdir(exist_ok=True)
+        (tmp_path / "anime").mkdir(exist_ok=True)
+
+        response = await client.post("/api/scan", json={})
+        assert response.status_code == 202
+
+        libs = (await client.get("/api/libraries")).json()["data"]
+        assert len(libs) == 3
+        for lib in libs:
+            assert bool(lib["auto_scan"]) is True, lib["name"]
+            assert lib["scan_interval_hours"] == 24
 
     async def test_trigger_scan_unknown_library(self, client: AsyncClient):
         response = await client.post("/api/scan", json={"library": "nonexistent"})
