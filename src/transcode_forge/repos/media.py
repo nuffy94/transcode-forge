@@ -42,7 +42,11 @@ async def upsert_media_file(
     now = datetime.now(UTC).isoformat()
     file_id = str(uuid4())
 
-    # Determine initial transcode status based on codec
+    # Determine initial transcode status based on codec. On a rescan of a
+    # known path the ON CONFLICT clause adopts these only when the probed
+    # codec changed (the swap landed); the same codec or a NULL probe keeps
+    # the existing status and skip_reason, so a queued job stays queued and
+    # a VMAF-gate skip survives.
     status = "pending"
     skip_reason = None
     if video_codec == "hevc":
@@ -71,6 +75,16 @@ async def upsert_media_file(
             bitrate = excluded.bitrate,
             duration = excluded.duration,
             file_size = excluded.file_size,
+            transcode_status = CASE
+                WHEN excluded.video_codec IS NULL
+                    OR excluded.video_codec = media_files.video_codec
+                THEN media_files.transcode_status
+                ELSE excluded.transcode_status END,
+            skip_reason = CASE
+                WHEN excluded.video_codec IS NULL
+                    OR excluded.video_codec = media_files.video_codec
+                THEN media_files.skip_reason
+                ELSE excluded.skip_reason END,
             file_modified_at = excluded.file_modified_at,
             scanned_at = excluded.scanned_at,
             updated_at = excluded.updated_at
