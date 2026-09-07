@@ -11,7 +11,7 @@ import random
 from datetime import UTC, datetime
 
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import Job, JobStatus
+from transcode_forge.models.job import TERMINAL_JOB_STATUSES, Job, JobStatus
 from transcode_forge.models.scan import Scan, ScanStatus
 from transcode_forge.models.worker import WorkerStatus
 from transcode_forge.repos import jobs as job_repo
@@ -116,12 +116,7 @@ async def _tick(db: DBConnection) -> None:
                         progress=round(new_progress, 3),
                     )
 
-            elif job.status in (
-                JobStatus.COMPLETE,
-                JobStatus.FAILED,
-                JobStatus.SKIPPED,
-                JobStatus.CANCELLED,
-            ):
+            elif job.status in TERMINAL_JOB_STATUSES:
                 # Job is done — release the worker
                 await worker_repo.update_worker_heartbeat(
                     db,

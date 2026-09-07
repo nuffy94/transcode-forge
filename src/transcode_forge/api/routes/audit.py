@@ -22,7 +22,7 @@ router = APIRouter(tags=["audit"])
 async def integrity_check(db: DBConnection = Depends(get_db)) -> dict[str, Any]:
     """Run integrity invariants. Empty job lists mean clean.
 
-    Each orphan is a job claiming `transcoding`/`assigned`/`verifying`
+    Each orphan is a job claiming `transcoding` or `assigned`
     whose `worker_id` references a worker that is dead, offline, or
     no longer in the workers table at all. Each abandoned job's worker
     is ALIVE but has been heartbeating a different (or no) job past the

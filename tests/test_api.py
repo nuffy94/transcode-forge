@@ -1,9 +1,10 @@
 """Integration tests for REST API endpoints."""
 
+import pytest
 from httpx import AsyncClient
 
 from transcode_forge import __version__
-from transcode_forge.models.job import Job, JobStatus
+from transcode_forge.models.job import ACTIVE_JOB_STATUSES, Job, JobStatus
 from transcode_forge.models.skipped import SkipReason
 from transcode_forge.models.worker import Worker
 from transcode_forge.repos import jobs as job_repo
@@ -325,9 +326,15 @@ class TestWorkersEndpoint:
         check = await client.get(f"/api/workers/{worker.id}")
         assert check.status_code == 200
 
-    async def test_delete_worker_with_active_job_rejected(self, client: AsyncClient, app):
-        """A worker that owns an active job must not be deletable —
-        even if its heartbeat is stale. Orphan-job audit must run first."""
+    @pytest.mark.parametrize("status", ACTIVE_JOB_STATUSES)
+    async def test_delete_worker_with_active_job_rejected(
+        self, client: AsyncClient, app, status: str
+    ):
+        """A worker that owns a job in ANY running status must not be
+        deletable, even with a stale heartbeat: the orphan sweep must
+        clear the job first. Ledger R-016: the gate counted transcoding
+        but not assigned, so a worker deleted mid-claim left its job
+        pointing at a worker row that no longer existed."""
         db = app.state.db
         worker = Worker(name="stuck", host="h", capabilities=["cpu"])
         await worker_repo.upsert_worker(db, worker)
@@ -344,7 +351,7 @@ class TestWorkersEndpoint:
             source_codec="h264",
             source_size=1000,
             quality_value=24,
-            status=JobStatus.TRANSCODING,
+            status=JobStatus(status),
         )
         await job_repo.create_job(db, job)
         await job_repo.update_job(db, job.id, worker_id=worker.id)

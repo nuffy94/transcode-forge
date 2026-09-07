@@ -14,6 +14,11 @@ class WorkerStatus(StrEnum):
     DEAD = "dead"
 
 
+# Defined once, like the job sets in models/job.py (same guard test).
+ALIVE_WORKER_STATUSES: tuple[str, ...] = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+"""Heartbeating. A job owned by a worker in any other status is an orphan."""
+
+
 class Worker(BaseModel):
     """A registered transcode worker node."""
 

@@ -64,7 +64,7 @@
                 {{ station_bar(job, pct, show_copy=false) }}
                 {% elif job.status == 'complete' %}
                 <span class="font-mono text-2xs text-forge-oxide uppercase tracking-stamp">Done{% if job.savings_percent %} · −{{ job.savings_percent|round(0)|int }}%{% endif %}</span>
-                {% elif job.status in ('pending', 'queued') %}
+                {% elif job.status in waiting_job_statuses %}
                     {% if online_codecs and (job.target_codec or 'hevc') not in online_codecs %}
                     <span class="font-mono text-2xs italic uppercase tracking-stamp text-forge-brass" title="No online worker advertises {{ (job.target_codec or 'hevc')|upper }}. The job waits until one joins.">Needs {{ (job.target_codec or 'hevc')|upper }}-capable worker</span>
                     {% elif online_codecs and job.target_height and not downscale_online %}
@@ -101,7 +101,7 @@
                         {{ icon('refresh', 'forge-icon--sm') }}
                     </button>
                     {% endif %}
-                    {% if job.status in ['pending', 'queued', 'transcoding'] %}
+                    {% if job.status in waiting_job_statuses %}
                     <button class="forge-iconbtn forge-iconbtn--danger"
                             title="Cancel job"
                             aria-label="Cancel job"

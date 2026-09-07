@@ -8,15 +8,40 @@ from pydantic import BaseModel, Field, computed_field
 
 
 class JobStatus(StrEnum):
+    """Where a job is in its life. VERIFYING was retired 2026-09-07: no
+    code ever set it (the decode check is the VERIFY phase of a
+    TRANSCODING job, see JobPhase), and jobs.status is TEXT, so no row
+    could carry it and no migration was needed."""
+
     PENDING = "pending"
     QUEUED = "queued"
     ASSIGNED = "assigned"
     TRANSCODING = "transcoding"
-    VERIFYING = "verifying"
     COMPLETE = "complete"
     FAILED = "failed"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+
+
+# The three things a job can be doing, defined once. Every SQL placeholder
+# list, membership test and template branch builds from these; nothing
+# else in src/ may spell a set out (tests/test_job_status_vocabulary.py
+# fails on any inline copy). They partition the enum: a new status goes
+# in exactly one, and the same test fails until it does. Values rather
+# than members because they go straight into SQL parameters.
+WAITING_JOB_STATUSES: tuple[str, ...] = (JobStatus.PENDING.value, JobStatus.QUEUED.value)
+"""Waiting for a worker to claim it."""
+
+ACTIVE_JOB_STATUSES: tuple[str, ...] = (JobStatus.ASSIGNED.value, JobStatus.TRANSCODING.value)
+"""Owned by a worker: the only jobs that can be orphaned, abandoned or released."""
+
+TERMINAL_JOB_STATUSES: tuple[str, ...] = (
+    JobStatus.COMPLETE.value,
+    JobStatus.SKIPPED.value,
+    JobStatus.FAILED.value,
+    JobStatus.CANCELLED.value,
+)
+"""Finished. A terminal job never changes status again (finalize_job's fence)."""
 
 
 class TargetCodec(StrEnum):

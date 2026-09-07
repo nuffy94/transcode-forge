@@ -5,8 +5,14 @@ from datetime import UTC, datetime, timedelta
 import aiosqlite
 
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import Job, JobStatus
-from transcode_forge.models.worker import WorkerStatus
+from transcode_forge.models.job import (
+    ACTIVE_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+    WAITING_JOB_STATUSES,
+    Job,
+    JobStatus,
+)
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 
 # Valid job statuses for filtering (whitelist validation)
 _VALID_JOB_STATUSES = frozenset(status.value for status in JobStatus)
@@ -215,14 +221,6 @@ async def update_job(db: DBConnection, job_id: str, **fields: object) -> Job | N
     return await get_job(db, job_id)
 
 
-_TERMINAL_JOB_STATUSES = (
-    JobStatus.COMPLETE.value,
-    JobStatus.SKIPPED.value,
-    JobStatus.FAILED.value,
-    JobStatus.CANCELLED.value,
-)
-
-
 async def finalize_job(
     db: DBConnection, job_id: str, worker_id: str, status: JobStatus, **fields: object
 ) -> bool:
@@ -243,12 +241,12 @@ async def finalize_job(
     fields["updated_at"] = datetime.now(UTC).isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = [v.value if isinstance(v, JobStatus) else v for v in fields.values()]
-    placeholders_terminal = ",".join("?" * len(_TERMINAL_JOB_STATUSES))
+    placeholders_terminal = ",".join("?" * len(TERMINAL_JOB_STATUSES))
     cur = await db.execute(
         f"UPDATE jobs SET status = ?, {set_clause}"
         " WHERE id = ? AND worker_id = ?"
         f" AND status NOT IN ({placeholders_terminal})",
-        [status.value, *values, job_id, worker_id, *_TERMINAL_JOB_STATUSES],
+        [status.value, *values, job_id, worker_id, *TERMINAL_JOB_STATUSES],
     )
     await db.commit()
     return bool(cur.rowcount)
@@ -258,12 +256,13 @@ async def count_queued_jobs(db: DBConnection) -> int:
     """Count jobs waiting for a worker to claim them.
 
     Single source of truth for the dashboard tile, sidebar badge, and
-    scheduler-info card. If the definition of "in the queue" changes,
-    update it here and every view follows.
+    scheduler-info card. "In the queue" means WAITING_JOB_STATUSES;
+    every view follows that one definition.
     """
+    placeholders = ",".join("?" * len(WAITING_JOB_STATUSES))
     async with db.execute(
-        "SELECT COUNT(*) FROM jobs WHERE status IN (?, ?)",
-        (JobStatus.PENDING.value, JobStatus.QUEUED.value),
+        f"SELECT COUNT(*) FROM jobs WHERE status IN ({placeholders})",
+        WAITING_JOB_STATUSES,
     ) as cur:
         row = await cur.fetchone()
         return row[0] if row else 0
@@ -276,12 +275,8 @@ async def find_orphan_active_jobs(db: DBConnection) -> list[dict[str, object]]:
     their job — the dashboard renders them as live but no progress
     will ever happen. The auto-recovery path is to re-queue them.
     """
-    active = (
-        JobStatus.TRANSCODING.value,
-        JobStatus.ASSIGNED.value,
-        JobStatus.VERIFYING.value,
-    )
-    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    active = ACTIVE_JOB_STATUSES
+    alive = ALIVE_WORKER_STATUSES
     placeholders_active = ",".join("?" * len(active))
     placeholders_alive = ",".join("?" * len(alive))
     query = (
@@ -323,12 +318,8 @@ async def requeue_orphan_active_jobs(
     the duplication, a job completing at the exact moment of the sweep could
     be stomped back to QUEUED.
     """
-    active = (
-        JobStatus.TRANSCODING.value,
-        JobStatus.ASSIGNED.value,
-        JobStatus.VERIFYING.value,
-    )
-    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    active = ACTIVE_JOB_STATUSES
+    alive = ALIVE_WORKER_STATUSES
     now = datetime.now(UTC)
     cutoff = (now - timedelta(seconds=min_idle_seconds)).isoformat()
     placeholders_active = ",".join("?" * len(active))
@@ -406,12 +397,8 @@ async def find_abandoned_active_jobs(
     own heartbeat demonstrably disowns the job, yet the job renders as
     live and the dead-worker sweep will never touch it.
     """
-    active = (
-        JobStatus.TRANSCODING.value,
-        JobStatus.ASSIGNED.value,
-        JobStatus.VERIFYING.value,
-    )
-    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    active = ACTIVE_JOB_STATUSES
+    alive = ALIVE_WORKER_STATUSES
     cutoff = (datetime.now(UTC) - timedelta(seconds=grace_seconds)).isoformat()
     condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
     query = (
@@ -446,12 +433,8 @@ async def requeue_abandoned_active_jobs(
     old worker's late reports 403 (ownership moved) and the .tf_lock
     keeps the file safe — and it self-heals via re-claim.
     """
-    active = (
-        JobStatus.TRANSCODING.value,
-        JobStatus.ASSIGNED.value,
-        JobStatus.VERIFYING.value,
-    )
-    alive = (WorkerStatus.ONLINE.value, WorkerStatus.BUSY.value)
+    active = ACTIVE_JOB_STATUSES
+    alive = ALIVE_WORKER_STATUSES
     now = datetime.now(UTC)
     cutoff = (now - timedelta(seconds=grace_seconds)).isoformat()
     placeholders_active = ",".join("?" * len(active))
@@ -510,12 +493,13 @@ async def claim_next_job(
     now = datetime.now(UTC).isoformat()
     lock_clause = " FOR UPDATE SKIP LOCKED" if db.dialect == "postgres" else ""
     codec_placeholders = ",".join("?" * len(codecs))
+    waiting_placeholders = ",".join("?" * len(WAITING_JOB_STATUSES))
     downscale_clause = "" if supports_downscale else " AND target_height IS NULL"
     sql = f"""UPDATE jobs
         SET status = ?, worker_id = ?, started_at = ?, updated_at = ?
         WHERE id = (
             SELECT id FROM jobs
-            WHERE status IN (?, ?)
+            WHERE status IN ({waiting_placeholders})
               AND target_codec IN ({codec_placeholders}){downscale_clause}
             ORDER BY created_at ASC
             LIMIT 1{lock_clause}
@@ -528,8 +512,7 @@ async def claim_next_job(
             worker_id,
             now,
             now,
-            JobStatus.PENDING.value,
-            JobStatus.QUEUED.value,
+            *WAITING_JOB_STATUSES,
             *codecs,
         ),
     ) as cur:

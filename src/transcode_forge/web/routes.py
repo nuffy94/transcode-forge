@@ -13,6 +13,8 @@ from redis.asyncio import Redis
 from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
 from transcode_forge.db import DBConnection, check_db_health
+from transcode_forge.models.job import ACTIVE_JOB_STATUSES, WAITING_JOB_STATUSES
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 from transcode_forge.redis import check_redis_health
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
@@ -28,6 +30,11 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 # Make the app version available to every template (e.g. the sidebar badge).
 templates.env.globals["app_version"] = __version__
+# The status vocabularies, so no template spells a set out by hand
+# (tests/test_job_status_vocabulary.py fails if one does).
+templates.env.globals["waiting_job_statuses"] = WAITING_JOB_STATUSES
+templates.env.globals["active_job_statuses"] = ACTIVE_JOB_STATUSES
+templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`
 # fails to COMPILE (TemplateSyntaxError) — which 500'd /partials/schedules
@@ -213,7 +220,10 @@ async def dashboard_stats_partial(
 
     queued = await job_repo.count_queued_jobs(db)
 
-    async with db.execute("SELECT COUNT(*) FROM workers WHERE status IN ('online','busy')") as cur:
+    alive = ",".join("?" * len(ALIVE_WORKER_STATUSES))
+    async with db.execute(
+        f"SELECT COUNT(*) FROM workers WHERE status IN ({alive})", ALIVE_WORKER_STATUSES
+    ) as cur:
         row = await cur.fetchone()
         workers_online = row[0] if row else 0
 
@@ -246,7 +256,7 @@ async def active_transcodes_partial(
     request: Request,
     db: DBConnection = Depends(get_db),
 ) -> Response:
-    jobs, _ = await job_repo.list_jobs(db, status="transcoding,assigned,verifying", limit=10)
+    jobs, _ = await job_repo.list_jobs(db, status=",".join(ACTIVE_JOB_STATUSES), limit=10)
     return _render(
         request,
         "partials/active_transcodes.html",
@@ -312,7 +322,7 @@ async def jobs_partial(
     downscale_online = False
     workers_list = await worker_repo.list_workers(db)
     for w in workers_list:
-        if w.status in ("online", "busy"):
+        if w.status in ALIVE_WORKER_STATUSES:
             online_codecs.update(w.supported_codecs)
             downscale_online = downscale_online or w.supports_downscale
     return _render(

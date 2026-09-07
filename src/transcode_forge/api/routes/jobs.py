@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import JobStatus
+from transcode_forge.models.job import WAITING_JOB_STATUSES, JobStatus
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
@@ -110,7 +110,7 @@ async def cancel_job(
     job = await job_repo.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in (JobStatus.PENDING, JobStatus.QUEUED):
+    if job.status not in WAITING_JOB_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{job.status}'")
 
     updated = await job_repo.update_job(db, job_id, status=JobStatus.CANCELLED)
@@ -146,17 +146,17 @@ async def cancel_all_pending(
 ) -> dict[str, Any]:
     """Cancel all pending and queued jobs."""
     now = datetime.now(UTC).isoformat()
+    waiting = ",".join("?" * len(WAITING_JOB_STATUSES))
     # Catalog rows first, while the jobs still match the status filter.
     await db.execute(
         "UPDATE media_files SET transcode_status = 'needs_transcode',"
         " skip_reason = NULL, updated_at = ? WHERE job_id IN"
-        " (SELECT id FROM jobs WHERE status IN ('pending', 'queued'))",
-        (now,),
+        f" (SELECT id FROM jobs WHERE status IN ({waiting}))",
+        (now, *WAITING_JOB_STATUSES),
     )
     cur = await db.execute(
-        "UPDATE jobs SET status = 'cancelled', updated_at = ?"
-        " WHERE status IN ('pending', 'queued')",
-        (now,),
+        f"UPDATE jobs SET status = ?, updated_at = ? WHERE status IN ({waiting})",
+        (JobStatus.CANCELLED.value, now, *WAITING_JOB_STATUSES),
     )
     await db.commit()
     _toast(response, "All pending jobs cancelled", "warning")

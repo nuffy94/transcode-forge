@@ -137,7 +137,7 @@
             <tr>
                 <td>
                     <span class="flex items-center gap-2.5">
-                        {% if w.status in ['online', 'busy'] %}
+                        {% if w.status in alive_worker_statuses %}
                         <span class="forge-dot forge-dot--on"></span>
                         {% elif w.status == 'dead' %}
                         <span class="forge-dot forge-dot--err"></span>
@@ -149,7 +149,7 @@
                 </td>
                 <td class="col-mono text-right text-forge-paper font-semibold">{{ stats.jobs_by_worker.get(w.id, 0) }}</td>
                 <td>
-                    {% if w.status in ['online', 'busy'] %}
+                    {% if w.status in alive_worker_statuses %}
                     <span class="forge-pill forge-pill--complete">{{ w.status }}</span>
                     {% elif w.status == 'dead' %}
                     <span class="forge-pill forge-pill--failed">offline</span>
