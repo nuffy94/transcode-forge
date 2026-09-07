@@ -13,6 +13,8 @@ import logging
 import platform
 from dataclasses import dataclass
 
+from transcode_forge.worker.proc import managed_subprocess
+
 logger = logging.getLogger(__name__)
 
 # codec → backend → ffmpeg encoder name. The detection matrix mirrors
@@ -71,14 +73,14 @@ class HardwareCapabilities:
 async def _run_probe(cmd: list[str], timeout: float = 10.0) -> tuple[int, str]:
     """Run a command and return (returncode, combined output)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
+        async with managed_subprocess(
             *cmd,
+            timeout=timeout,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        output = stdout.decode() + stderr.decode()
-        return proc.returncode or 0, output
+        ) as child:
+            stdout, stderr = await child.proc.communicate()
+        return child.proc.returncode or 0, stdout.decode() + stderr.decode()
     except TimeoutError:
         return 1, "timeout"
     except FileNotFoundError:

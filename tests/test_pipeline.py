@@ -715,3 +715,33 @@ class TestUnmuxableSubtitleWiring:
                 )
         assert "-0:s:2" in captured["cmd"]
         assert "Dropping unmuxable subtitle stream" in caplog.text
+
+
+class TestDecodeCheckDeadline:
+    async def test_hung_decode_is_killed_and_fails_verify(self, tmp_path, monkeypatch):
+        """R-001: VERIFY's decode probe had no bound. A wedged ffmpeg now
+        dies after DECODE_TIMEOUT_SECONDS and the step fails instead of
+        parking the worker."""
+        import asyncio
+        import sys
+
+        from transcode_forge.worker import pipeline
+        from transcode_forge.worker.pipeline import PipelineError, _decode_check
+
+        monkeypatch.setattr(pipeline, "DECODE_TIMEOUT_SECONDS", 0.5)
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 100)
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list = []
+
+        async def hung_ffmpeg(*args, **kwargs):
+            proc = await real_exec(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+            spawned.append(proc)
+            return proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=hung_ffmpeg),
+            pytest.raises(PipelineError, match="timed out"),
+        ):
+            await _decode_check(out, duration=5.0)
+        assert spawned and spawned[0].returncode is not None

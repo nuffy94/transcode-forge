@@ -203,3 +203,30 @@ class TestDetectCapabilities:
         with patch("transcode_forge.worker.hardware._run_probe", return_value=(1, "boom")):
             caps = await detect_capabilities()
         assert ("hevc", "cpu") in caps.pairs
+
+
+class TestRunProbeDeadline:
+    async def test_hung_probe_is_killed(self):
+        """R-025: a hardware probe that hangs (device init wedged) used to
+        time out and leave the child running. It now goes through the one
+        door, which kills it on the way out."""
+        import contextlib
+        import sys
+
+        from transcode_forge.worker import hardware
+        from transcode_forge.worker import proc as proc_mod
+
+        holder: dict = {}
+
+        @contextlib.asynccontextmanager
+        async def recording(*cmd, **kwargs):
+            async with proc_mod.managed_subprocess(*cmd, grace=2.0, **kwargs) as child:
+                holder["proc"] = child.proc
+                yield child
+
+        with patch("transcode_forge.worker.hardware.managed_subprocess", recording):
+            code, output = await hardware._run_probe(
+                [sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5
+            )
+        assert (code, output) == (1, "timeout")
+        assert holder["proc"].returncode is not None

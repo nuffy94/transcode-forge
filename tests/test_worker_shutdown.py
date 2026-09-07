@@ -15,6 +15,8 @@ import asyncio
 import contextlib
 import os
 import sys
+import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -24,10 +26,16 @@ from transcode_forge.models.job import Job
 from transcode_forge.worker.encoder import run_encode
 from transcode_forge.worker.hardware import HardwareCapabilities
 from transcode_forge.worker.http_agent import HttpWorkerAgent, fence_after_seconds
-from transcode_forge.worker.proc import managed_subprocess
+from transcode_forge.worker.proc import Child, managed_subprocess
 
 # A child that runs "forever" (far longer than any test timeout).
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(120)"]
+# A child that prints a line every 0.1 s for ~1.5 s, then exits 0: slow but alive.
+TALKER = [
+    sys.executable,
+    "-c",
+    "import time\nfor i in range(15):\n    print('tick', i, flush=True)\n    time.sleep(0.1)",
+]
 
 
 async def _wait_for(predicate, timeout: float = 5.0) -> None:
@@ -44,9 +52,9 @@ class TestManagedSubprocess:
         holder: dict = {}
 
         async def consume() -> None:
-            async with managed_subprocess(*SLEEPER, grace=2.0) as proc:
-                holder["proc"] = proc
-                await proc.wait()
+            async with managed_subprocess(*SLEEPER, timeout=30.0, grace=2.0) as child:
+                holder["proc"] = child.proc
+                await child.proc.wait()
 
         task = asyncio.create_task(consume())
         await _wait_for(lambda: "proc" in holder)
@@ -58,35 +66,116 @@ class TestManagedSubprocess:
     async def test_child_killed_on_exception(self):
         holder: dict = {}
         with pytest.raises(RuntimeError, match="boom"):
-            async with managed_subprocess(*SLEEPER, grace=2.0) as proc:
-                holder["proc"] = proc
+            async with managed_subprocess(*SLEEPER, timeout=30.0, grace=2.0) as child:
+                holder["proc"] = child.proc
                 raise RuntimeError("boom")
         assert holder["proc"].returncode is not None
 
     async def test_child_killed_on_early_return(self):
-        async with managed_subprocess(*SLEEPER, grace=2.0) as proc:
+        async with managed_subprocess(*SLEEPER, timeout=30.0, grace=2.0) as child:
             pass  # leave the block with the child still running
-        assert proc.returncode is not None
+        assert child.proc.returncode is not None
 
     async def test_completed_child_is_untouched(self):
         async with managed_subprocess(
-            sys.executable, "-c", "print('ok')", stdout=asyncio.subprocess.PIPE
-        ) as proc:
-            stdout, _ = await proc.communicate()
-        assert proc.returncode == 0
+            sys.executable, "-c", "print('ok')", timeout=30.0, stdout=asyncio.subprocess.PIPE
+        ) as child:
+            stdout, _ = await child.proc.communicate()
+        assert child.proc.returncode == 0
         assert b"ok" in stdout
 
     async def test_missing_binary_raises_file_not_found(self):
         with pytest.raises(FileNotFoundError):
-            async with managed_subprocess("definitely-not-a-real-binary-xyz"):
+            async with managed_subprocess("definitely-not-a-real-binary-xyz", timeout=30.0):
                 pass  # pragma: no cover
 
     @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
     async def test_child_runs_in_its_own_process_group(self):
         """start_new_session must isolate the child as a group leader so a
         group kill sweeps anything the child itself spawned."""
-        async with managed_subprocess(*SLEEPER, grace=2.0) as proc:
-            assert os.getpgid(proc.pid) == proc.pid
+        async with managed_subprocess(*SLEEPER, timeout=30.0, grace=2.0) as child:
+            assert os.getpgid(child.proc.pid) == child.proc.pid
+
+    def test_a_child_cannot_be_started_without_a_deadline(self):
+        """The deadline is part of the door, not a courtesy at the call
+        site: managed_subprocess refuses to spawn without one (ledger
+        R-001: the two unbounded ffmpeg calls were the ones that parked a
+        worker forever)."""
+        with pytest.raises(TypeError, match="timeout"):
+            managed_subprocess(*SLEEPER)  # type: ignore[call-arg]
+
+    async def test_deadline_kills_a_silent_child(self):
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            async with managed_subprocess(*SLEEPER, timeout=0.5, grace=2.0) as child:
+                await child.proc.wait()
+        assert child.proc.returncode is not None  # reaped, not orphaned
+        assert time.monotonic() - started < 10.0
+
+    async def test_extend_turns_the_deadline_into_a_stall_watchdog(self):
+        """A child that keeps talking outlives its window; the same child
+        without extend() does not. This is how an hours-long encode gets a
+        bound without a wall-clock guess: it dies after N seconds of
+        silence, not after N seconds."""
+        started = time.monotonic()
+        async with managed_subprocess(
+            *TALKER, timeout=0.5, grace=2.0, stdout=asyncio.subprocess.PIPE
+        ) as child:
+            assert child.proc.stdout is not None
+            while await child.proc.stdout.readline():
+                child.extend(0.5)
+            await child.proc.wait()
+        assert child.proc.returncode == 0
+        assert time.monotonic() - started > 1.0  # ran well past the 0.5 s window
+
+    async def test_without_extend_a_talking_child_still_hits_the_deadline(self):
+        with pytest.raises(TimeoutError):
+            async with managed_subprocess(
+                *TALKER, timeout=0.5, grace=2.0, stdout=asyncio.subprocess.PIPE
+            ) as child:
+                await child.proc.wait()
+        assert child.proc.returncode is not None
+
+    def test_extend_after_expiry_is_a_no_op(self):
+        """Race: the deadline fires while the caller is between an await
+        and its extend() call. asyncio refuses to reschedule an expired
+        Timeout; the caller must not blow up with RuntimeError on its way
+        to the TimeoutError the door is about to raise."""
+
+        class Expired:
+            def expired(self) -> bool:
+                return True
+
+            def reschedule(self, when: float) -> None:
+                raise RuntimeError("Cannot change state of expiring Timeout")
+
+        Child(MagicMock(), Expired()).extend(5.0)  # type: ignore[arg-type]
+
+    def test_only_proc_py_starts_child_processes(self):
+        """Every child is created in worker/proc.py: that is where the
+        lifetime tie and the deadline live, so a spawn anywhere else is a
+        child that can outlive the worker or run unbounded (R-025 found
+        two such doors: the hardware probes and the scanner's ffprobe)."""
+        src = Path(__file__).resolve().parent.parent / "src" / "transcode_forge"
+        spawners = (
+            "create_subprocess_exec",
+            "create_subprocess_shell",
+            "subprocess.run(",
+            "subprocess.Popen(",
+            "subprocess.call(",
+            "subprocess.check_output(",
+            "os.system(",
+            "os.spawn",
+            "os.exec",
+        )
+        offenders = [
+            f"{path.relative_to(src)}: {needle}"
+            for path in sorted(src.rglob("*.py"))
+            if path.name != "proc.py"
+            for needle in spawners
+            if needle in path.read_text(encoding="utf-8")
+        ]
+        assert offenders == [], offenders
 
 
 class TestRunEncodeCancellation:
@@ -98,9 +187,9 @@ class TestRunEncodeCancellation:
 
         @contextlib.asynccontextmanager
         async def recording(*cmd, **kwargs):
-            async with real_cm(*cmd, grace=2.0, **kwargs) as proc:
-                holder["proc"] = proc
-                yield proc
+            async with real_cm(*cmd, grace=2.0, **kwargs) as child:
+                holder["proc"] = child.proc
+                yield child
 
         # A fake "ffmpeg": emits nothing on stderr, never exits — run_encode
         # blocks in its readline loop, exactly like a mid-encode ffmpeg.
@@ -130,9 +219,9 @@ class TestRunEncodeCancellation:
             # Swap the (nonexistent-libvmaf) command for a long sleeper; the
             # point is that measure_vmaf routes through managed_subprocess
             # and its child dies with the cancelled task.
-            async with managed_subprocess(*SLEEPER, grace=2.0, **kwargs) as proc:
-                holder["proc"] = proc
-                yield proc
+            async with managed_subprocess(*SLEEPER, grace=2.0, **kwargs) as child:
+                holder["proc"] = child.proc
+                yield child
 
         with patch.object(vmaf_mod, "managed_subprocess", sleeper_cm):
             task = asyncio.create_task(vmaf_mod.measure_vmaf("/src.mkv", "/enc.mkv"))

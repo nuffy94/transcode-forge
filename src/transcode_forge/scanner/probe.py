@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from transcode_forge.worker.proc import managed_subprocess
+
 logger = logging.getLogger(__name__)
 
 FFPROBE_TIMEOUT = 15  # seconds per file
@@ -100,23 +102,19 @@ async def ffprobe(path: str | Path) -> ProbeResult:
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
+        async with managed_subprocess(
             *cmd,
+            timeout=FFPROBE_TIMEOUT,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=FFPROBE_TIMEOUT)
+        ) as child:
+            stdout, stderr = await child.proc.communicate()
     except TimeoutError as exc:
-        # Ensure process is terminated on timeout
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
         raise ProbeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s: {target}") from exc
     except FileNotFoundError as exc:
         raise ProbeError("ffprobe binary not found — is ffmpeg installed?") from exc
 
+    proc = child.proc
     if proc.returncode != 0:
         raise ProbeError(f"ffprobe failed (exit {proc.returncode}): {stderr.decode().strip()}")
 

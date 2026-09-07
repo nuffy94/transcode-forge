@@ -209,6 +209,36 @@ class TestFfprobe:
         ):
             await ffprobe(test_file)
 
+    async def test_probe_timeout_kills_ffprobe(self, tmp_path, monkeypatch):
+        """R-025: the scanner's ffprobe goes through the one door, so a
+        hung probe is killed on timeout (and on cancellation) instead of
+        lingering."""
+        import asyncio
+        import sys
+
+        from transcode_forge.scanner import probe as probe_mod
+
+        monkeypatch.setattr(probe_mod, "FFPROBE_TIMEOUT", 0.5)
+        test_file = tmp_path / "test.mkv"
+        test_file.write_bytes(b"fake")
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list = []
+
+        async def hung_ffprobe(*args, **kwargs):
+            proc = await real_exec(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+            spawned.append(proc)
+            return proc
+
+        with (
+            patch(
+                "transcode_forge.scanner.probe.asyncio.create_subprocess_exec",
+                side_effect=hung_ffprobe,
+            ),
+            pytest.raises(ProbeError, match="timed out"),
+        ):
+            await ffprobe(test_file)
+        assert spawned and spawned[0].returncode is not None
+
 
 class TestProbeResult:
     def test_resolution_property(self):
