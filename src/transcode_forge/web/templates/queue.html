@@ -83,7 +83,7 @@
                     hx-target="#job-table-container"
                     hx-include="#library-filter, #queue-sort, #queue-dir"
                     name="status">
-                <option value="pending,queued,transcoding" selected>Active (queued + running)</option>
+                <option value="{{ (waiting_job_statuses + active_job_statuses)|join(',') }}" selected>Active (queued + running)</option>
                 <option value="">All statuses</option>
                 <option value="pending">Pending</option>
                 <option value="queued">Queued</option>

@@ -9,7 +9,13 @@
 import { showToast } from './toast.js';
 import { initPauseButton, initLiveProgress } from './ops.js';
 
-const DEFAULT_STATUS = 'pending,queued,transcoding';
+/* The default view is the option the server marked selected. The template
+ * builds that value from the status vocabulary in models/job.py, so this
+ * file never spells a status set out (tests/test_job_status_vocabulary.py). */
+function defaultStatus(sel) {
+    const opt = sel.querySelector('option[selected]');
+    return opt ? opt.value : '';
+}
 const QUEUE_DESC_FIRST = ['source_size'];
 
 /* Called from the sort_th column headers (rendered fresh on each 5s poll).
@@ -43,7 +49,7 @@ function initTiles() {
     document.querySelectorAll('.forge-tile[data-status-value]').forEach((tile) => {
         tile.addEventListener('click', () => {
             const v = tile.dataset.statusValue;
-            sel.value = sel.value === v ? DEFAULT_STATUS : v;
+            sel.value = sel.value === v ? defaultStatus(sel) : v;
             sel.dispatchEvent(new Event('change', { bubbles: true }));
             syncTiles();
         });
@@ -57,10 +63,11 @@ function loadTileCounts() {
         .then((r) => r.json())
         .then(({ data }) => {
             const s = data.jobs_by_status || {};
-            for (const key of ['pending', 'queued', 'transcoding', 'complete', 'failed']) {
+            document.querySelectorAll('.forge-tile[data-status-value]').forEach((tile) => {
+                const key = tile.dataset.statusValue;
                 const el = document.getElementById(`badge-${key}`);
                 if (el) el.textContent = String(s[key] || 0);
-            }
+            });
         })
         .catch(() => {});
 }
@@ -134,7 +141,7 @@ function updateBulkBar() {
 
 async function bulkCancel() {
     const ids = selectedCheckboxes()
-        .filter((c) => ['pending', 'queued'].includes(c.dataset.status))
+        .filter((c) => c.dataset.cancellable === '1')
         .map((c) => c.value);
     if (!ids.length) {
         showToast('No cancellable jobs selected', 'warning');

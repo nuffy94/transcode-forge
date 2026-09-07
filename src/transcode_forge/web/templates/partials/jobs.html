@@ -26,13 +26,17 @@
         {# round to match ops.js Math.round() — see active_transcodes.html #}
         {% set pct = (job.progress * 100)|round|int %}
         {% set fid = file_ids.get(job.source_path) %}
+        {# The server decides what can be cancelled (the endpoint accepts waiting
+           jobs only); queue.js reads data-cancellable instead of knowing statuses. #}
+        {% set cancellable = job.status in waiting_job_statuses %}
         <tr data-job-id="{{ job.id }}"
             {% if job.phase %}data-phase="{{ job.phase }}"{% endif %}
             {% if fid %}data-file-id="{{ fid }}" class="cursor-pointer {% if job.status == 'transcoding' %}is-active{% endif %}"
             {% elif job.status == 'transcoding' %}class="is-active"{% endif %}>
             <td>
                 <input class="forge-check job-checkbox" type="checkbox" aria-label="Select {{ job.source_path.split('/')[-1] }}"
-                       value="{{ job.id }}" data-status="{{ job.status }}"/>
+                       value="{{ job.id }}" data-status="{{ job.status }}"
+                       data-cancellable="{{ '1' if cancellable else '0' }}"/>
             </td>
             <td>
                 <span class="block text-[13px] font-medium {% if job.status == 'transcoding' %}text-forge-ember-hot{% else %}text-forge-paper{% endif %}" title="{{ job.source_path }}">{{ job.source_path.split('/')[-1] }}</span>
@@ -101,7 +105,7 @@
                         {{ icon('refresh', 'forge-icon--sm') }}
                     </button>
                     {% endif %}
-                    {% if job.status in waiting_job_statuses %}
+                    {% if cancellable %}
                     <button class="forge-iconbtn forge-iconbtn--danger"
                             title="Cancel job"
                             aria-label="Cancel job"

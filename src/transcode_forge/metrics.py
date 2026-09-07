@@ -5,6 +5,7 @@ These are updated by polling the database on a schedule.
 """
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
@@ -62,8 +63,10 @@ async def metrics_endpoint(db: DBConnection = Depends(get_db)) -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-async def _count_in(db: DBConnection, table: str, statuses: tuple[str, ...]) -> int:
-    """Rows of `table` (a literal, never input) whose status is in one of the sets."""
+async def _count_in(
+    db: DBConnection, table: Literal["jobs", "workers"], statuses: tuple[str, ...]
+) -> int:
+    """Rows of `table` whose status is in one of the vocabulary sets."""
     placeholders = ",".join("?" * len(statuses))
     async with db.execute(
         f"SELECT COUNT(*) FROM {table} WHERE status IN ({placeholders})", statuses
