@@ -14,10 +14,16 @@
 const AUTO_DISMISS_MS = 5000;
 const KNOWN_TYPES = ['success', 'error', 'warning', 'info'];
 
+const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+/* Escape text for pasting into HTML: safe as element text AND inside a
+ * quoted attribute. The old textContent/innerHTML trick covered text only
+ * (browsers escape quotes when serialising attributes, not text nodes), so
+ * a filename with a double quote could close an aria-label and add an
+ * onfocus handler in the admin tab (ledger R-008). Guarded by
+ * tests/qa/test_escaping.py. */
 export function esc(text) {
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
+    return String(text).replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
 /* Turn a parsed JSON error body into a readable string. FastAPI 422s put an
