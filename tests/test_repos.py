@@ -496,12 +496,15 @@ class TestMediaRepo:
         assert files[0]["show_name"] == "Breaking Bad"
 
     async def test_list_media_files_search_by_filename(self, db, test_library):
-        """Test searching media files by filename."""
+        """Search is case-insensitive on both dialects (R-015). Real
+        filenames are title-cased and people type lowercase into the
+        filter; SQLite's LIKE folds ASCII case by itself, Postgres's does
+        not, so only the test-postgres lane can see this one."""
         await media_repo.upsert_media_file(
             db,
             library_id=test_library,
-            file_path="/media/movies/dark_knight.mkv",
-            filename="dark_knight.mkv",
+            file_path="/media/movies/The.Dark.Knight.mkv",
+            filename="The.Dark.Knight.mkv",
             video_codec="h264",
         )
         await media_repo.upsert_media_file(
@@ -512,9 +515,10 @@ class TestMediaRepo:
             video_codec="h264",
         )
 
-        files, total = await media_repo.list_media_files(db, search="dark")
-        assert total == 1
-        assert files[0]["filename"] == "dark_knight.mkv"
+        for term in ("dark", "DARK", "Dark"):
+            files, total = await media_repo.list_media_files(db, search=term)
+            assert total == 1, term
+            assert files[0]["filename"] == "The.Dark.Knight.mkv"
 
     async def test_list_media_files_sorting_by_filename(self, db, test_library):
         """Test sorting by filename."""
