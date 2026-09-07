@@ -1,5 +1,7 @@
 """Tests for the schema migration runner."""
 
+import os
+import re
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +10,9 @@ import aiosqlite
 import pytest
 
 from transcode_forge import migrations
+from transcode_forge.db import open_sqlite
 from transcode_forge.migrations import (
+    _strip_line_comments,
     apply_sqlite,
     discover_migrations,
 )
@@ -59,7 +63,7 @@ class TestDiscover:
 class TestFreshInstall:
     async def test_fresh_creates_all_tables(self, tmp_path: Path):
         db_path = tmp_path / "fresh.db"
-        conn = await aiosqlite.connect(db_path)
+        conn = await open_sqlite(db_path)
         try:
             await apply_sqlite(conn)
             for tbl in (
@@ -83,7 +87,7 @@ class TestFreshInstall:
 
     async def test_idempotent(self, tmp_path: Path):
         db_path = tmp_path / "idem.db"
-        conn = await aiosqlite.connect(db_path)
+        conn = await open_sqlite(db_path)
         try:
             await apply_sqlite(conn)
             applied_first = await _applied_versions(conn)
@@ -101,7 +105,7 @@ class TestExistingInstallBootstrap:
 
     async def test_bootstrap_stamps_existing_install(self, tmp_path: Path):
         db_path = tmp_path / "existing.db"
-        conn = await aiosqlite.connect(db_path)
+        conn = await open_sqlite(db_path)
         try:
             # Simulate v0.4: the hand-created schema (jobs + libraries + ...) exists,
             # but schema_migrations does not. A real pre-migrations install had the
@@ -176,7 +180,7 @@ class TestWorkerTokenUniqueBinding:
 
     async def test_unique_index_enforced_and_nulls_allowed(self, tmp_path: Path):
         db_path = tmp_path / "uq.db"
-        conn = await aiosqlite.connect(db_path)
+        conn = await open_sqlite(db_path)
         try:
             await apply_sqlite(conn)
 
@@ -211,9 +215,8 @@ class TestDropPlaintextWorkerToken:
     cannot authenticate and is not carried over."""
 
     async def test_upgrade_keeps_hashed_rows_and_drops_unhashed(self, tmp_path: Path):
-        conn = await aiosqlite.connect(tmp_path / "up.db")
+        conn = await open_sqlite(tmp_path / "up.db")
         try:
-            await conn.execute("PRAGMA foreign_keys=ON")  # the production pragma
             await _apply_through(conn, 15)
             cur = await conn.execute("PRAGMA table_info(worker_tokens)")
             assert "token" in [row[1] for row in await cur.fetchall()]
@@ -297,7 +300,7 @@ class TestDropPlaintextWorkerToken:
         """A row from before 0004 (plaintext only, no hash) is backfilled by
         the 0004 hook, then carried through 0016 keyed on that hash."""
         legacy = token_repo.generate()
-        conn = await aiosqlite.connect(tmp_path / "legacy.db")
+        conn = await open_sqlite(tmp_path / "legacy.db")
         try:
             await _apply_through(conn, 3)
             await conn.execute(
@@ -342,7 +345,7 @@ class TestPostgresAdapter:
 @pytest.fixture
 async def fresh_sqlite_db(tmp_path: Path):
     db_path = tmp_path / "test.db"
-    conn = await aiosqlite.connect(db_path)
+    conn = await open_sqlite(db_path)
     yield conn
     await conn.close()
 
@@ -360,10 +363,88 @@ class TestPgOnlyMigrations:
         assert by_version[1] is False
 
     async def test_sqlite_stamps_pg_only_without_executing(self, tmp_path: Path):
-        import aiosqlite
-
-        async with aiosqlite.connect(tmp_path / "m.db") as conn:
+        conn = await open_sqlite(tmp_path / "m.db")
+        try:
             await apply_sqlite(conn)
             cur = await conn.execute("SELECT version FROM schema_migrations")
             versions = {row[0] for row in await cur.fetchall()}
+        finally:
+            await conn.close()
         assert 15 in versions
+
+
+_PG_URL = os.environ.get("TF_TEST_DB_URL", "")
+
+
+class TestMigrationAtomicity:
+    """R-002: a migration is one transaction on both dialects. A statement
+    that fails partway leaves no trace: no table from the earlier
+    statements, no version row, and the next run applies cleanly."""
+
+    HALF = (
+        "CREATE TABLE half_a (x INTEGER);\n"
+        "CREATE TABLE half_b (y INTEGER);\n"
+        "INSERT INTO no_such_table VALUES (1);\n"
+    )
+
+    def _with_half(self):
+        real = discover_migrations()
+        return patch.object(
+            migrations,
+            "discover_migrations",
+            lambda: [*real, (9999, "half", self.HALF, False)],
+        )
+
+    async def test_sqlite_failed_migration_leaves_no_trace(self, fresh_sqlite_db):
+        conn = fresh_sqlite_db
+        await apply_sqlite(conn)  # the real chain first
+        with self._with_half(), pytest.raises(sqlite3.OperationalError):
+            await apply_sqlite(conn)
+        assert not await _table_exists(conn, "half_a")
+        assert not await _table_exists(conn, "half_b")
+        assert 9999 not in await _applied_versions(conn)
+        await apply_sqlite(conn)  # connection still usable; a no-op
+
+    @pytest.mark.skipif(
+        not _PG_URL.startswith("postgres"), reason="needs TF_TEST_DB_URL (test-postgres lane)"
+    )
+    async def test_postgres_failed_migration_leaves_no_trace(self):
+        import asyncpg
+
+        from transcode_forge.migrations import apply_postgres
+
+        pool = await asyncpg.create_pool(_PG_URL, min_size=1, max_size=2)
+        try:
+            with self._with_half(), pytest.raises(asyncpg.PostgresError):
+                await apply_postgres(pool)
+            async with pool.acquire() as conn:
+                assert await conn.fetchval("SELECT to_regclass('half_a')") is None
+                assert await conn.fetchval("SELECT to_regclass('half_b')") is None
+                assert (
+                    await conn.fetchval("SELECT 1 FROM schema_migrations WHERE version = 9999")
+                    is None
+                )
+            await apply_postgres(pool)  # pool still usable; a no-op
+        finally:
+            # Self-cleaning on the shared CI database: if the rollback ever
+            # regresses, the next run must still fail at the THIRD statement.
+            async with pool.acquire() as conn:
+                await conn.execute("DROP TABLE IF EXISTS half_a, half_b")
+            await pool.close()
+
+
+class TestMigrationFileRules:
+    """The two rules the runner's comments record, made a gate: the naive
+    ; split has no string literal to trip on, and no file carries a
+    statement that refuses (or silently ignores) a transaction block."""
+
+    def test_no_semicolon_inside_a_string_literal(self):
+        for version, name, sql, _pg_only in discover_migrations():
+            for literal in re.findall(r"'[^']*'", _strip_line_comments(sql)):
+                assert ";" not in literal, f"{version:04d}_{name}: {literal}"
+
+    def test_nothing_refuses_a_transaction_block(self):
+        for version, name, sql, _pg_only in discover_migrations():
+            body = _strip_line_comments(sql).upper()
+            for word in ("CONCURRENTLY", "VACUUM", "PRAGMA", "ATTACH", "BEGIN", "COMMIT"):
+                assert re.search(rf"\b{word}\b", body) is None, f"{version:04d}_{name}: {word}"
