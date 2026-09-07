@@ -97,6 +97,8 @@ def _split_statements(sql: str) -> list[str]:
 
     asyncpg's execute() takes one statement at a time. Strip line comments
     first so a banner comment doesn't get glued to the next CREATE.
+    Naive on purpose: a semicolon inside a string literal would mis-split.
+    No migration has one; keep it that way.
     """
     sql = _strip_line_comments(sql)
     return [s.strip() for s in sql.split(";") if s.strip()]
@@ -130,11 +132,20 @@ async def apply_sqlite(conn: object, *, fresh: bool | None = None) -> None:
             await _record_applied_sqlite(aio, version, name)
             logger.info("Migration %04d_%s: postgres-only, stamped", version, name)
             continue
-        # aiosqlite handles multi-statement scripts + comments natively.
-        await aio.executescript(sql)  # type: ignore[attr-defined]
-        if name == "token_hash":
-            await _backfill_token_hashes_sqlite(aio)
-        await _record_applied_sqlite(aio, version, name)
+        # One migration = one transaction: the script, the Python backfill
+        # and the version row commit together or not at all (R-002). The
+        # leading BEGIN opens it; executescript only commits a transaction
+        # that was pending BEFORE it ran, so it leaves this one open for
+        # the backfill and the version row. SQLite DDL is transactional.
+        try:
+            await aio.executescript("BEGIN;\n" + sql)  # type: ignore[attr-defined]
+            if name == "token_hash":
+                await _backfill_token_hashes_sqlite(aio)
+            await _record_applied_sqlite(aio, version, name)
+            await aio.commit()  # type: ignore[attr-defined]
+        except BaseException:
+            await aio.rollback()  # type: ignore[attr-defined]
+            raise
         logger.info("Migration %04d_%s: applied", version, name)
     await aio.commit()  # type: ignore[attr-defined]
 
@@ -143,7 +154,8 @@ async def _backfill_token_hashes_sqlite(aio: object) -> None:
     """Hash any pre-existing plaintext worker tokens (migration 0004).
 
     Runs inside the same transaction as the ALTER, before the version is
-    recorded — HMAC with the pepper can't be done in pure SQL.
+    recorded (the runner opens it) — HMAC with the pepper can't be done in
+    pure SQL.
     """
     # Lazy import: db -> migrations -> repos.worker_tokens -> db would cycle.
     from transcode_forge.repos.worker_tokens import fingerprint_prefix, hash_token
@@ -224,11 +236,15 @@ async def apply_postgres(pool: object) -> None:
                 logger.info("Migration 0001_%s: stamped (existing install)", name)
                 continue
             sql_pg = _adapt_for_postgres(sql)
-            for stmt in _split_statements(sql_pg):
-                await conn.execute(stmt)
-            if name == "token_hash":
-                await _backfill_token_hashes_postgres(conn)
-            await _record_applied_postgres(conn, version, name)
+            # One migration = one transaction (R-002). Postgres DDL is
+            # transactional; no migration uses CREATE INDEX CONCURRENTLY,
+            # which cannot run inside one.
+            async with conn.transaction():
+                for stmt in _split_statements(sql_pg):
+                    await conn.execute(stmt)
+                if name == "token_hash":
+                    await _backfill_token_hashes_postgres(conn)
+                await _record_applied_postgres(conn, version, name)
             logger.info("Migration %04d_%s: applied", version, name)
 
 

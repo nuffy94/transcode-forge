@@ -1,5 +1,6 @@
 """Tests for the schema migration runner."""
 
+import os
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
@@ -367,3 +368,59 @@ class TestPgOnlyMigrations:
             cur = await conn.execute("SELECT version FROM schema_migrations")
             versions = {row[0] for row in await cur.fetchall()}
         assert 15 in versions
+
+
+_PG_URL = os.environ.get("TF_TEST_DB_URL", "")
+
+
+class TestMigrationAtomicity:
+    """R-002: a migration is one transaction on both dialects. A statement
+    that fails partway leaves no trace: no table from the earlier
+    statements, no version row, and the next run applies cleanly."""
+
+    HALF = (
+        "CREATE TABLE half_a (x INTEGER);\n"
+        "CREATE TABLE half_b (y INTEGER);\n"
+        "INSERT INTO no_such_table VALUES (1);\n"
+    )
+
+    def _with_half(self):
+        real = discover_migrations()
+        return patch.object(
+            migrations,
+            "discover_migrations",
+            lambda: [*real, (9999, "half", self.HALF, False)],
+        )
+
+    async def test_sqlite_failed_migration_leaves_no_trace(self, fresh_sqlite_db):
+        conn = fresh_sqlite_db
+        await apply_sqlite(conn)  # the real chain first
+        with self._with_half(), pytest.raises(sqlite3.OperationalError):
+            await apply_sqlite(conn)
+        assert not await _table_exists(conn, "half_a")
+        assert not await _table_exists(conn, "half_b")
+        assert 9999 not in await _applied_versions(conn)
+        await apply_sqlite(conn)  # connection still usable; a no-op
+
+    @pytest.mark.skipif(
+        not _PG_URL.startswith("postgres"), reason="needs TF_TEST_DB_URL (test-postgres lane)"
+    )
+    async def test_postgres_failed_migration_leaves_no_trace(self):
+        import asyncpg
+
+        from transcode_forge.migrations import apply_postgres
+
+        pool = await asyncpg.create_pool(_PG_URL, min_size=1, max_size=2)
+        try:
+            with self._with_half(), pytest.raises(asyncpg.PostgresError):
+                await apply_postgres(pool)
+            async with pool.acquire() as conn:
+                assert await conn.fetchval("SELECT to_regclass('half_a')") is None
+                assert await conn.fetchval("SELECT to_regclass('half_b')") is None
+                assert (
+                    await conn.fetchval("SELECT 1 FROM schema_migrations WHERE version = 9999")
+                    is None
+                )
+            await apply_postgres(pool)  # pool still usable; a no-op
+        finally:
+            await pool.close()
