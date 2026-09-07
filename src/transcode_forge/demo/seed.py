@@ -15,7 +15,7 @@ from transcode_forge.db import DBConnection
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.models.scan import Scan, ScanStatus
 from transcode_forge.models.skipped import SkipReason
-from transcode_forge.models.worker import Worker, WorkerStatus
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.repos import media as media_repo
@@ -314,7 +314,7 @@ async def seed_demo_data(db: DBConnection) -> None:
     online_worker_ids = [
         wid
         for wid, w in zip(worker_ids, _WORKERS, strict=True)
-        if w["status"] in (WorkerStatus.ONLINE, WorkerStatus.BUSY)
+        if w["status"] in ALIVE_WORKER_STATUSES
     ]
     logger.info("Created %d workers", len(worker_ids))
 

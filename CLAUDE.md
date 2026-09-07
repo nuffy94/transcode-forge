@@ -270,6 +270,12 @@ Worker-side:
 - Statuses are `StrEnum`, never bare strings — `JobStatus.COMPLETE`, not
   `"complete"`. SQL string literals in repos are an exception (cheap and
   the enum values are stable).
+- Status *sets* are defined once, beside their enum: `WAITING_` /
+  `ACTIVE_` / `TERMINAL_JOB_STATUSES` in `models/job.py` and
+  `ALIVE_WORKER_STATUSES` in `models/worker.py`. Build every SQL
+  placeholder list, membership test and template branch from them
+  (templates get them as Jinja globals);
+  `tests/test_job_status_vocabulary.py` fails on any inline copy.
 - New schema changes go in a new numbered migration. Released migrations
   are immutable.
 - Worker endpoints under `/api/worker/*` use bearer auth, not the cookie

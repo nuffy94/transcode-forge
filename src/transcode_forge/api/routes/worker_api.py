@@ -24,8 +24,13 @@ from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import Job, JobStatus
-from transcode_forge.models.worker import Worker, WorkerStatus
+from transcode_forge.models.job import (
+    ACTIVE_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+    Job,
+    JobStatus,
+)
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import worker_tokens as token_repo
@@ -60,7 +65,7 @@ def _worker_is_live(worker: Worker) -> bool:
     once it has gone silent, the token may legitimately move to a
     replacement machine (re-provisioned host, recreated container).
     """
-    if worker.status not in (WorkerStatus.ONLINE, WorkerStatus.BUSY):
+    if worker.status not in ALIVE_WORKER_STATUSES:
         return False
     if worker.last_heartbeat is None:
         return False
@@ -96,11 +101,6 @@ async def _require_owned_job(db: DBConnection, job_id: str, token_row: dict[str,
     return job
 
 
-_TERMINAL_STATUSES = frozenset(
-    {JobStatus.COMPLETE, JobStatus.SKIPPED, JobStatus.FAILED, JobStatus.CANCELLED}
-)
-
-
 def _is_duplicate_terminal_report(job: Job, incoming: JobStatus) -> bool:
     """At-least-once delivery makes duplicate terminal reports normal
     (worker-resilience spec D3): the SAME outcome again is acknowledged as
@@ -111,7 +111,7 @@ def _is_duplicate_terminal_report(job: Job, incoming: JobStatus) -> bool:
     """
     if job.status == incoming:
         return True
-    if job.status in _TERMINAL_STATUSES:
+    if job.status in TERMINAL_JOB_STATUSES:
         raise HTTPException(
             status_code=409,
             detail=f"Job is already {job.status.value}; refusing {incoming.value}",
@@ -361,15 +361,16 @@ async def register(
     # jobs it owned previously, so those jobs would otherwise sit in
     # 'transcoding' forever. Re-queue them so anyone (including this
     # worker) can pick them up cleanly.
+    active = ",".join("?" * len(ACTIVE_JOB_STATUSES))
     cur = await db.execute(
         "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, phase = NULL, updated_at = ? WHERE worker_id = ? AND status IN (?, ?)",
+        " progress = 0, phase = NULL, updated_at = ?"
+        f" WHERE worker_id = ? AND status IN ({active})",
         (
             JobStatus.QUEUED.value,
             datetime.now(UTC).isoformat(),
             worker.id,
-            JobStatus.ASSIGNED.value,
-            JobStatus.TRANSCODING.value,
+            *ACTIVE_JOB_STATUSES,
         ),
     )
     if cur.rowcount > 0:

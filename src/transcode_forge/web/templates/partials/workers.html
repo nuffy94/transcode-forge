@@ -9,7 +9,7 @@
    it's not actually doing work, regardless of what 'status' claims.
    Covers status=offline duplicates from container restarts and
    status=dead-with-stuck-job rows. #}
-{% set is_removable = tier == 'dead' or worker.status in ('dead', 'offline') %}
+{% set is_removable = tier == 'dead' or worker.status not in alive_worker_statuses %}
 <div data-worker-id="{{ worker.id }}"
      class="forge-panel{% if is_active and not heartbeat_alarm %} forge-panel--ember{% endif %} p-4 flex flex-col gap-3.5 {% if is_dead and not is_active %}opacity-60{% endif %}"
      {% if heartbeat_alarm %}style="border-color: rgba(220, 103, 67, 0.55);"{% endif %}>

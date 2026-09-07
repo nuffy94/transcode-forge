@@ -15,7 +15,7 @@ import logging
 from datetime import UTC, datetime
 
 from transcode_forge.db import DBConnection
-from transcode_forge.models.worker import WorkerStatus
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,10 @@ TOUCH_INTERVAL_S = 60
 
 async def touch_live_worker_heartbeats(db: DBConnection) -> None:
     """One pass: freshen ``last_heartbeat`` for online/busy workers only."""
+    alive = ",".join("?" * len(ALIVE_WORKER_STATUSES))
     await db.execute(
-        "UPDATE workers SET last_heartbeat = ? WHERE status IN (?, ?)",
-        (datetime.now(UTC).isoformat(), WorkerStatus.ONLINE, WorkerStatus.BUSY),
+        f"UPDATE workers SET last_heartbeat = ? WHERE status IN ({alive})",
+        (datetime.now(UTC).isoformat(), *ALIVE_WORKER_STATUSES),
     )
     await db.commit()
 

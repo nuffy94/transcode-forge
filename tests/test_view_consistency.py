@@ -137,19 +137,15 @@ class TestActiveTranscodesConsistency:
     both purport to show the same set of in-flight jobs.
     """
 
-    async def test_active_list_includes_transcoding_assigned_verifying(
-        self, client: AsyncClient, app
-    ):
+    async def test_active_list_includes_transcoding_and_assigned(self, client: AsyncClient, app):
         db = app.state.db
-        await _seed_jobs(db, transcoding=2, assigned=1, verifying=1, pending=5, complete=3)
+        await _seed_jobs(db, transcoding=2, assigned=2, pending=5, complete=3)
 
         active_html = (await client.get("/partials/active-transcodes")).text
         # Each active job is rendered as a row keyed by data-progress-bar
         active_rows = active_html.count("data-progress-bar")
         stats = (await client.get("/api/stats")).json()["data"]["jobs_by_status"]
-        api_active = (
-            stats.get("transcoding", 0) + stats.get("assigned", 0) + stats.get("verifying", 0)
-        )
+        api_active = stats.get("transcoding", 0) + stats.get("assigned", 0)
 
         assert active_rows == 4
         assert api_active == 4
@@ -269,8 +265,8 @@ class TestDataIntegrity:
     """
 
     async def test_no_active_jobs_assigned_to_dead_workers(self, app):
-        """Invariant: every job in (transcoding, assigned, verifying)
-        must be assigned to a worker that is online or busy.
+        """Invariant: every job in (transcoding, assigned) must be
+        assigned to a worker that is online or busy.
 
         Failures here mean orphaned jobs are accumulating — they will
         never make progress and need to be re-queued or marked failed.
@@ -289,7 +285,7 @@ class TestDataIntegrity:
             SELECT j.id, j.status, j.worker_id, w.status AS worker_status
             FROM jobs j
             LEFT JOIN workers w ON w.id = j.worker_id
-            WHERE j.status IN ('transcoding', 'assigned', 'verifying')
+            WHERE j.status IN ('transcoding', 'assigned')
               AND (w.status IS NULL OR w.status NOT IN ('online', 'busy'))
             """
         ) as cur:
@@ -318,7 +314,7 @@ class TestDataIntegrity:
             """
             SELECT j.id FROM jobs j
             LEFT JOIN workers w ON w.id = j.worker_id
-            WHERE j.status IN ('transcoding', 'assigned', 'verifying')
+            WHERE j.status IN ('transcoding', 'assigned')
               AND (w.status IS NULL OR w.status NOT IN ('online', 'busy'))
             """
         ) as cur:

@@ -7,7 +7,8 @@ from datetime import UTC, datetime, timedelta
 import aiosqlite
 
 from transcode_forge.db import DBConnection
-from transcode_forge.models.worker import Worker, WorkerStatus
+from transcode_forge.models.job import ACTIVE_JOB_STATUSES
+from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +159,10 @@ async def count_active_jobs_for_worker(db: DBConnection, worker_id: str) -> int:
     job points at this worker, the orphan-job audit should handle it
     first (re-queue or fail it) before the worker row is removed.
     """
+    placeholders = ",".join("?" * len(ACTIVE_JOB_STATUSES))
     async with db.execute(
-        "SELECT COUNT(*) FROM jobs WHERE worker_id = ? "
-        "AND status IN ('transcoding', 'queued', 'pending')",
-        (worker_id,),
+        f"SELECT COUNT(*) FROM jobs WHERE worker_id = ? AND status IN ({placeholders})",
+        (worker_id, *ACTIVE_JOB_STATUSES),
     ) as cur:
         row = await cur.fetchone()
     return int(row[0]) if row else 0
@@ -177,16 +178,11 @@ async def cleanup_stale_workers(db: DBConnection, *, timeout_seconds: int = 90) 
     cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
     now_iso = now.isoformat()
 
+    alive = ",".join("?" * len(ALIVE_WORKER_STATUSES))
     cur = await db.execute(
         "UPDATE workers SET status = ?, updated_at = ?"
-        " WHERE status IN (?, ?) AND last_heartbeat < ?",
-        (
-            WorkerStatus.DEAD.value,
-            now_iso,
-            WorkerStatus.ONLINE.value,
-            WorkerStatus.BUSY.value,
-            cutoff,
-        ),
+        f" WHERE status IN ({alive}) AND last_heartbeat < ?",
+        (WorkerStatus.DEAD.value, now_iso, *ALIVE_WORKER_STATUSES, cutoff),
     )
     if cur.rowcount > 0:
         await db.commit()

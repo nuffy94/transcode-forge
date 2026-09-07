@@ -91,7 +91,7 @@
             <li class="px-3.5 py-2.5 {% if not loop.last %}border-b border-forge-rule/60{% endif %}">
                 <div class="flex items-center gap-2 flex-wrap">
                     {% if j.status == 'complete' %}<span class="forge-pill forge-pill--complete">Complete</span>
-                    {% elif j.status in ('transcoding', 'assigned', 'verifying') %}<span class="forge-pill forge-pill--running">{{ j.status }}</span>
+                    {% elif j.status in active_job_statuses %}<span class="forge-pill forge-pill--running">{{ j.status }}</span>
                     {% elif j.status == 'failed' %}<span class="forge-pill forge-pill--failed">Failed</span>
                     {% elif j.status == 'skipped' %}<span class="forge-pill forge-pill--skipped">Skipped</span>
                     {% elif j.status == 'cancelled' %}<span class="forge-pill forge-pill--cancelled">Cancelled</span>
