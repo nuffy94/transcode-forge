@@ -81,6 +81,7 @@ BAK_SUFFIX = ".tf_bak"
 DURATION_TOLERANCE = 2.0  # seconds of allowed duration drift
 DECODE_SAMPLE_SECONDS = 10.0  # length of each decode sample in the deep check
 DECODE_SAMPLE_OFFSETS = (0.05, 0.50, 0.95)  # fractions of total duration to sample at
+DECODE_TIMEOUT_SECONDS = 300.0  # per decode sample; a wedged ffmpeg fails VERIFY (R-001)
 
 
 class PipelineError(Exception):
@@ -594,13 +595,20 @@ async def _decode_check(path: Path, duration: float) -> None:
             "null",
             "-",
         ]
-        async with managed_subprocess(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        ) as proc:
-            _, stderr = await proc.communicate()
-        if proc.returncode != 0:
+        try:
+            async with managed_subprocess(
+                *cmd,
+                timeout=DECODE_TIMEOUT_SECONDS,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            ) as child:
+                _, stderr = await child.proc.communicate()
+        except TimeoutError as exc:
+            raise PipelineError(
+                "VERIFY",
+                f"Decode test timed out after {DECODE_TIMEOUT_SECONDS:g}s at offset {offset:.0f}s",
+            ) from exc
+        if child.proc.returncode != 0:
             err = (stderr or b"").decode(errors="replace").strip()[:200] or "unknown"
             raise PipelineError(
                 "VERIFY",

@@ -15,10 +15,14 @@ requires TLS — use `?sslmode=require`.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -300,18 +304,28 @@ def _is_postgres_url(url: str) -> bool:
     return url.startswith("postgres://") or url.startswith("postgresql://")
 
 
-async def _init_sqlite(db_path: str) -> _SqliteConnection:
+async def open_sqlite(path: str | Path) -> aiosqlite.Connection:
+    """The one way to open the SQLite database: row factory, pragmas, and
+    legacy transaction control pinned. The migration runner depends on
+    legacy mode (a leading BEGIN in executescript opens a transaction that
+    commit() and rollback() close); Python says that default will change,
+    so it is set here rather than inherited. Tests open through this too."""
     import aiosqlite
 
-    from transcode_forge.migrations import apply_sqlite
-
-    path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(str(path))
+    conn = await aiosqlite.connect(str(path), autocommit=sqlite3.LEGACY_TRANSACTION_CONTROL)
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA journal_mode=WAL")
     await conn.execute("PRAGMA foreign_keys=ON")
     await conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+async def _init_sqlite(db_path: str) -> _SqliteConnection:
+    from transcode_forge.migrations import apply_sqlite
+
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = await open_sqlite(path)
     await apply_sqlite(conn)
     return _SqliteConnection(conn)
 
