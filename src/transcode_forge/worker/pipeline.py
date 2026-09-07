@@ -569,7 +569,15 @@ async def _verify_output(
 
 async def _decode_check(path: Path, duration: float) -> None:
     """Push frames through the decoder at three offsets to catch
-    bitstream corruption ffprobe missed."""
+    bitstream corruption ffprobe missed.
+
+    The verdict is "ffmpeg had nothing to say". At -v error its only
+    output is complaints, and it exits 0 after recoverable ones (a frame
+    it could not reconstruct, a container that ended early), so a
+    non-zero exit OR any stderr fails VERIFY (ledger R-005). Damage the
+    decoder never notices (a clean decode of a garbage picture) is the
+    VMAF gate's job, not this check's.
+    """
     if duration < DECODE_SAMPLE_SECONDS * 1.5:
         # File too short to bother sampling — decode the whole thing once.
         offsets: tuple[float, ...] = (0.0,)
@@ -608,11 +616,12 @@ async def _decode_check(path: Path, duration: float) -> None:
                 "VERIFY",
                 f"Decode test timed out after {DECODE_TIMEOUT_SECONDS:g}s at offset {offset:.0f}s",
             ) from exc
-        if child.proc.returncode != 0:
-            err = (stderr or b"").decode(errors="replace").strip()[:200] or "unknown"
+        err = (stderr or b"").decode(errors="replace").strip()
+        if child.proc.returncode != 0 or err:
             raise PipelineError(
                 "VERIFY",
-                f"Decode test failed at offset {offset:.0f}s: {err}",
+                f"Decode test failed at offset {offset:.0f}s"
+                f" (ffmpeg exit {child.proc.returncode}): {err[:200] or 'no output'}",
             )
 
 

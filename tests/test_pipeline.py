@@ -566,8 +566,10 @@ class TestRunPipeline:
 class TestVerifyOutputDeepCheck:
     """The deep-check pass invokes ffmpeg to actually decode frames —
     catches bitstream corruption that ffprobe misses. _decode_check
-    raises PipelineError on non-zero ffmpeg exit; tests mock the
-    subprocess to assert that behavior.
+    raises PipelineError on a non-zero ffmpeg exit OR on any stderr
+    output (at -v error the only output is complaints, and ffmpeg exits
+    0 after recoverable ones); tests mock the subprocess to assert that
+    behavior. tests/test_pipeline_integration.py feeds it real damage.
     """
 
     async def test_failed_decode_raises_pipeline_error(self, tmp_path):
@@ -671,6 +673,29 @@ class TestVerifyOutputDeepCheck:
         offsets = [float(cmd[cmd.index("-ss") + 1]) for cmd in invocations]
         # 5%, 50%, 95% of 3600 = 180, 1800, 3420
         assert offsets == pytest.approx([180.0, 1800.0, 3420.0])
+
+    async def test_decoder_complaints_fail_even_with_exit_zero(self, tmp_path):
+        """R-005: ffmpeg exits 0 after per-frame decoder or demuxer errors,
+        so the exit code alone let damaged encodes through VERIFY. Any
+        stderr at -v error is a failed decode, and the message carries
+        what ffmpeg said."""
+        from transcode_forge.worker.pipeline import PipelineError, _decode_check
+
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 100)
+
+        class MockProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"", b"[hevc @ 0x1] Error constructing the frame RPS.\n")
+
+        async def fake_exec(*args, **kwargs):
+            return MockProc()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with pytest.raises(PipelineError, match="Error constructing the frame RPS"):
+                await _decode_check(out, duration=5.0)
 
 
 class TestUnmuxableSubtitleWiring:

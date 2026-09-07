@@ -84,7 +84,9 @@ LOCK → TRANSCODE → VERIFY → COMPARE → SWAP → CONFIRM → CLEANUP → U
 ```
 
 VERIFY does an ffprobe AND a real decode of frames at three offsets — files
-ffprobe accepts but that won't decode are caught here. COMPARE checks size
+ffprobe accepts but that won't decode are caught here, and any decoder or
+demuxer complaint fails the step (ffmpeg exits 0 after recoverable errors,
+so the exit code alone is not a verdict). COMPARE checks size
 (larger than source → `SizeRegressionError`) and, when the job carries a
 target VMAF, the quality gate: full-file VMAF (resolution-matched model,
 worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the **absolute
