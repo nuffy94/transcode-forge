@@ -58,6 +58,11 @@ def _is_noise(line: str) -> bool:
 
 ERROR_LINES_BUFFER = 10
 DEFAULT_PROGRESS_INTERVAL = 2.0
+# An encode has no sensible wall-clock bound (CPU x265 on 4K can run for a
+# day), so its deadline slides: ffmpeg writes a progress block about every
+# half second while it is alive, and this many seconds of silence means it
+# is wedged (GPU driver, dead NFS mount) and gets killed (ledger R-001).
+ENCODE_STALL_SECONDS = 15 * 60.0
 
 
 @dataclass(frozen=True)
@@ -480,10 +485,11 @@ async def unmuxable_subtitle_indexes(input_path: str) -> list[int]:
             "-of",
             "json",
             input_path,
+            timeout=60.0,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-        ) as proc:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        ) as child:
+            out, _ = await child.proc.communicate()
         streams = json.loads(out or b"{}").get("streams", [])
         return [
             i for i, s in enumerate(streams) if s.get("codec_name") in (None, "", "none", "unknown")
@@ -543,10 +549,12 @@ async def run_encode(
         # cancelled encode must never leave an orphaned ffmpeg behind.
         async with managed_subprocess(
             *cmd,
+            timeout=ENCODE_STALL_SECONDS,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,  # 1MB line buffer (ffmpeg metadata can be huge)
-        ) as proc:
+        ) as child:
+            proc = child.proc
             # Validate stderr is available (should always be true with PIPE, but be safe)
             if proc.stderr is None:
                 return EncodeResult(
@@ -557,8 +565,11 @@ async def run_encode(
                     error_message="ffmpeg subprocess stderr not available",
                 )
 
-            # Read stderr line by line for progress
+            # Read stderr line by line for progress. Each line re-arms the
+            # deadline: the encode dies after ENCODE_STALL_SECONDS of silence,
+            # never for merely being slow.
             while True:
+                child.extend()
                 try:
                     line_bytes = await proc.stderr.readline()
                 except ValueError:
@@ -594,6 +605,17 @@ async def run_encode(
             output_size=0,
             returncode=-1,
             error_message="ffmpeg binary not found",
+        )
+    except TimeoutError:
+        tail = "\n".join(error_lines[-3:])
+        logger.error("Encode stalled: no ffmpeg output for %gs, killed it", ENCODE_STALL_SECONDS)
+        return EncodeResult(
+            success=False,
+            output_path=output_path,
+            output_size=0,
+            returncode=-1,
+            error_message=f"ffmpeg went silent for {ENCODE_STALL_SECONDS:g}s and was killed"
+            + (f"\n{tail}" if tail else ""),
         )
 
     out_path = Path(output_path)

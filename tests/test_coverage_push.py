@@ -423,23 +423,35 @@ class TestEncoderRunEncode:
         output_file.write_text("dummy")
         cmd = ["ffmpeg", "-i", "/input.mkv", str(output_file)]
 
+        # No clock mock: patching time.monotonic starves the event loop now
+        # that managed_subprocess schedules a deadline timer. Ten lines read
+        # in microseconds against a 3 s interval means exactly one callback.
         with patch("transcode_forge.worker.encoder.asyncio.create_subprocess_exec") as mock_create:
-            with patch("transcode_forge.worker.encoder.time.monotonic") as mock_time:
-                # Simulate time advancing
-                mock_time.side_effect = [0.0, 0.0, 0.0, 3.0, 3.0, 6.0, 6.0, 9.0, 9.0, 12.0, 12.0]
+            mock_create.return_value = mock_proc
 
-                mock_create.return_value = mock_proc
+            result = await run_encode(
+                cmd,
+                total_duration=100.0,
+                progress_callback=progress_callback,
+                progress_interval=3.0,
+            )
 
-                result = await run_encode(
-                    cmd,
-                    total_duration=100.0,
-                    progress_callback=progress_callback,
-                    progress_interval=3.0,
-                )
+        assert result.success is True
+        assert len(progress_calls) == 1
 
-                assert result.success is True
-                # With 3.0 second interval, we should have fewer calls than lines
-                assert len(progress_calls) <= len(progress_lines)
+        # And with no throttle every progress line reports, on the real clock.
+        progress_calls.clear()
+        mock_proc.stderr.readline = AsyncMock(side_effect=[*progress_lines, b""])
+        with patch("transcode_forge.worker.encoder.asyncio.create_subprocess_exec") as mock_create:
+            mock_create.return_value = mock_proc
+            result = await run_encode(
+                cmd,
+                total_duration=100.0,
+                progress_callback=progress_callback,
+                progress_interval=0.0,
+            )
+        assert result.success is True
+        assert len(progress_calls) == len(progress_lines)
 
     async def test_run_encode_decode_errors_in_stderr(self, tmp_path):
         """Test handling of non-UTF8 characters in stderr."""
