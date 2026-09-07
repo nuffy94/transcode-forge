@@ -29,19 +29,24 @@ def test_esc_is_safe_in_text_and_attributes(qa_base_url: str, admin_pw: str, pag
     assert escaped == "&lt;a href=&quot;x&quot;&gt;O&#39;Neil &amp; co&lt;/a&gt;"
 
     # The catalog.js pattern: esc() inside a double-quoted attribute of a
-    # template string assigned via innerHTML.
+    # template string assigned via innerHTML. The host is attached to the
+    # document first: autofocus only fires in the document, so with the old
+    # esc() the payload's onfocus handler actually runs and sets __pwned.
     result = page.evaluate(
         """(payload) => import('/static/js/toast.js').then((m) => {
             const host = document.createElement('div');
+            document.body.appendChild(host);
             host.innerHTML = `<input aria-label="Select ${m.esc(payload)}">`;
             const input = host.firstElementChild;
             const label = input.getAttribute('aria-label');
             const names = input.getAttributeNames();
             host.innerHTML = `<td>${m.esc(payload)}</td>`;
+            const text = host.textContent;
+            host.remove();
             return {
                 label,
                 names,
-                text: host.textContent,
+                text,
                 pwned: window.__pwned === 1,
             };
         })""",
