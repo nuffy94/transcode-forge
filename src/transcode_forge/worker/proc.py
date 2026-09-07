@@ -88,9 +88,10 @@ else:
             # Bound in the parent so the child's pre-exec window does not
             # pay for ctypes' first-call symbol lookup and _FuncPtr build.
             _prctl: Any = _libc.prctl
+            _SIGKILL = int(signal.SIGKILL)  # plain int: nothing for ctypes to convert in the child
 
             def _set_pdeathsig() -> None:  # pragma: no cover — runs in the forked child
-                _prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+                _prctl(_PR_SET_PDEATHSIG, _SIGKILL)
 
             _SPAWN_KWARGS["preexec_fn"] = _set_pdeathsig
 
