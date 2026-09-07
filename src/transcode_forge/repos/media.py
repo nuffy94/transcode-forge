@@ -184,7 +184,9 @@ async def list_media_files(
         conditions.append("m.show_name = ?")
         params.append(show_name)
     if search:
-        conditions.append("m.filename LIKE ?")
+        # Case-folded on both sides: Postgres LIKE is case-sensitive, SQLite's
+        # is not, and the filter box gets lowercase typed at title-cased names.
+        conditions.append("LOWER(m.filename) LIKE LOWER(?)")
         params.append(f"%{search}%")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
