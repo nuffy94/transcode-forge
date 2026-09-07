@@ -439,6 +439,20 @@ class TestEncoderRunEncode:
         assert result.success is True
         assert len(progress_calls) == 1
 
+        # And with no throttle every progress line reports, on the real clock.
+        progress_calls.clear()
+        mock_proc.stderr.readline = AsyncMock(side_effect=[*progress_lines, b""])
+        with patch("transcode_forge.worker.encoder.asyncio.create_subprocess_exec") as mock_create:
+            mock_create.return_value = mock_proc
+            result = await run_encode(
+                cmd,
+                total_duration=100.0,
+                progress_callback=progress_callback,
+                progress_interval=0.0,
+            )
+        assert result.success is True
+        assert len(progress_calls) == len(progress_lines)
+
     async def test_run_encode_decode_errors_in_stderr(self, tmp_path):
         """Test handling of non-UTF8 characters in stderr."""
         output_file = tmp_path / "output.mkv"

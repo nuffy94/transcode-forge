@@ -14,6 +14,7 @@ tests pin the fix on both layers:
 import asyncio
 import contextlib
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -26,15 +27,17 @@ from transcode_forge.models.job import Job
 from transcode_forge.worker.encoder import run_encode
 from transcode_forge.worker.hardware import HardwareCapabilities
 from transcode_forge.worker.http_agent import HttpWorkerAgent, fence_after_seconds
-from transcode_forge.worker.proc import Child, managed_subprocess
+from transcode_forge.worker.proc import managed_subprocess
 
 # A child that runs "forever" (far longer than any test timeout).
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(120)"]
-# A child that prints a line every 0.1 s for ~1.5 s, then exits 0: slow but alive.
+# A child that prints a line every 0.1 s for ~4 s, then exits 0: slow but alive.
+# Deadlines in the talking tests are 2 s: wide enough that a scheduling gap
+# on a loaded CI runner cannot fake a stall.
 TALKER = [
     sys.executable,
     "-c",
-    "import time\nfor i in range(15):\n    print('tick', i, flush=True)\n    time.sleep(0.1)",
+    "import time\nfor i in range(40):\n    print('tick', i, flush=True)\n    time.sleep(0.1)",
 ]
 
 
@@ -111,6 +114,7 @@ class TestManagedSubprocess:
                 await child.proc.wait()
         assert child.proc.returncode is not None  # reaped, not orphaned
         assert time.monotonic() - started < 10.0
+        child.extend()  # after expiry: a no-op, never a RuntimeError
 
     async def test_extend_turns_the_deadline_into_a_stall_watchdog(self):
         """A child that keeps talking outlives its window; the same child
@@ -119,37 +123,34 @@ class TestManagedSubprocess:
         silence, not after N seconds."""
         started = time.monotonic()
         async with managed_subprocess(
-            *TALKER, timeout=0.5, grace=2.0, stdout=asyncio.subprocess.PIPE
+            *TALKER, timeout=2.0, grace=2.0, stdout=asyncio.subprocess.PIPE
         ) as child:
             assert child.proc.stdout is not None
             while await child.proc.stdout.readline():
-                child.extend(0.5)
+                child.extend()  # default: the window the child was started with
             await child.proc.wait()
         assert child.proc.returncode == 0
-        assert time.monotonic() - started > 1.0  # ran well past the 0.5 s window
+        assert time.monotonic() - started > 2.5  # ran well past the 2 s window
 
     async def test_without_extend_a_talking_child_still_hits_the_deadline(self):
         with pytest.raises(TimeoutError):
             async with managed_subprocess(
-                *TALKER, timeout=0.5, grace=2.0, stdout=asyncio.subprocess.PIPE
+                *TALKER, timeout=2.0, grace=2.0, stdout=asyncio.subprocess.PIPE
             ) as child:
                 await child.proc.wait()
         assert child.proc.returncode is not None
 
-    def test_extend_after_expiry_is_a_no_op(self):
-        """Race: the deadline fires while the caller is between an await
-        and its extend() call. asyncio refuses to reschedule an expired
-        Timeout; the caller must not blow up with RuntimeError on its way
-        to the TimeoutError the door is about to raise."""
-
-        class Expired:
-            def expired(self) -> bool:
-                return True
-
-            def reschedule(self, when: float) -> None:
-                raise RuntimeError("Cannot change state of expiring Timeout")
-
-        Child(MagicMock(), Expired()).extend(5.0)  # type: ignore[arg-type]
+    async def test_extend_after_the_block_exits_is_a_no_op(self):
+        """Every call site keeps using `child` after the block, and the
+        deadline can fire between an await and the next extend(). asyncio
+        refuses to reschedule a finished Timeout; extend() must stay quiet
+        in both states instead of raising RuntimeError."""
+        async with managed_subprocess(
+            sys.executable, "-c", "print('ok')", timeout=30.0, stdout=asyncio.subprocess.PIPE
+        ) as child:
+            await child.proc.communicate()
+        child.extend()
+        child.extend(5.0)
 
     def test_only_proc_py_starts_child_processes(self):
         """Every child is created in worker/proc.py: that is where the
@@ -157,23 +158,19 @@ class TestManagedSubprocess:
         child that can outlive the worker or run unbounded (R-025 found
         two such doors: the hardware probes and the scanner's ffprobe)."""
         src = Path(__file__).resolve().parent.parent / "src" / "transcode_forge"
-        spawners = (
-            "create_subprocess_exec",
-            "create_subprocess_shell",
-            "subprocess.run(",
-            "subprocess.Popen(",
-            "subprocess.call(",
-            "subprocess.check_output(",
-            "os.system(",
-            "os.spawn",
-            "os.exec",
+        door = src / "worker" / "proc.py"
+        spawn = re.compile(
+            r"(os\.(system|spawn\w*|posix_spawnp?|fork(pty)?|exec\w*)"
+            r"|subprocess\.(Popen|run|call|check_call|check_output)"
+            r"|\bPopen|create_subprocess_(exec|shell)|\.subprocess_(exec|shell)"
+            r"|pty\.spawn)\s*\("
         )
         offenders = [
-            f"{path.relative_to(src)}: {needle}"
+            f"{path.relative_to(src)}:{lineno}: {line.strip()}"
             for path in sorted(src.rglob("*.py"))
-            if path.name != "proc.py"
-            for needle in spawners
-            if needle in path.read_text(encoding="utf-8")
+            if path != door
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if spawn.search(line)
         ]
         assert offenders == [], offenders
 

@@ -29,13 +29,17 @@ POSIX children start in their own session (start_new_session=True) so a
 group signal also sweeps anything the child itself spawned. On Windows
 (dev only) both mechanisms degrade to plain terminate()/kill().
 
-Fork-safety note: preexec_fn forces subprocess off the posix_spawn fast
-path onto fork()+exec(), and this process is multithreaded (asyncio's
-to_thread pool) — a lock held by another thread at fork() time would
-deadlock the child before exec. The preexec_fn here is deliberately
-minimal (one pre-bound ctypes call, no imports/logging/allocation) to
-shrink that window; it cannot be closed entirely. If an encode ever
-hangs INSIDE subprocess creation (spawn never returns, no ffmpeg
+Fork-safety note: asyncio always spawns with fork()+exec() (its Popen
+call keeps close_fds=True, which rules out the posix_spawn path), and
+this process is multithreaded (asyncio's to_thread pool). Without a
+preexec_fn the child runs only C code between fork and exec; WITH one
+it runs Python, so a lock held by another thread at fork() time can
+deadlock the child before exec, and the parent, which waits for the
+exec synchronously on the loop thread, hangs with it: the whole event
+loop, not one spawn, and no deadline can cover it. The preexec_fn here
+is deliberately minimal (one ctypes call, bound at import, no
+imports/logging) to shrink that window; it cannot be closed entirely.
+If a spawn ever hangs (create_subprocess_exec never returns, no child
 process appears), suspect this before anything else.
 """
 
@@ -81,9 +85,12 @@ else:
             _libc = None
 
         if _libc is not None:
+            # Bound in the parent so the child's pre-exec window does not
+            # pay for ctypes' first-call symbol lookup and _FuncPtr build.
+            _prctl: Any = _libc.prctl
 
             def _set_pdeathsig() -> None:  # pragma: no cover — runs in the forked child
-                _libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+                _prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
 
             _SPAWN_KWARGS["preexec_fn"] = _set_pdeathsig
 
@@ -121,25 +128,32 @@ async def terminate_process_tree(
 
 
 class Child:
-    """What managed_subprocess yields: the asyncio Process and the deadline
-    its block runs under."""
+    """What managed_subprocess yields: the asyncio Process, the deadline its
+    block runs under, and the window that deadline was set to."""
 
-    __slots__ = ("_deadline", "proc")
+    __slots__ = ("_deadline", "proc", "timeout")
 
-    def __init__(self, proc: asyncio.subprocess.Process, deadline: asyncio.Timeout) -> None:
+    def __init__(
+        self, proc: asyncio.subprocess.Process, deadline: asyncio.Timeout, timeout: float
+    ) -> None:
         self.proc = proc
+        self.timeout = timeout
         self._deadline = deadline
 
-    def extend(self, seconds: float) -> None:
-        """Move the deadline to `seconds` from now.
+    def extend(self, seconds: float | None = None) -> None:
+        """Move the deadline to `seconds` from now (default: the window the
+        child was started with).
 
         For a long child that reports progress (an encode): call this on
         every line it emits and the deadline becomes a stall watchdog. A
-        child that goes quiet for `seconds` is killed; a slow one that
-        keeps talking runs as long as it needs to."""
-        if self._deadline.expired():
-            return  # already fired; the block is unwinding into TimeoutError
-        self._deadline.reschedule(asyncio.get_running_loop().time() + seconds)
+        child that goes quiet for the window is killed; a slow one that
+        keeps talking runs as long as it needs to. A no-op once the
+        deadline has fired or the block has exited."""
+        window = self.timeout if seconds is None else seconds
+        # asyncio refuses to reschedule an expiring, expired or exited
+        # Timeout; all three mean there is nothing left to extend.
+        with contextlib.suppress(RuntimeError):
+            self._deadline.reschedule(asyncio.get_running_loop().time() + window)
 
 
 @contextlib.asynccontextmanager
@@ -160,7 +174,7 @@ async def managed_subprocess(
     proc = await asyncio.create_subprocess_exec(*cmd, **_SPAWN_KWARGS, **kwargs)  # type: ignore[misc]
     try:
         async with asyncio.timeout(timeout) as deadline:
-            yield Child(proc, deadline)
+            yield Child(proc, deadline, timeout)
     finally:
         if proc.returncode is None:
             await terminate_process_tree(proc, grace=grace)

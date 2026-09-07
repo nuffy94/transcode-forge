@@ -569,7 +569,7 @@ async def run_encode(
             # deadline: the encode dies after ENCODE_STALL_SECONDS of silence,
             # never for merely being slow.
             while True:
-                child.extend(ENCODE_STALL_SECONDS)
+                child.extend()
                 try:
                     line_bytes = await proc.stderr.readline()
                 except ValueError:

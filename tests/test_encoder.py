@@ -257,7 +257,7 @@ class TestRunEncodeStallWatchdog:
 
         from transcode_forge.worker import encoder
 
-        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 0.5)
+        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 2.0)
         cmd = [sys.executable, "-c", "import time; time.sleep(30)", str(tmp_path / "out.mkv")]
         started = time.monotonic()
         result = await encoder.run_encode(cmd, total_duration=60.0)
@@ -271,12 +271,13 @@ class TestRunEncodeStallWatchdog:
 
         from transcode_forge.worker import encoder
 
-        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 0.5)
+        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 2.0)
+        # 3 s of chatter against a 2 s window: only extend() keeps it alive.
         script = (
             "import sys, time\n"
-            "for i in range(12):\n"
+            "for i in range(15):\n"
             "    print('frame=', i, file=sys.stderr, flush=True)\n"
-            "    time.sleep(0.15)\n"
+            "    time.sleep(0.2)\n"
             "open(sys.argv[1], 'wb').write(b'x')\n"
         )
         out = tmp_path / "out.mkv"
@@ -285,4 +286,4 @@ class TestRunEncodeStallWatchdog:
             [sys.executable, "-c", script, str(out)], total_duration=60.0
         )
         assert result.success is True
-        assert time.monotonic() - started > 1.0
+        assert time.monotonic() - started > 2.5

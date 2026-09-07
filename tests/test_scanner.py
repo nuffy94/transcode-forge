@@ -209,10 +209,38 @@ class TestFfprobe:
         ):
             await ffprobe(test_file)
 
+    async def test_probe_cancel_kills_ffprobe(self, tmp_path):
+        """R-025: a cancelled probe (scan task torn down mid-ffprobe) used
+        to abandon its child. Through the one door the child dies with
+        the task. This is the behavior that is new for probe.py."""
+        import asyncio
+        import sys
+
+        test_file = tmp_path / "test.mkv"
+        test_file.write_bytes(b"fake")
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list = []
+
+        async def hung_ffprobe(*args, **kwargs):
+            proc = await real_exec(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+            spawned.append(proc)
+            return proc
+
+        with patch(
+            "transcode_forge.scanner.probe.asyncio.create_subprocess_exec",
+            side_effect=hung_ffprobe,
+        ):
+            task = asyncio.create_task(ffprobe(test_file))
+            while not spawned:
+                await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert spawned[0].returncode is not None
+
     async def test_probe_timeout_kills_ffprobe(self, tmp_path, monkeypatch):
-        """R-025: the scanner's ffprobe goes through the one door, so a
-        hung probe is killed on timeout (and on cancellation) instead of
-        lingering."""
+        """The kill on timeout existed before the door (probe.py did it by
+        hand); it now comes from the door. Pinned so the door keeps it."""
         import asyncio
         import sys
 
