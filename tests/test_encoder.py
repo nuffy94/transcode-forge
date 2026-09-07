@@ -245,3 +245,45 @@ class TestErrorNoiseFilter:
             "[swscaler @ 0x1] Unsupported conversion: yuv420p -> nonsense",
         ]:
             assert not _is_noise(line), line
+
+
+class TestRunEncodeStallWatchdog:
+    """R-001: an ffmpeg that stops talking is killed and reported; a slow
+    one that keeps reporting progress is left alone."""
+
+    async def test_silent_ffmpeg_is_killed_and_reported(self, tmp_path, monkeypatch):
+        import sys
+        import time
+
+        from transcode_forge.worker import encoder
+
+        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 2.0)
+        cmd = [sys.executable, "-c", "import time; time.sleep(30)", str(tmp_path / "out.mkv")]
+        started = time.monotonic()
+        result = await encoder.run_encode(cmd, total_duration=60.0)
+        assert result.success is False
+        assert "silent" in (result.error_message or "")
+        assert time.monotonic() - started < 10.0
+
+    async def test_slow_but_talking_ffmpeg_is_left_alone(self, tmp_path, monkeypatch):
+        import sys
+        import time
+
+        from transcode_forge.worker import encoder
+
+        monkeypatch.setattr(encoder, "ENCODE_STALL_SECONDS", 2.0)
+        # 3 s of chatter against a 2 s window: only extend() keeps it alive.
+        script = (
+            "import sys, time\n"
+            "for i in range(15):\n"
+            "    print('frame=', i, file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.2)\n"
+            "open(sys.argv[1], 'wb').write(b'x')\n"
+        )
+        out = tmp_path / "out.mkv"
+        started = time.monotonic()
+        result = await encoder.run_encode(
+            [sys.executable, "-c", script, str(out)], total_duration=60.0
+        )
+        assert result.success is True
+        assert time.monotonic() - started > 2.5
