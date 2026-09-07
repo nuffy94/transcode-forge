@@ -571,12 +571,13 @@ async def _decode_check(path: Path, duration: float) -> None:
     """Push frames through the decoder at three offsets to catch
     bitstream corruption ffprobe missed.
 
-    The verdict is "ffmpeg had nothing to say". At -v error its only
-    output is complaints, and it exits 0 after recoverable ones (a frame
-    it could not reconstruct, a container that ended early), so a
-    non-zero exit OR any stderr fails VERIFY (ledger R-005). Damage the
-    decoder never notices (a clean decode of a garbage picture) is the
-    VMAF gate's job, not this check's.
+    The verdict is "ffmpeg had nothing to say". For this command (decode
+    to the null muxer, no encoder loaded) the only output at -v error is
+    a complaint, and ffmpeg exits 0 after recoverable ones (a frame it
+    could not reconstruct, a container that ended early), so a non-zero
+    exit OR any stderr fails VERIFY (ledger R-005). Damage the decoder
+    never notices (a clean decode of a garbage picture) is the VMAF
+    gate's job, not this check's.
     """
     if duration < DECODE_SAMPLE_SECONDS * 1.5:
         # File too short to bother sampling — decode the whole thing once.
