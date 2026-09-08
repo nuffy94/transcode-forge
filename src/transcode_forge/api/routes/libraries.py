@@ -3,15 +3,15 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
 
 from transcode_forge.api.deps import get_db, get_settings
-from transcode_forge.api.routes.scan import run_scan
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.models.library import StorageBackendType
 from transcode_forge.repos import libraries as lib_repo
+from transcode_forge.scanner import runner
 
 router = APIRouter(tags=["libraries"])
 
@@ -120,7 +120,6 @@ async def delete_library(
 @router.post("/libraries/{lib_id}/scan", status_code=202)
 async def trigger_library_scan(
     lib_id: str,
-    background_tasks: BackgroundTasks,
     max_files: int = 0,
     db: DBConnection = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -129,15 +128,17 @@ async def trigger_library_scan(
     if not lib:
         raise HTTPException(404, "Library not found")
 
-    # run_scan dispatches on the library backend (filesystem vs S3).
-    background_tasks.add_task(
-        run_scan,
-        lib["id"],
-        lib["name"],
-        lib["path"],
-        lib["media_type"],
-        max_files,
-        db,
-        settings,
+    # The door dispatches on the library backend (filesystem vs S3) and
+    # refuses a second scan of a library while one is alive.
+    task = runner.start_scan(
+        library_id=lib["id"],
+        library_name=lib["name"],
+        library_path=lib["path"],
+        media_type=lib["media_type"],
+        limit=max_files,
+        db=db,
+        settings=settings,
     )
+    if task is None:
+        raise HTTPException(409, f"A scan of '{lib['name']}' is already running")
     return {"status": "scanning", "library": lib["name"]}

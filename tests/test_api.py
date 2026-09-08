@@ -1,5 +1,8 @@
 """Integration tests for REST API endpoints."""
 
+import asyncio
+from unittest.mock import patch
+
 import pytest
 from httpx import AsyncClient
 
@@ -10,6 +13,7 @@ from transcode_forge.models.worker import Worker
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import skipped as skip_repo
 from transcode_forge.repos import workers as worker_repo
+from transcode_forge.scanner import runner
 
 
 class TestHealthEndpoint:
@@ -174,6 +178,7 @@ class TestLibrariesEndpoint:
         monkeypatch.setattr("transcode_forge.scanner.s3_scanner.scan_s3_library", fake_s3_scan)
         resp = await client.post(f"/api/libraries/{lib_id}/scan")
         assert resp.status_code == 202
+        await asyncio.gather(*runner.live_scans())  # the scan is a task, not a BackgroundTask
         assert called["bucket"] == "forge-media"
         assert called["prefix"] == "masters/movies/"
 
@@ -381,6 +386,59 @@ class TestWorkersEndpoint:
 
 
 class TestScanEndpoint:
+    async def test_nothing_to_scan_is_202_not_409(self, client: AsyncClient):
+        """A bare install with no libraries: nothing started and nothing busy
+        is an empty 202, not a 409 with an empty message (review of #118)."""
+        with patch("transcode_forge.api.routes.scan.lib_repo.list_libraries", return_value=[]):
+            resp = await client.post("/api/scan", json={})
+        assert resp.status_code == 202
+        assert resp.json() == {"scan_ids": [], "status": "running", "skipped": []}
+
+    async def test_second_scan_of_a_running_library_is_409(self, client: AsyncClient, tmp_path):
+        """R-007: the loop's docstring promised a running-scan guard and
+        there was none, so a manual scan started on top of the nightly
+        one. Both routes now answer 409 while a library's scan is alive,
+        a scan-everything request skips the busy library, and each
+        library's scan runs once."""
+        for name in ("movies", "tv", "anime"):
+            (tmp_path / name).mkdir(exist_ok=True)
+        gate = asyncio.Event()
+        calls: list[str] = []
+
+        async def blocked_scan(**kwargs):
+            calls.append(kwargs["library_name"])
+            await gate.wait()
+
+        with patch("transcode_forge.scanner.scanner.scan_library", side_effect=blocked_scan):
+            first = await client.post("/api/scan", json={"library": "movies"})
+            assert first.status_code == 202
+
+            again = await client.post("/api/scan", json={"library": "movies"})
+            assert again.status_code == 409
+            assert "already running" in again.json()["detail"]
+
+            libs = {
+                lib["name"]: lib["id"]
+                for lib in (await client.get("/api/libraries")).json()["data"]
+            }
+            by_id = await client.post(f"/api/libraries/{libs['movies']}/scan")
+            assert by_id.status_code == 409
+
+            everything = await client.post("/api/scan", json={})
+            assert everything.status_code == 202
+            body = everything.json()
+            assert sorted(body["scan_ids"]) == ["anime", "tv"]
+            assert body["skipped"] == ["movies"]
+            assert "movies already running" in everything.headers["HX-Trigger"]
+
+            gate.set()
+            await asyncio.gather(*runner.live_scans())
+            assert sorted(calls) == ["anime", "movies", "tv"]
+
+            after = await client.post("/api/scan", json={"library": "movies"})
+            assert after.status_code == 202
+            await asyncio.gather(*runner.live_scans())
+
     async def test_trigger_scan(self, client: AsyncClient, app, tmp_path):
         # Create library directory so scan doesn't fail immediately
         (tmp_path / "movies").mkdir(exist_ok=True)

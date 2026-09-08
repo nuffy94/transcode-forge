@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection, init_db
 from transcode_forge.main import create_app
+from transcode_forge.scanner import runner
 
 _TEST_DB_URL = os.environ.get("TF_TEST_DB_URL", "")
 USE_PG = _TEST_DB_URL.startswith("postgres")
@@ -117,6 +118,8 @@ async def app(test_settings: Settings) -> Any:
 
     yield application
 
+    # Like the lifespan's shutdown: no scan task may outlive its DB.
+    await runner.cancel_all()
     await application.state.db.close()
 
 

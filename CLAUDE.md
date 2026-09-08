@@ -118,6 +118,13 @@ Scanner (ffprobe) → media_files (catalog)
 The scanner never creates jobs — it builds a browseable catalog. Users
 select files and queue them via the UI.
 
+Every scan, manual or scheduled, starts through `scanner/runner.py`
+`start_scan()`: a scan is an asyncio task and a library has at most one
+live one (the API answers 409, the scheduled loop skips). The scheduled
+loop reads a library's last attempt from the `scans` table, so a restart
+rescans nothing that ran within its interval, and the directory walk runs
+off the event loop.
+
 ### Real-time updates
 
 Workers report progress via `POST /api/worker/job/{id}/progress`. The

@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db, get_settings
@@ -12,7 +12,7 @@ from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.repos import scans as scan_repo
-from transcode_forge.scanner.scanner import scan_library
+from transcode_forge.scanner import runner
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +29,13 @@ class ScanRequest(BaseModel):
 class ScanResponse(BaseModel):
     scan_ids: list[str]
     status: str = "running"
+    # Libraries not started because a scan of them is already running.
+    skipped: list[str] = []
 
 
 @router.post("/scan", status_code=202)
 async def trigger_scan(
     body: ScanRequest,
-    background_tasks: BackgroundTasks,
     response: Response,
     db: DBConnection = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -71,85 +72,31 @@ async def trigger_scan(
     else:
         targets = db_libs
 
-    scan_ids: list[str] = []
+    started: list[str] = []
+    busy: list[str] = []
     for lib in targets:
-        if settings.demo_mode:
-            from transcode_forge.demo.simulator import simulate_scan
+        task = runner.start_scan(
+            library_id=lib["id"],
+            library_name=lib["name"],
+            library_path=lib["path"],
+            media_type=lib["media_type"],
+            limit=body.limit,
+            db=db,
+            settings=settings,
+        )
+        (started if task is not None else busy).append(lib["name"])
 
-            background_tasks.add_task(
-                simulate_scan,
-                lib["id"],
-                lib["name"],
-                lib["media_type"],
-                body.limit,
-                db,
-            )
-        else:
-            background_tasks.add_task(
-                run_scan,
-                lib["id"],
-                lib["name"],
-                lib["path"],
-                lib["media_type"],
-                body.limit,
-                db,
-                settings,
-            )
-        scan_ids.append(lib["name"])
-
-    trigger = {"showToast": {"message": "Library scan started", "type": "info"}}
+    if busy and not started:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A scan is already running for: {', '.join(busy)}",
+        )
+    message = "Library scan started"
+    if busy:
+        message += f" ({', '.join(busy)} already running)"
+    trigger = {"showToast": {"message": message, "type": "info"}}
     response.headers["HX-Trigger"] = json.dumps(trigger)
-    return ScanResponse(scan_ids=scan_ids)
-
-
-async def run_scan(
-    library_id: str,
-    library_name: str,
-    library_path: str,
-    media_type: str,
-    limit: int,
-    db: DBConnection,
-    settings: Settings,
-) -> None:
-    """Background task wrapper for scan_library.
-
-    Dispatches to FS or S3 scanner based on library backend.
-    """
-    from transcode_forge.models.library import StorageBackendType
-    from transcode_forge.scanner.s3_scanner import scan_s3_library
-
-    try:
-        # Get library details to determine backend
-        lib = await lib_repo.get_library(db, library_id)
-        if not lib:
-            logger.error("Library %s not found", library_id)
-            return
-
-        backend = lib.get("backend", "filesystem")
-
-        if backend == StorageBackendType.S3:
-            # S3 library: use S3 scanner
-            await scan_s3_library(
-                library_id=library_id,
-                library_name=library_name,
-                bucket=lib.get("s3_bucket", ""),
-                prefix=lib.get("s3_prefix", ""),
-                config=settings,
-                db=db,
-                max_files=limit,
-            )
-        else:
-            # Filesystem library: use FS scanner
-            await scan_library(
-                library_id=library_id,
-                library_name=library_name,
-                library_path=library_path,
-                media_type=media_type,
-                db=db,
-                max_files=limit,
-            )
-    except Exception as e:
-        logger.exception("Scan failed for library '%s': %s", library_name, e)
+    return ScanResponse(scan_ids=started, skipped=busy)
 
 
 @router.get("/scans")

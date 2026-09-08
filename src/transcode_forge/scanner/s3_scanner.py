@@ -9,6 +9,7 @@ This module handles scanning S3-backed libraries:
 3. Catalog results into media_files with the S3 key as source_path
 """
 
+import asyncio
 import dataclasses
 import logging
 from datetime import UTC, datetime
@@ -182,6 +183,10 @@ async def scan_s3_library(
                         )
                         await db.commit()
 
+    except asyncio.CancelledError:
+        # Shutdown cancels live scans: the row must not stay 'running'.
+        await scan_repo.update_scan(db, scan.id, status=ScanStatus.FAILED)
+        raise
     except Exception as e:
         # Not just boto errors — endpoint/credential parsing can raise
         # ValueError before any S3 call. Whatever it was, the record must
