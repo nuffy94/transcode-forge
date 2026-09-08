@@ -23,6 +23,11 @@ from transcode_forge.scanner.probe import (
 
 logger = logging.getLogger(__name__)
 
+# The directory walk's deadline. The walk runs in a thread the task cannot
+# stop, so a wedged share would otherwise hold its library busy (409, and
+# skipped by the scheduled loop) until the scheduler restarts.
+SCAN_WALK_TIMEOUT_SECONDS = 1800.0
+
 # Regex for parsing TV show filenames: "Show Name S01E02" or "Show Name - 1x02"
 TV_EPISODE_RE = re.compile(
     r"^(?P<show>.+?)\s*[-.]?\s*[Ss](?P<season>\d+)[Ee](?P<episode>\d+)",
@@ -114,8 +119,11 @@ async def scan_library(
     try:
         # The walk is seconds on local disk and can be a minute on a slow
         # share; on the event loop it would stall every claim, heartbeat
-        # and page for that long (R-006), so it runs in a thread.
-        video_files = await asyncio.to_thread(_list_video_files, root)
+        # and page for that long (R-006), so it runs in a thread, with a
+        # deadline so a wedged share fails the scan instead of parking it.
+        video_files = await asyncio.wait_for(
+            asyncio.to_thread(_list_video_files, root), timeout=SCAN_WALK_TIMEOUT_SECONDS
+        )
 
         for file_path in video_files:
             if max_files > 0 and files_found >= max_files:
@@ -205,6 +213,19 @@ async def scan_library(
                     files_skipped,
                 )
 
+    except asyncio.CancelledError:
+        # Shutdown cancels live scans (runner.cancel_all): the row must not
+        # stay 'running' forever, and the attempt counts as an attempt.
+        await scan_repo.update_scan(
+            db,
+            scan.id,
+            files_found=files_found,
+            files_new=files_new,
+            files_updated=files_updated,
+            files_skipped=files_skipped,
+            status=ScanStatus.FAILED,
+        )
+        raise
     except Exception as e:
         logger.exception("Scan failed: %s", e)
         await scan_repo.update_scan(

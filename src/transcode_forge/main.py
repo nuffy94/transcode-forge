@@ -19,6 +19,7 @@ from transcode_forge.config import Settings, get_settings
 from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.redis import close_redis_pool, create_redis_pool
 from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import scans as scan_repo
 from transcode_forge.repos import workers as worker_repo
 from transcode_forge.scanner import runner
 from transcode_forge.scheduler_cron import run_scheduled_scans
@@ -115,6 +116,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             background_tasks.append(_supervised(run_simulator(app.state.db), "demo-simulator"))
             logger.info("Demo simulator started")
     else:
+        # Nothing can be mid-scan at boot: scans are tasks of this process.
+        stranded = await scan_repo.fail_running(app.state.db)
+        if stranded:
+            logger.warning(
+                "Marked %d scan(s) left 'running' by a previous process as failed", stranded
+            )
         # Production background tasks
         background_tasks.append(
             _supervised(run_scheduled_scans(settings, app.state.db), "scheduled-scans")

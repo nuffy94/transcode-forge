@@ -53,6 +53,18 @@ async def list_scans(
         return [_row_to_scan(r) for r in rows], total
 
 
+async def fail_running(db: DBConnection) -> int:
+    """Mark every 'running' scan failed. Scans are in-process tasks, so
+    at boot none can be running: such a row was left by a process that
+    died mid-scan. Returns how many were reaped."""
+    cur = await db.execute(
+        "UPDATE scans SET status = ?, completed_at = ? WHERE status = ?",
+        (ScanStatus.FAILED.value, datetime.now(UTC).isoformat(), ScanStatus.RUNNING.value),
+    )
+    await db.commit()
+    return int(cur.rowcount)
+
+
 async def latest_started_at(db: DBConnection, library: str) -> datetime | None:
     """When this library's most recent scan attempt started, any status.
 

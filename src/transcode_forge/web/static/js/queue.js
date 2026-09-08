@@ -93,7 +93,10 @@ async function triggerScan() {
         });
         const data = await resp.json();
         if (resp.ok) {
-            showToast(`Scan started: ${data.scan_ids.join(', ')}`, 'success');
+            const skipped = (data.skipped || []).length
+                ? ` (${data.skipped.join(', ')} already running)`
+                : '';
+            showToast(`Scan started: ${data.scan_ids.join(', ')}${skipped}`, 'success');
             status.textContent = `Scanning: ${data.scan_ids.join(', ')}`;
         } else {
             showToast(`Scan error: ${data.detail || 'Unknown'}`, 'error');

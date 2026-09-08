@@ -386,6 +386,14 @@ class TestWorkersEndpoint:
 
 
 class TestScanEndpoint:
+    async def test_nothing_to_scan_is_202_not_409(self, client: AsyncClient):
+        """A bare install with no libraries: nothing started and nothing busy
+        is an empty 202, not a 409 with an empty message (review of #118)."""
+        with patch("transcode_forge.api.routes.scan.lib_repo.list_libraries", return_value=[]):
+            resp = await client.post("/api/scan", json={})
+        assert resp.status_code == 202
+        assert resp.json() == {"scan_ids": [], "status": "running", "skipped": []}
+
     async def test_second_scan_of_a_running_library_is_409(self, client: AsyncClient, tmp_path):
         """R-007: the loop's docstring promised a running-scan guard and
         there was none, so a manual scan started on top of the nightly
@@ -421,6 +429,7 @@ class TestScanEndpoint:
             body = everything.json()
             assert sorted(body["scan_ids"]) == ["anime", "tv"]
             assert body["skipped"] == ["movies"]
+            assert "movies already running" in everything.headers["HX-Trigger"]
 
             gate.set()
             await asyncio.gather(*runner.live_scans())

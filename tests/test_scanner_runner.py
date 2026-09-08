@@ -7,7 +7,7 @@ not alive; there is no running flag to keep in step.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.scanner import runner
@@ -25,7 +25,7 @@ def _start(lib_id: str, db, name: str = "Movies") -> asyncio.Task[None] | None:
         media_type="movies",
         limit=0,
         db=db,
-        settings=MagicMock(),
+        settings=MagicMock(demo_mode=False),
     )
 
 
@@ -82,6 +82,23 @@ async def test_a_crashed_scan_frees_its_library(db, caplog):
         assert "disk fell off" in caplog.text
         assert runner.live_scans() == []
         assert _start(lib_id, db) is not None
+
+
+async def test_demo_mode_scans_through_the_door_too(db):
+    """A demo scan is a scan: it reserves the library like any other."""
+    with patch("transcode_forge.demo.simulator.simulate_scan", new=AsyncMock()) as simulate:
+        task = runner.start_scan(
+            library_id="demo-lib",
+            library_name="Movies",
+            library_path="/movies",
+            media_type="movies",
+            limit=5,
+            db=db,
+            settings=MagicMock(demo_mode=True),
+        )
+        assert task is not None
+        await task
+    simulate.assert_awaited_once_with("demo-lib", "Movies", "movies", 5, db)
 
 
 async def test_cancel_all_stops_live_scans(db):

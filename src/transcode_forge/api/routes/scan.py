@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db, get_settings
@@ -36,7 +36,6 @@ class ScanResponse(BaseModel):
 @router.post("/scan", status_code=202)
 async def trigger_scan(
     body: ScanRequest,
-    background_tasks: BackgroundTasks,
     response: Response,
     db: DBConnection = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -76,19 +75,6 @@ async def trigger_scan(
     started: list[str] = []
     busy: list[str] = []
     for lib in targets:
-        if settings.demo_mode:
-            from transcode_forge.demo.simulator import simulate_scan
-
-            background_tasks.add_task(
-                simulate_scan,
-                lib["id"],
-                lib["name"],
-                lib["media_type"],
-                body.limit,
-                db,
-            )
-            started.append(lib["name"])
-            continue
         task = runner.start_scan(
             library_id=lib["id"],
             library_name=lib["name"],
@@ -100,12 +86,15 @@ async def trigger_scan(
         )
         (started if task is not None else busy).append(lib["name"])
 
-    if not started:
+    if busy and not started:
         raise HTTPException(
             status_code=409,
             detail=f"A scan is already running for: {', '.join(busy)}",
         )
-    trigger = {"showToast": {"message": "Library scan started", "type": "info"}}
+    message = "Library scan started"
+    if busy:
+        message += f" ({', '.join(busy)} already running)"
+    trigger = {"showToast": {"message": message, "type": "info"}}
     response.headers["HX-Trigger"] = json.dumps(trigger)
     return ScanResponse(scan_ids=started, skipped=busy)
 

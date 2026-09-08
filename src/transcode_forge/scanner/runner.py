@@ -82,9 +82,14 @@ async def run_scan(
     db: DBConnection,
     settings: Settings,
 ) -> None:
-    """One scan, dispatched on the library's backend. Failures are logged
-    and counted here, never raised out of the task."""
+    """One scan, dispatched on demo mode and then the library's backend.
+    Failures are logged and counted here, never raised out of the task."""
     try:
+        if settings.demo_mode:
+            from transcode_forge.demo.simulator import simulate_scan
+
+            await simulate_scan(library_id, library_name, media_type, limit, db)
+            return
         lib = await lib_repo.get_library(db, library_id)
         if not lib:
             logger.error("Library %s not found", library_id)

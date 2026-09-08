@@ -513,3 +513,73 @@ class TestWalkOffTheLoop:
         finally:
             tick.cancel()
         assert gaps and max(gaps) < 0.25, f"the event loop stalled {max(gaps):.2f}s during the walk"
+
+    async def test_cancelled_scan_marks_its_row_failed(self, db, tmp_path):
+        """Shutdown cancels live scans; the scans row must not stay
+        'running' forever (review of #118)."""
+        import asyncio
+        import time
+        from unittest.mock import patch
+
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+
+        def slow_rglob(self, pattern):
+            time.sleep(0.3)
+            return iter(())
+
+        with patch.object(Path, "rglob", slow_rglob):
+            task = asyncio.create_task(
+                scan_library(
+                    library_id="lib",
+                    library_name="movies",
+                    library_path=str(lib),
+                    media_type="movies",
+                    db=db,
+                )
+            )
+            await asyncio.sleep(0.05)  # the row exists, the walk is in its thread
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        scans, _ = await scan_repo.list_scans(db)
+        assert [s.status for s in scans] == [ScanStatus.FAILED]
+        await asyncio.sleep(0.3)  # let the walk thread finish before teardown
+
+    async def test_wedged_walk_times_out_and_fails_the_scan(self, db, tmp_path, monkeypatch):
+        """A walk stuck in a syscall on a dead share cannot hold its library
+        busy forever: past the deadline the scan fails and the row says so."""
+        import time
+        from unittest.mock import patch
+
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner import scanner
+        from transcode_forge.scanner.scanner import scan_library
+
+        monkeypatch.setattr(scanner, "SCAN_WALK_TIMEOUT_SECONDS", 0.05)
+        lib = tmp_path / "movies"
+        lib.mkdir()
+
+        def wedged_rglob(self, pattern):
+            time.sleep(0.3)
+            return iter(())
+
+        with patch.object(Path, "rglob", wedged_rglob):
+            with pytest.raises(TimeoutError):
+                await scan_library(
+                    library_id="lib",
+                    library_name="movies",
+                    library_path=str(lib),
+                    media_type="movies",
+                    db=db,
+                )
+        scans, _ = await scan_repo.list_scans(db)
+        assert [s.status for s in scans] == [ScanStatus.FAILED]
+        import asyncio
+
+        await asyncio.sleep(0.3)  # let the walk thread finish before teardown

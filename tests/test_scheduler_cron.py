@@ -164,3 +164,17 @@ class TestSchedulerCron:
         ):
             await scheduler_cron._tick(MagicMock(), db)
         assert "already running" in caplog.text
+
+
+async def test_boot_reaps_rows_a_dead_process_left_running(db):
+    """Scans are tasks of the scheduler process, so at boot none can be
+    running; a 'running' row is a stranded one and is marked failed."""
+    await _seed_scan(db, "Movies", hours_ago=2, status=ScanStatus.RUNNING)
+    await _seed_scan(db, "TV", hours_ago=1, status=ScanStatus.COMPLETE)
+    assert await scan_repo.fail_running(db) == 1
+    scans, _ = await scan_repo.list_scans(db)
+    assert {s.library: s.status for s in scans} == {
+        "Movies": ScanStatus.FAILED,
+        "TV": ScanStatus.COMPLETE,
+    }
+    assert await scan_repo.fail_running(db) == 0
