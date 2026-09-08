@@ -53,6 +53,19 @@ async def list_scans(
         return [_row_to_scan(r) for r in rows], total
 
 
+async def latest_started_at(db: DBConnection, library: str) -> datetime | None:
+    """When this library's most recent scan attempt started, any status.
+
+    The scheduled-scan loop's memory of "last scan" (ledger R-007): it
+    used to live in process memory and every restart forgot it.
+    """
+    async with db.execute(
+        "SELECT MAX(started_at) FROM scans WHERE library = ?", (library,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    return datetime.fromisoformat(row[0]) if row and row[0] else None
+
+
 async def update_scan(
     db: DBConnection,
     scan_id: str,

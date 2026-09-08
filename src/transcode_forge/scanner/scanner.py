@@ -4,6 +4,7 @@ The scanner does NOT create jobs. It builds the browseable catalog.
 Users select files from the catalog and queue them via the UI.
 """
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime
@@ -52,6 +53,24 @@ def parse_tv_info(filepath: Path) -> tuple[str | None, int | None, int | None]:
     return None, None, None
 
 
+def _list_video_files(root: Path) -> list[Path]:
+    """Every video file under root, sorted, walked synchronously.
+
+    Skip symlinks: following them can catalog files outside the library
+    root, and the pipeline's lock/bak files would land at the link path
+    instead of the real file. Skip pipeline artifacts: .tf_bak/.tf_tmp
+    siblings carry media extensions and would become phantom (queueable!)
+    catalog rows during any scan that races a transcode or follows a crash.
+    """
+    files = [
+        f
+        for f in root.rglob("*")
+        if f.is_file() and not f.is_symlink() and is_video_file(f) and not is_pipeline_artifact(f)
+    ]
+    files.sort()
+    return files
+
+
 async def scan_library(
     *,
     library_id: str,
@@ -93,21 +112,10 @@ async def scan_library(
     files_skipped = 0
 
     try:
-        # Skip symlinks: following them can catalog files outside the
-        # library root, and the pipeline's lock/bak files would land at
-        # the link path instead of the real file. Skip pipeline artifacts:
-        # .tf_bak/.tf_tmp siblings carry media extensions and would become
-        # phantom (queueable!) catalog rows during any scan that races a
-        # transcode or follows a crash.
-        video_files = [
-            f
-            for f in root.rglob("*")
-            if f.is_file()
-            and not f.is_symlink()
-            and is_video_file(f)
-            and not is_pipeline_artifact(f)
-        ]
-        video_files.sort()
+        # The walk is seconds on local disk and can be a minute on a slow
+        # share; on the event loop it would stall every claim, heartbeat
+        # and page for that long (R-006), so it runs in a thread.
+        video_files = await asyncio.to_thread(_list_video_files, root)
 
         for file_path in video_files:
             if max_files > 0 and files_found >= max_files:

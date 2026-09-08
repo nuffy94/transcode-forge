@@ -469,3 +469,47 @@ class TestScanLibrary:
         assert row["file_size"] == 40
         assert row["transcode_status"] == "complete"
         assert row["skip_reason"] == "already_hevc"
+
+
+class TestWalkOffTheLoop:
+    async def test_directory_walk_does_not_block_the_event_loop(self, db, tmp_path):
+        """R-006: rglob plus two stats per entry ran on the event loop, so
+        the scheduler served nothing (no claims, no heartbeats, no UI) for
+        the length of the walk. A walk that takes 0.5 s must leave the
+        loop free for other tasks the whole time."""
+        import asyncio
+        import time
+        from unittest.mock import patch
+
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+
+        def slow_rglob(self, pattern):
+            time.sleep(0.5)
+            return iter(())
+
+        gaps: list[float] = []
+
+        async def ticker() -> None:
+            last = time.perf_counter()
+            while True:
+                await asyncio.sleep(0.01)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+
+        tick = asyncio.create_task(ticker())
+        try:
+            with patch.object(Path, "rglob", slow_rglob):
+                await scan_library(
+                    library_id="lib",
+                    library_name="movies",
+                    library_path=str(lib),
+                    media_type="movies",
+                    db=db,
+                )
+        finally:
+            tick.cancel()
+        assert gaps and max(gaps) < 0.25, f"the event loop stalled {max(gaps):.2f}s during the walk"

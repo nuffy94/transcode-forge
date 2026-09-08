@@ -3,9 +3,10 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,7 @@ from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.redis import close_redis_pool, create_redis_pool
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import workers as worker_repo
+from transcode_forge.scanner import runner
 from transcode_forge.scheduler_cron import run_scheduled_scans
 
 logger = logging.getLogger(__name__)
@@ -103,20 +105,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # "HEARTBEAT LOST" cards mid-run — see demo/heartbeat.py.
             from transcode_forge.demo.heartbeat import run_static_heartbeat
 
-            background_tasks.append(asyncio.create_task(run_static_heartbeat(app.state.db)))
+            background_tasks.append(
+                _supervised(run_static_heartbeat(app.state.db), "demo-heartbeat")
+            )
             logger.info("Demo data seeded (STATIC — simulator disabled, heartbeat keep-alive on)")
         else:
             from transcode_forge.demo.simulator import run_simulator
 
-            background_tasks.append(asyncio.create_task(run_simulator(app.state.db)))
+            background_tasks.append(_supervised(run_simulator(app.state.db), "demo-simulator"))
             logger.info("Demo simulator started")
     else:
         # Production background tasks
-        background_tasks.append(asyncio.create_task(run_scheduled_scans(settings, app.state.db)))
         background_tasks.append(
-            asyncio.create_task(_stale_worker_loop(app.state.db, settings.heartbeat_timeout))
+            _supervised(run_scheduled_scans(settings, app.state.db), "scheduled-scans")
         )
-        background_tasks.append(asyncio.create_task(_orphan_requeue_loop(app.state.db)))
+        background_tasks.append(
+            _supervised(
+                _stale_worker_loop(app.state.db, settings.heartbeat_timeout), "stale-workers"
+            )
+        )
+        background_tasks.append(_supervised(_orphan_requeue_loop(app.state.db), "orphan-requeue"))
         logger.info("Background tasks started (scans, stale worker cleanup, orphan job requeue)")
 
     yield
@@ -129,9 +137,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # in-flight DB writes) BEFORE tearing down Redis/DB underneath them.
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
+    await runner.cancel_all()  # scans are tasks too; none may outlive the DB
     if app.state.redis is not None:
         await close_redis_pool(app.state.redis)
     await close_db(app.state.db)
+
+
+def _supervised(coro: Coroutine[Any, Any, None], name: str) -> asyncio.Task[None]:
+    """Start a background loop that is meant to run for the life of the
+    process, and say so loudly if it exits any other way than cancellation.
+    Shutdown gathers with return_exceptions=True, which would otherwise
+    swallow the exception that killed it (ledger R-007)."""
+    task = asyncio.create_task(coro, name=name)
+
+    def _report(done: asyncio.Task[None]) -> None:
+        if done.cancelled():
+            return
+        exc = done.exception()
+        if exc is not None:
+            logger.error("Background task %s died: %r", name, exc)
+        else:
+            logger.error("Background task %s exited; it was meant to run forever", name)
+
+    task.add_done_callback(_report)
+    return task
 
 
 async def _stale_worker_loop(db: DBConnection, heartbeat_timeout: int) -> None:
