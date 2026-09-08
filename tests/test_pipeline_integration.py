@@ -16,7 +16,7 @@ import subprocess
 import pytest
 
 from transcode_forge.scanner.probe import ffprobe
-from transcode_forge.worker.pipeline import run_pipeline
+from transcode_forge.worker.pipeline import PipelineError, _decode_check, run_pipeline
 
 _FFMPEG = shutil.which("ffmpeg")
 _FFPROBE = shutil.which("ffprobe")
@@ -110,3 +110,98 @@ async def test_real_cpu_encode_replaces_original(tmp_path, codec, encoder):
     for suffix in (".tf_lock", ".tf_tmp", ".tf_bak"):
         leftovers = list(tmp_path.glob(f"*{suffix}*"))
         assert leftovers == [], f"leftover {suffix} files: {leftovers}"
+
+
+# --- R-005: VERIFY's decode check must fail on damage ffmpeg only complains about
+
+
+def _make_hevc(path, *, duration: float = 16.0) -> None:
+    """A small 10-bit HEVC clip in mkv, the shape of a pipeline output. 16 s
+    is past the 1.5x DECODE_SAMPLE_SECONDS threshold, so the check takes
+    its real three-offset seek path rather than the short-file pass."""
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=640x480:rate=24:duration={duration}",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-x265-params",
+            "log-level=error",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _truncate_container(src, dst) -> None:
+    """Cut the file at 60%: the demuxer reports 'File ended prematurely'
+    and ffmpeg still exits 0."""
+    data = src.read_bytes()
+    dst.write_bytes(data[: int(len(data) * 0.6)])
+
+
+def _drop_reference_frames(src, dst) -> None:
+    """Drop video packets 20 to 25 with ffmpeg's noise bitstream filter,
+    container fields intact: every later frame that references them makes
+    the decoder say 'Could not find ref with POC' until the next keyframe,
+    and ffmpeg still exits 0. Which packets go is a function of the packet
+    index, so the damage is the same on every build. Blind byte-flipping
+    was tried first and decoded silently five times out of eight (garbage
+    picture, no error: that case is the VMAF gate's job)."""
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
+            "-c",
+            "copy",
+            "-bsf:v",
+            r"noise=drop=between(n\,20\,25)",
+            str(dst),
+        ],
+        check=True,
+    )
+    assert dst.stat().st_size < src.stat().st_size, "the drop filter removed nothing"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(_truncate_container, id="truncated-container"),
+        pytest.param(_drop_reference_frames, id="missing-reference-frames"),
+    ],
+)
+async def test_decode_check_fails_a_damaged_encode(tmp_path, damage):
+    """Ledger R-005: the deep decode check read only ffmpeg's exit code, and
+    ffmpeg exits 0 after recoverable decoder and demuxer errors. Both
+    damage shapes must fail VERIFY through the three-offset seek path,
+    and the clean clip must pass through the same path (a complaint on a
+    clean seek would be a false positive on every fleet encode)."""
+    if not _encoder_available("libx265"):
+        pytest.skip("ffmpeg build lacks libx265")
+    clean = tmp_path / "clean.mkv"
+    _make_hevc(clean)
+    duration = (await ffprobe(clean)).duration
+    assert duration > 0
+
+    await _decode_check(clean, duration)  # a clean encode passes
+
+    damaged = tmp_path / "damaged.mkv"
+    damage(clean, damaged)
+    with pytest.raises(PipelineError, match="Decode test failed"):
+        await _decode_check(damaged, duration)
