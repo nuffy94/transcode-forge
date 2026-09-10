@@ -20,6 +20,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from transcode_forge.admin import ensure_admin
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection, init_db
 from transcode_forge.main import create_app
@@ -131,11 +132,10 @@ async def client(app: Any) -> AsyncClient:
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        # First-run setup creates the admin and logs the caller in.
-        resp = await c.post("/api/auth/setup", json={"password": "test-pwd-12345"})
-        if resp.status_code == 409:
-            # Admin already exists in this DB — log in normally
-            await c.post("/api/auth/login", json={"password": "test-pwd-12345"})
+        # The app fixture wires state by hand and runs no lifespan, so mint
+        # the admin the same way startup does, then log in over HTTP.
+        await ensure_admin(app.state.db, "test-pwd-12345")
+        await c.post("/api/auth/login", json={"password": "test-pwd-12345"})
         yield c
 
 

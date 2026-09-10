@@ -156,11 +156,29 @@ written to `/opt/transcode-forge/`.
 An `A` record for your domain → the instance's public IP. With the
 Cloudflare DNS-01 token, certificates issue even before DNS propagates.
 
-### 6. First-run setup
+### 6. Log in
 
-Open `https://<domain>/setup` (no domain: tunnel with
-`ssh -L 8000:127.0.0.1:8000 root@<ip>` and use `http://localhost:8000`),
-create the admin account, then **Settings → Add library**:
+The instance creates its own admin account on first boot and prints the
+password once, to the scheduler's log. Read it on the instance:
+
+```bash
+cd /opt/transcode-forge
+docker compose logs scheduler | grep -A4 'no admin account'
+```
+
+Then open `https://<domain>` (no domain: tunnel with
+`ssh -L 8000:127.0.0.1:8000 root@<ip>` and use `http://localhost:8000`)
+and log in as `admin`. Change the password whenever you like:
+
+```bash
+docker compose exec scheduler python -m transcode_forge.admin reset-password
+```
+
+There is no web page that creates the admin, on purpose: certificates put
+your hostname in the public transparency logs within seconds of issuing, so
+a first-run setup page on a public address is a race you can lose.
+
+Then **Settings → Add library**:
 
 - **Object Storage:** storage "S3 Object Storage", bucket `forge-media`,
   prefix `masters/movies/`. End prefixes with a trailing slash — S3 prefix

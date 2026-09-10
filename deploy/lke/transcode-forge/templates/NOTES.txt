@@ -5,8 +5,9 @@ Transcode Forge is deploying.
 
 2. Reach the UI (no public edge by default):
      kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "transcode-forge.fullname" . }} 8000:8000
-   then open http://localhost:8000 — first boot lands on /setup to create
-   the admin user.
+   then open http://localhost:8000 and log in as 'admin'. The password was
+   generated on first boot and printed once to the scheduler's log:
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "transcode-forge.fullname" . }} | grep -A4 'no admin account' 
 
 3. Add an S3 library (Settings -> Add library -> S3 Object Storage) and
    scan it. LKE block storage is single-node, so media lives in Object

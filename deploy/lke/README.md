@@ -86,7 +86,10 @@ Running.
 kubectl -n transcode-forge port-forward svc/transcode-forge 8000:8000
 ```
 
-Open `http://localhost:8000` → `/setup` creates the admin account. Then
+The scheduler creates the admin on first boot and prints the password once
+to its pod log (`kubectl -n transcode-forge logs deploy/transcode-forge |
+grep -A4 'no admin account'`). Open `http://localhost:8000` and log in as
+`admin`. Then
 **Settings → Add library**: storage "S3 Object Storage", your bucket,
 prefix `masters/movies/` (trailing slash — S3 prefix matching is raw
 string-prefix). Scan it.

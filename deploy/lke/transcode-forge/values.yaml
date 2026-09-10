@@ -54,7 +54,7 @@ scheduler:
 worker:
   # Workers need a server-issued token, so the chart defaults to none and
   # rendering fails if replicas > 0 without secrets.workerToken. Flow:
-  # install with 0 -> /setup -> issue token -> upgrade with token + 1.
+  # install with 0 -> log in -> issue token -> upgrade with token + 1.
   replicas: 0
   # Encode slots per worker. Leave at 1 and scale replicas instead —
   # ffmpeg already threads across the CPU limit.

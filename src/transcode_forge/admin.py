@@ -1,9 +1,16 @@
-"""Admin maintenance CLI — run on the server (where TF_DB_URL is set).
+"""The admin account door — and there is only one of it.
 
-The single-admin login has no email reset (none configured, one user), so
-recovery is server-side, the same way Nextcloud's `occ user:resetpassword` or
-Django's `manage.py changepassword` work: if you can run commands on the host,
-you are the admin.
+If you can run commands on the host, you are the admin. That is the whole
+model, the same way Nextcloud's `occ user:resetpassword` or Django's
+`manage.py changepassword` work. Nothing reachable over the network can
+create or reset the admin: `ensure_admin()` runs at startup so an instance is
+owned before it serves its first request, and this CLI covers recovery.
+
+There used to be a second door, `POST /api/auth/setup`, which handed the
+account to whoever loaded it first. On a public deploy Caddy publishes the
+hostname to the certificate transparency logs seconds before the operator has
+set a password, so that door was a race against the internet (R-040). It is
+gone.
 
     # In a Docker deploy:
     docker compose exec scheduler python -m transcode_forge.admin reset-password
@@ -21,14 +28,62 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import secrets
 import sys
+from typing import NamedTuple
 
 from transcode_forge.config import get_settings
-from transcode_forge.db import close_db, init_db
+from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.repos import users as user_repo
 
-MIN_LEN = 8  # matches the /setup form (SetupRequest)
+MIN_LEN = 8
 MAX_LEN = 200
+
+# 12 random bytes -> 16 URL-safe characters: far past guessing, still short
+# enough to read off a terminal and type once.
+_GENERATED_PASSWORD_BYTES = 12
+
+
+class AdminBootstrap(NamedTuple):
+    """What startup did about the admin account.
+
+    `generated_password` is set only when this call invented the password,
+    which is the only case where anything should be printed. An operator who
+    supplied TF_ADMIN_PASSWORD already knows it, so it stays out of the log.
+    """
+
+    created: bool
+    generated_password: str | None
+
+
+async def ensure_admin(db: DBConnection, password: str | None = None) -> AdminBootstrap:
+    """Give this instance an owner before it can serve a request.
+
+    Called once at startup. If an admin already exists this is a no-op, so a
+    restart never rotates the credential out from under the operator.
+    """
+    if await user_repo.has_admin(db):
+        return AdminBootstrap(created=False, generated_password=None)
+
+    if password is not None and not (MIN_LEN <= len(password) <= MAX_LEN):
+        # Refuse to boot rather than boot unowned — the whole point of this
+        # function is that an unowned instance never gets to serve traffic.
+        raise ValueError(f"TF_ADMIN_PASSWORD must be {MIN_LEN}-{MAX_LEN} characters.")
+
+    generated = password is None
+    secret = password if password is not None else secrets.token_urlsafe(_GENERATED_PASSWORD_BYTES)
+
+    try:
+        await user_repo.create_admin(db, secret)
+    except Exception:
+        # Another scheduler replica can boot against the same database.
+        # users.username is UNIQUE, so the loser's INSERT raises: whoever won
+        # owns the instance, and its password is the live one.
+        if await user_repo.has_admin(db):
+            return AdminBootstrap(created=False, generated_password=None)
+        raise
+
+    return AdminBootstrap(created=True, generated_password=secret if generated else None)
 
 
 async def reset_admin_password(password: str) -> str:

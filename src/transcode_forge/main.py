@@ -14,12 +14,14 @@ from redis.exceptions import RedisError
 from starlette.middleware.sessions import SessionMiddleware
 
 from transcode_forge import __version__
+from transcode_forge.admin import ensure_admin
 from transcode_forge.auth import AuthMiddleware
 from transcode_forge.config import Settings, get_settings
 from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.redis import close_redis_pool, create_redis_pool
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import scans as scan_repo
+from transcode_forge.repos import users as user_repo
 from transcode_forge.repos import workers as worker_repo
 from transcode_forge.scanner import runner
 from transcode_forge.scheduler_cron import run_scheduled_scans
@@ -78,6 +80,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.db = await init_db(db_url)
     logger.info("Database initialized: %s", db_url.split("@")[-1])
+
+    # The instance gets an owner here, before anything can reach it (R-040).
+    bootstrap = await ensure_admin(app.state.db, settings.admin_password or None)
+    if bootstrap.generated_password is not None:
+        logger.warning(
+            "This instance had no admin account, so one was created.\n"
+            "    username: %s\n"
+            "    password: %s\n"
+            "  Printed once, only here. Change it with:\n"
+            "    python -m transcode_forge.admin reset-password",
+            user_repo.ADMIN_USERNAME,
+            bootstrap.generated_password,
+        )
+    elif bootstrap.created:
+        logger.info("Admin account created from TF_ADMIN_PASSWORD.")
 
     # Redis — optional in demo mode
     app.state.redis = None

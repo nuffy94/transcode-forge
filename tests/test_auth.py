@@ -1,4 +1,8 @@
-"""Tests for first-run setup, login/logout, and the auth middleware."""
+"""Tests for login/logout and the auth middleware.
+
+First-run account creation is not here because it is not reachable over
+HTTP: see tests/test_admin_bootstrap.py.
+"""
 
 from httpx import AsyncClient
 
@@ -16,36 +20,32 @@ class TestPasswordHash:
         assert user_repo.verify_password("anything", "not-a-real-hash") is False
 
 
-class TestSetupFlow:
-    """Setup endpoint creates the admin and logs the caller in atomically.
-    If an admin already exists, /setup returns 409 — used to gate the
-    first-run UI."""
+class TestNoSetupDoor:
+    """R-040: the admin is created on the machine at startup, so no request
+    can create one. A fresh instance is never claimable by whoever reaches
+    it first — which on a public deploy is a race against the certificate
+    transparency logs. See tests/test_admin_bootstrap.py for the door that
+    replaced it."""
 
-    async def test_setup_creates_admin(self, unauthed_client: AsyncClient):
-        resp = await unauthed_client.get("/api/auth/status")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["setup_required"] is True
-        assert body["authenticated"] is False
-
+    async def test_setup_endpoint_is_gone(self, unauthed_client: AsyncClient):
         resp = await unauthed_client.post("/api/auth/setup", json={"password": "good-password-123"})
-        assert resp.status_code == 200
+        assert resp.status_code == 404
 
+    async def test_setup_page_is_not_public(self, unauthed_client: AsyncClient):
+        # Not in PUBLIC_PATHS any more, so the middleware turns it away
+        # before routing ever gets a say.
+        resp = await unauthed_client.get("/setup", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/login"
+
+    async def test_setup_page_does_not_exist_even_when_logged_in(self, client: AsyncClient):
+        resp = await client.get("/setup", follow_redirects=False)
+        assert resp.status_code == 404
+
+    async def test_status_advertises_no_setup_state(self, unauthed_client: AsyncClient):
         resp = await unauthed_client.get("/api/auth/status")
-        body = resp.json()
-        assert body["setup_required"] is False
-        assert body["authenticated"] is True
-
-    async def test_setup_rejects_short_password(self, unauthed_client: AsyncClient):
-        resp = await unauthed_client.post("/api/auth/setup", json={"password": "short"})
-        assert resp.status_code == 422
-
-    async def test_setup_409_if_admin_exists(self, unauthed_client: AsyncClient):
-        await unauthed_client.post("/api/auth/setup", json={"password": "good-password-123"})
-        resp = await unauthed_client.post(
-            "/api/auth/setup", json={"password": "another-good-one-456"}
-        )
-        assert resp.status_code == 409
+        assert resp.status_code == 200
+        assert resp.json() == {"authenticated": False}
 
 
 class TestLoginFlow:
@@ -111,13 +111,7 @@ class TestMiddlewareGate:
         assert resp.status_code == 200
 
     async def test_login_page_is_public(self, unauthed_client: AsyncClient):
-        # Should redirect to /setup when no admin exists yet
         resp = await unauthed_client.get("/login", follow_redirects=False)
-        assert resp.status_code == 302
-        assert resp.headers["location"] == "/setup"
-
-    async def test_setup_page_is_public(self, unauthed_client: AsyncClient):
-        resp = await unauthed_client.get("/setup")
         assert resp.status_code == 200
         assert "FORGE" in resp.text
 

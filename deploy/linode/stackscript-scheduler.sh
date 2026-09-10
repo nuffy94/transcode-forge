@@ -12,7 +12,7 @@
 #
 # Control-plane steps that are NOT this script's job (see deploy/linode/README.md):
 # attach a Cloud Firewall (allow 22/80/443 only), attach a Block Storage
-# volume for media/scratch, point DNS at the instance, /setup, token issuance.
+# volume for media/scratch, point DNS at the instance, log in, token issuance.
 #
 # <UDF name="domain" label="HTTPS domain for the web UI (blank = localhost-only, no TLS edge)" default="" example="forge.example.com" />
 # <UDF name="cloudflare_dns_token_password" label="Cloudflare API token for DNS-01 certificates (blank = HTTP-01 on port 80)" default="" />
@@ -351,13 +351,17 @@ chmod +x "$APP_DIR/join-local-worker.sh"
     echo "============================"
     if [[ -n "$DOMAIN" ]]; then
         echo "1. Point DNS: an A record for ${DOMAIN} -> this instance's public IP."
-        echo "2. Open https://${DOMAIN}/setup and create the admin account."
+        echo "2. Get the admin password (generated at first boot, printed once):"
+        echo "     cd ${APP_DIR} && docker compose logs scheduler | grep -A4 'no admin account'"
+        echo "   Then open https://${DOMAIN} and log in as 'admin'."
     else
         echo "1. No domain configured -- the UI listens on 127.0.0.1:8000 only."
         echo "   Reach it via an SSH tunnel (ssh -L 8000:127.0.0.1:8000 root@<ip>)"
         echo "   or add a proxy/tunnel before exposing it."
-        echo "2. Open http://localhost:8000/setup (through the tunnel) and create"
-        echo "   the admin account."
+        echo "2. Get the admin password (generated at first boot, printed once):"
+        echo "     cd ${APP_DIR} && docker compose logs scheduler | grep -A4 'no admin account'"
+        echo "   Then open http://localhost:8000 (through the tunnel) and log in"
+        echo "   as 'admin'."
     fi
     if [[ -n "$S3_BUCKET" ]]; then
         echo "3. Settings -> Add library: storage 'S3 Object Storage',"

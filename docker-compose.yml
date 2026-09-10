@@ -53,6 +53,9 @@ services:
       TF_REDIS_URL: "redis://redis:6379/0"
       TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
       TF_AUTH_SECRET: "${TF_AUTH_SECRET}"
+      # Optional. Leave unset and the scheduler generates the first-run admin
+      # password and prints it to this container's log, once.
+      TF_ADMIN_PASSWORD: "${TF_ADMIN_PASSWORD:-}"
       # Container-internal paths — host library is mounted to /media/{movies,tv}.
       TF_LIBRARY_MOVIES: "/media/movies"
       TF_LIBRARY_TV: "/media/tv"

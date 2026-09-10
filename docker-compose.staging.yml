@@ -53,6 +53,7 @@ services:
       # (random per boot) silently revokes every worker token on restart.
       # Staging-only throwaway value — never reuse in prod.
       TF_AUTH_SECRET: "${TF_AUTH_SECRET:-staging-insecure-do-not-use-in-prod}"
+      TF_ADMIN_PASSWORD: "${TF_ADMIN_PASSWORD:-}"
       TF_LIBRARY_MOVIES: "/media/movies"
       TF_LIBRARY_TV: "/media/tv"
     volumes:

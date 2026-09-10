@@ -4,6 +4,22 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **A fresh instance can no longer be claimed by whoever reaches it first.**
+  First-run `/setup` created the admin for any caller while none existed,
+  and on a public deploy Caddy publishes the hostname to the certificate
+  transparency logs seconds after it starts, so the window was a race
+  against anyone watching those logs. The endpoint and the page are gone.
+  The admin is now created on the machine at startup, from
+  `TF_ADMIN_PASSWORD` or from a generated password printed once to the
+  scheduler log, which is the same trust model the existing
+  `python -m transcode_forge.admin reset-password` recovery CLI already
+  used: if you can run commands on the host, you are the admin. Existing
+  installs are unaffected (they have an admin, so startup is a no-op).
+  (R-040)
+
 ## [0.13.3] - 2026-09-01
 
 ### Changed
