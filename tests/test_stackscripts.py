@@ -173,6 +173,33 @@ class TestSshPolicy:
         assert "/etc/ssh/sshd_config.d/" in body
 
 
+class TestRegistryOverIpv4:
+    """GitHub's blob CDN resets large transfers over IPv6 from some Linode
+    regions, and a lost pull is a lost deploy. /etc/gai.conf states the
+    preference, but dockerd is a Go binary and Go ignores gai.conf unless it
+    resolves through glibc, so the preference alone was measurably inert:
+    with it in place dockerd still opened IPv6 connections for half the
+    pull. Both scripts must state the preference AND make dockerd honour it.
+    """
+
+    @pytest.mark.parametrize("script", [SCHEDULER, WORKER], ids=["scheduler", "worker"])
+    def test_the_preference_reaches_dockerd(self, script: Path):
+        body = script.read_text(encoding="utf-8")
+        assert "precedence ::ffff:0:0/96" in body, "gai.conf preference missing"
+        assert "GODEBUG=netdns=cgo" in body, (
+            "gai.conf alone does not bind dockerd; without the cgo resolver "
+            "the pull still goes over IPv6"
+        )
+        assert "/etc/systemd/system/docker.service.d/" in body
+
+    @pytest.mark.parametrize("script", [SCHEDULER, WORKER], ids=["scheduler", "worker"])
+    def test_the_pull_is_retried(self, script: Path):
+        # Defence in depth behind the address-family fix, not the mechanism.
+        body = script.read_text(encoding="utf-8")
+        assert "Image pull attempt" in body
+        assert "for attempt in 1 2 3" in body
+
+
 class TestSchedulerRender:
     def test_full_stack(self, tmp_path: Path):
         _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
