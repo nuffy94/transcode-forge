@@ -414,6 +414,22 @@ fi
 
 # ------------------------------------------------------------ system install
 
+# --------------------------------------------------------------- ssh policy
+# This deploy is unusable without an SSH key, so password authentication is
+# pure attack surface: the Ubuntu image ships PermitRootLogin yes AND
+# PasswordAuthentication yes, and the Cloud Firewall allows 22 from anywhere,
+# which makes every instance a public root-password endpoint. Key-only costs
+# nothing here and cannot lock anyone out, because Lish does not go over SSH.
+log "SSH: key-only (password auth off). Use the Lish console if a key is ever lost."
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/60-transcode-forge.conf <<'SSHEOF'
+# Written by the Transcode Forge StackScript.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+SSHEOF
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
 log "Installing Docker CE (get.docker.com)..."
 curl -fsSL https://get.docker.com | sh >/dev/null
 

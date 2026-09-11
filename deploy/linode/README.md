@@ -124,13 +124,25 @@ Or upload your own h264 media under `masters/movies/` with rclone/s3cmd.
 ### 3. Create a Cloud Firewall
 
 Docker publishes ports past `ufw`, so the **Cloud Firewall is the
-perimeter** — don't skip it.
+perimeter** for the published ports (80/443) — don't skip it.
 
-- **forge-scheduler** policy: inbound DROP default; allow TCP 22 (ideally
-  from your IP only), 80, 443.
-- **forge-worker** policy: inbound DROP default, no allow rules. Workers
-  are outbound-only and never need SSH — use the Lish console if you
-  ever need a shell on one.
+- **forge-scheduler** policy: inbound DROP default; allow TCP 22, 80, 443.
+- **forge-worker** policy: inbound DROP default, **no allow rules at all**.
+  Workers are outbound-only and never need SSH — use the Lish console if
+  you ever need a shell on one.
+
+SSH is handled in the scheduler script rather than by the firewall: it
+turns off password authentication and sets `PermitRootLogin
+prohibit-password`, so port 22 accepts keys only. That is what makes 22
+safe to leave open to the internet, which the KR4 flow needs anyway since
+whoever deploys is rarely at the same address as whoever wrote the rule.
+Lish is the recovery path if a key is ever lost, so key-only cannot lock
+you out.
+
+For a long-lived instance you can tighten `forge-scheduler` further by
+narrowing TCP 22 to your own address. Treat that as hardening for an
+instance you keep, not as the default: it breaks any deploy done from a
+different address.
 
 ### 4. Create the scheduler Linode
 

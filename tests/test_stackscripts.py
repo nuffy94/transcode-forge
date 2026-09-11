@@ -153,6 +153,26 @@ class TestFailsLoudly:
         assert "for attempt in" in body, "the image pull is not retried"
 
 
+class TestSshPolicy:
+    """The image ships PermitRootLogin yes and PasswordAuthentication yes,
+    and the Cloud Firewall allows 22 from anywhere, so an unhardened deploy
+    is a public root-password endpoint. The deploy already requires a key,
+    so password auth buys nothing. Lish does not go over SSH, so key-only
+    cannot lock an operator out."""
+
+    def test_scheduler_turns_off_password_auth(self):
+        body = SCHEDULER.read_text(encoding="utf-8")
+        assert "PasswordAuthentication no" in body
+        assert "KbdInteractiveAuthentication no" in body
+        assert "PermitRootLogin prohibit-password" in body
+
+    def test_it_lands_in_a_drop_in_not_an_edit(self):
+        # Editing sshd_config in place fights the image's own updates; a
+        # drop-in is additive and survives them.
+        body = SCHEDULER.read_text(encoding="utf-8")
+        assert "/etc/ssh/sshd_config.d/" in body
+
+
 class TestSchedulerRender:
     def test_full_stack(self, tmp_path: Path):
         _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
