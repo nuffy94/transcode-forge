@@ -4,9 +4,19 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.0] - 2026-09-11
 
 ### Security
+- **Port 22 on a scheduler deploy accepts keys only.** The Ubuntu image ships
+  `PermitRootLogin yes` and `PasswordAuthentication yes`, neither StackScript
+  touched `sshd`, and the documented Cloud Firewall allows TCP 22 from
+  anywhere, so every deploy following the guide was a public root-password
+  SSH endpoint. The deploy is unusable without an SSH key, so password
+  authentication was pure attack surface. The scheduler script now drops
+  `/etc/ssh/sshd_config.d/60-transcode-forge.conf` with
+  `PasswordAuthentication no`, `KbdInteractiveAuthentication no` and
+  `PermitRootLogin prohibit-password`, then reloads sshd. Lish does not go
+  over SSH, so this cannot lock an operator out.
 - **A fresh instance can no longer be claimed by whoever reaches it first.**
   First-run `/setup` created the admin for any caller while none existed,
   and on a public deploy Caddy publishes the hostname to the certificate
@@ -26,6 +36,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no-op and nothing rotates. (R-040)
 
 ### Fixed
+- **A failed Linode deploy no longer looks like a finished one.** The
+  StackScript wrote its cheerful `NEXT-STEPS.txt` about fifty lines before
+  the first `docker` command, so `set -e` aborting on the image pull left an
+  instance with no application, no error, and a file telling you where to log
+  in. One `deploy_failed` function now owns the verdict: it withdraws
+  `NEXT-STEPS.txt`, writes `DEPLOY-FAILED.txt` with the retry command, and
+  exits non-zero. The pull, the `up` and the readiness gate all route through
+  it, and "not ready after three minutes" is a failure rather than a warning.
+- **The image pull survives the IPv6 path to ghcr.io.** From us-ord,
+  `curl -6 https://ghcr.io/v2/` returns nothing while `curl -4` answers 401
+  as it should, and Docker tries IPv6 first on a dual-stack host, so the pull
+  reset mid-transfer and only the Docker Hub image landed. The script now
+  sets IPv4 precedence in `/etc/gai.conf` and retries the pull three times.
+  On the verification deploy the pull still failed twice before succeeding.
+- **`/root/StackScript.out` now exists.** Both `deploy/linode/README.md` and
+  `docs/TROUBLESHOOTING.md` tell you to tail it when a deploy looks stuck,
+  and nothing had ever written it. The script tees its own output there.
+- Two em dashes in the Caddyfile comment block made the Linode API refuse to
+  publish the StackScript at all (`Invalid special character at position
+  10699`), which is why it had not been republished since the Caddyfile
+  change. A test keeps both scripts pure ASCII.
 - **A long passphrase no longer crash-loops the scheduler.** bcrypt rejects
   anything over 72 *bytes* and raises rather than truncating, while the
   password bound was 200 characters — so a normal password-manager
