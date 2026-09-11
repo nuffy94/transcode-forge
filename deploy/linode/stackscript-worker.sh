@@ -142,9 +142,54 @@ fi
 log "Installing Docker CE (get.docker.com)..."
 curl -fsSL https://get.docker.com | sh >/dev/null
 
+# GitHub's blob CDN resets large transfers over IPv6 from at least some
+# Linode regions (us-ord, 2026-09-11: three pulls in a row died with
+# "read tcp [2600:3c06::...]->[2606:50c0:8002::154]:443: connection reset
+# by peer"). So this machine prefers IPv4, said once in /etc/gai.conf.
+#
+# glibc reads that file. dockerd does not: it is a Go binary using Go's own
+# resolver, which ignores gai.conf entirely. Measured on a live instance,
+# the preference in place, dockerd still opened IPv6 connections for half
+# the pull. GODEBUG=netdns=cgo sends Go through glibc's getaddrinfo, so the
+# one preference above governs the daemon too. With it, the same pull used
+# IPv4 for every connection.
+prefer_ipv4() {
+    if ! grep -q '^precedence ::ffff:0:0/96' /etc/gai.conf 2>/dev/null; then
+        log "Preferring IPv4: GitHub's blob CDN resets large transfers over IPv6 here."
+        echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+    fi
+    mkdir -p /etc/systemd/system/docker.service.d
+    cat > /etc/systemd/system/docker.service.d/10-prefer-ipv4.conf <<'DOCKEREOF'
+# Go ignores /etc/gai.conf unless it resolves through glibc. Without this,
+# dockerd takes the IPv6 path to ghcr.io whatever the host prefers.
+[Service]
+Environment="GODEBUG=netdns=cgo"
+DOCKEREOF
+    systemctl daemon-reload
+    systemctl restart docker
+    sleep 5
+}
+
+prefer_ipv4
+
 log "Pulling the image and starting the worker..."
 cd "$APP_DIR"
-docker compose pull -q
+pulled=0
+for attempt in 1 2 3; do
+    if docker compose pull -q; then
+        pulled=1
+        break
+    fi
+    log "Image pull attempt ${attempt} failed; retrying in 15s..."
+    sleep 15
+done
+if (( ! pulled )); then
+    log "DEPLOY FAILED: could not pull the worker image after 3 attempts."
+    log "Check this instance's connectivity to ghcr.io, then retry with:"
+    log "  cd $APP_DIR && docker compose pull && docker compose up -d"
+    exit 1
+fi
+
 docker compose up -d
 
 sleep 10
