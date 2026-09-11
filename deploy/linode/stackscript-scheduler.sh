@@ -44,6 +44,32 @@ IMAGE="ghcr.io/nuffy94/transcode-forge"
 
 log() { echo "[transcode-forge] $*"; }
 
+# Linode does not persist this script's output anywhere, but
+# deploy/linode/README.md and docs/TROUBLESHOOTING.md both tell people to
+# tail /root/StackScript.out when a deploy looks stuck. Make that true.
+if [[ -z "$RENDER_DIR" ]]; then
+    exec > >(tee -a /root/StackScript.out) 2>&1
+fi
+
+# One place decides a deploy failed, so the success artifact and the failure
+# artifact can never both exist. NEXT-STEPS.txt is written earlier, before
+# anything risky runs, so it must be withdrawn here rather than trusted.
+deploy_failed() {
+    log "DEPLOY FAILED: $*"
+    rm -f "$APP_DIR/NEXT-STEPS.txt"
+    {
+        echo "Transcode Forge -- DEPLOY FAILED"
+        echo "================================"
+        echo
+        echo "$*"
+        echo
+        echo "Full log: /root/StackScript.out"
+        echo "Retry:    cd $APP_DIR && docker compose pull && docker compose up -d"
+    } > "$APP_DIR/DEPLOY-FAILED.txt"
+    cat "$APP_DIR/DEPLOY-FAILED.txt"
+    exit 1
+}
+
 # ---------------------------------------------------------------- derivations
 
 # Normalize the S3 endpoint to an https:// URL and derive the signing region
@@ -301,7 +327,7 @@ if [[ -n "$DOMAIN" ]]; then
         cat > "$APP_DIR/Caddyfile" <<'EOF'
 {$TF_DOMAIN} {
     encode zstd gzip
-    # /metrics is auth-exempt in the app (Prometheus scrapes it) — keep it
+    # /metrics is auth-exempt in the app (Prometheus scrapes it): keep it
     # off the public edge; scrape the instance from inside the perimeter.
     @metrics path /metrics*
     respond @metrics 403
@@ -315,7 +341,7 @@ EOF
         cat > "$APP_DIR/Caddyfile" <<'EOF'
 {$TF_DOMAIN} {
     encode zstd gzip
-    # /metrics is auth-exempt in the app (Prometheus scrapes it) — keep it
+    # /metrics is auth-exempt in the app (Prometheus scrapes it): keep it
     # off the public edge; scrape the instance from inside the perimeter.
     @metrics path /metrics*
     respond @metrics 403
@@ -391,10 +417,33 @@ fi
 log "Installing Docker CE (get.docker.com)..."
 curl -fsSL https://get.docker.com | sh >/dev/null
 
+# ghcr.io is unreachable over IPv6 from at least some Linode regions
+# (us-ord, 2026-09-10: `curl -6 https://ghcr.io/v2/` returns nothing while
+# `curl -4` returns 401 as it should). Docker tries IPv6 first on a
+# dual-stack host, so the pull resets mid-transfer. Prefer IPv4 so the pull
+# takes a path that works, then retry anyway: one lost pull used to leave a
+# deploy with no application and no error.
+if ! grep -q '^precedence ::ffff:0:0/96' /etc/gai.conf 2>/dev/null; then
+    log "Preferring IPv4 for dual-stack lookups (ghcr.io over IPv6 is unreliable here)."
+    echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+    systemctl restart docker
+    sleep 5
+fi
+
 log "Pulling images and starting the stack..."
 cd "$APP_DIR"
-docker compose pull -q
-docker compose up -d --build
+pulled=0
+for attempt in 1 2 3; do
+    if docker compose pull -q; then
+        pulled=1
+        break
+    fi
+    log "Image pull attempt ${attempt} failed; retrying in 15s..."
+    sleep 15
+done
+(( pulled )) || deploy_failed "could not pull the container images after 3 attempts. Check this instance's connectivity to ghcr.io."
+
+docker compose up -d --build || deploy_failed "docker compose up failed. See: docker compose -f $APP_DIR/docker-compose.yml logs"
 
 log "Waiting for the scheduler to become ready..."
 ready=0
@@ -409,7 +458,7 @@ done
 if (( ready )); then
     log "Scheduler is up."
 else
-    log "WARNING: scheduler not ready after 3 minutes -- check 'docker compose logs scheduler'."
+    deploy_failed "the scheduler never answered /api/health/ready within 3 minutes."
 fi
 
 cat "$APP_DIR/NEXT-STEPS.txt"
