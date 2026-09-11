@@ -2,12 +2,13 @@
 
 Workers do NOT use these endpoints; they have a separate token flow.
 
-POST /api/auth/setup — only works while no admin exists. Creates the
-                        admin user and logs the caller in.
 POST /api/auth/login  — username + password → sets session cookie.
 POST /api/auth/logout — clears the session.
-GET  /api/auth/status — { authenticated, setup_required } — useful
-                        for the UI to decide where to send the user.
+GET  /api/auth/status — { authenticated }.
+
+There is deliberately no setup endpoint: the admin account is created on the
+machine at startup (transcode_forge.admin.ensure_admin), never over the
+network. See R-040.
 """
 
 import time
@@ -35,29 +36,10 @@ class LoginRequest(BaseModel):
     username: str = user_repo.ADMIN_USERNAME
 
 
-class SetupRequest(BaseModel):
-    password: str = Field(min_length=8, max_length=200)
-
-
 @router.get("/auth/status")
-async def status(request: Request, db: DBConnection = Depends(get_db)) -> dict[str, Any]:
-    setup_required = not await user_repo.has_admin(db)
+async def status(request: Request) -> dict[str, Any]:
     authed = bool(request.session.get(SESSION_KEY)) if hasattr(request, "session") else False
-    return {
-        "authenticated": authed,
-        "setup_required": setup_required,
-    }
-
-
-@router.post("/auth/setup")
-async def setup(
-    body: SetupRequest, request: Request, db: DBConnection = Depends(get_db)
-) -> dict[str, Any]:
-    if await user_repo.has_admin(db):
-        raise HTTPException(status_code=409, detail="Admin already exists")
-    await user_repo.create_admin(db, body.password)
-    request.session[SESSION_KEY] = user_repo.ADMIN_USERNAME
-    return {"ok": True}
+    return {"authenticated": authed}
 
 
 @router.post("/auth/login")

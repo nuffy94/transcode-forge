@@ -29,13 +29,15 @@ module, always in demo-static mode (seeded, deterministic, no Redis/ffmpeg
 required):
 
 - `launch()` — attached child process for pytest. `tests/qa/conftest.py`
-  wraps it as `launch_qa_app` (session fixture + the fresh no-admin
-  instance `test_setup_flow.py` uses).
+  wraps it as `launch_qa_app` (the session fixture, plus a second instance
+  on its own port for tests that need one).
 - `start_detached()` / `stop_detached()` — pidfile-managed instances behind
   the `qa/launch_demo.py` CLI (the L3 sweep's per-agent instances). Their
   `READY`/`STOPPED` stdout lines are a contract the workflow's agent
   prompts parse; `tests/qa/test_instance.py` pins the exact wording.
-- `bootstrap_admin()` — the single first-run auth bootstrap.
+Instances boot already owned: `demo_env()` passes `TF_ADMIN_PASSWORD`, so
+the app mints the admin at startup (R-040) and no QA surface carries an auth
+bootstrap of its own. There is no first-run setup page to sweep.
 
 The seed itself is deterministic AND coherent: fixed RNG, every job's
 lifecycle ordered (`created ≤ started ≤ completed`), waiting jobs at
@@ -91,7 +93,6 @@ set, `PAGES`, error capture, login, overflow/focus checks).
   human-readable-422-toast guard.
 - **`test_mobile.py`** — every page at 390×844: no horizontal body
   scroll, nav present, error capture on.
-- **`test_setup_flow.py`** — its own fresh no-admin instance for `/setup`.
 - **`test_visual.py`** — the visual layer (see below).
 - **`test_coverage_gate.py`** — the coverage gap gate (see below).
 - **`test_findings_ledger.py`** — schema guard for `qa/findings.yml`.

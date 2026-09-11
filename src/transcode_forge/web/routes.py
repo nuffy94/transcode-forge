@@ -84,21 +84,10 @@ def _render(request: Request, name: str, context: dict[str, Any] | None = None) 
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, db: DBConnection = Depends(get_db)) -> Response:
-    from transcode_forge.repos import users as user_repo
-
-    if not await user_repo.has_admin(db):
-        return Response(status_code=302, headers={"Location": "/setup"})
-    return _render(request, "login.html", {"setup_required": False})
-
-
-@router.get("/setup", response_class=HTMLResponse)
-async def setup_page(request: Request, db: DBConnection = Depends(get_db)) -> Response:
-    from transcode_forge.repos import users as user_repo
-
-    if await user_repo.has_admin(db):
-        return Response(status_code=302, headers={"Location": "/login"})
-    return _render(request, "setup.html", {})
+async def login_page(request: Request) -> Response:
+    # An admin always exists by the time this can be reached: startup makes
+    # one (R-040). There is nothing to bounce to.
+    return _render(request, "login.html", {})
 
 
 @router.get("/", response_class=HTMLResponse)

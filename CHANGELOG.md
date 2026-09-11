@@ -4,6 +4,42 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **A fresh instance can no longer be claimed by whoever reaches it first.**
+  First-run `/setup` created the admin for any caller while none existed,
+  and on a public deploy Caddy publishes the hostname to the certificate
+  transparency logs seconds after it starts, so the window was a race
+  against anyone watching those logs. The endpoint and the page are gone.
+  The admin is now created on the machine at startup from
+  `TF_ADMIN_PASSWORD`, which is the same trust model the existing
+  `python -m transcode_forge.admin reset-password` recovery CLI already
+  used: if you can run commands on the host, you are the admin. The app
+  never generates the password, so it never has one to hand back through a
+  log — `kubectl logs` is a weaker permission than the exec that recovery
+  needs, and shipped logs outlive the instance. `bootstrap.sh` and the
+  Linode StackScript generate it into `.env` (mode 600) beside the other
+  secrets; the Helm chart takes `secrets.adminPassword`. An instance with
+  no admin and no password refuses to boot instead of coming up unowned.
+  Existing installs are unaffected: they have an admin, so startup is a
+  no-op and nothing rotates. (R-040)
+
+### Fixed
+- **A long passphrase no longer crash-loops the scheduler.** bcrypt rejects
+  anything over 72 *bytes* and raises rather than truncating, while the
+  password bound was 200 characters — so a normal password-manager
+  passphrase, or 40 accented characters (80 bytes), failed inside the hash.
+  The bound now lives beside the hash in `repos/users.py` and counts encoded
+  bytes, and both the startup path and the reset CLI use it.
+- **A scheduler that fails to start now exits instead of hanging.** A
+  lifespan error raised after the database was opened left the connection
+  (and its worker thread) alive, so the process kept running after uvicorn
+  reported "Application startup failed. Exiting." — a container that looks
+  up while serving nothing, with no restart. Startup and shutdown now share
+  one teardown path, so a refused boot releases the database, Redis and the
+  background tasks and the process ends with a non-zero code.
+
 ## [0.13.3] - 2026-09-01
 
 ### Changed

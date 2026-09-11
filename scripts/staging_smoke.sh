@@ -32,6 +32,9 @@ PORT="${TF_STAGING_PORT:-8001}"
 BASE="http://127.0.0.1:${PORT}"
 COMPOSE=(docker compose -f docker-compose.staging.yml --env-file .env.staging)
 PW="staging-smoke-$(date +%s)"
+# The scheduler mints the admin itself at first boot; hand it our password
+# so the smoke can log in without scraping the container log.
+export TF_ADMIN_PASSWORD="$PW"
 COOKIES="$(mktemp)"
 MEDIA_DIR="${TF_STAGING_MEDIA:-./staging-media}"
 # A real encode of a real clip takes real time; override for big files.
@@ -83,13 +86,13 @@ say "1/8 scheduler + redis up"
 "${COMPOSE[@]}" up -d --build
 wait_for 120 "scheduler health" curl -fsS "$BASE/api/health/live"
 
-say "2/8 first-run setup + login"
-setup_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-    -H "Content-Type: application/json" -d "{\"password\": \"$PW\"}" "$BASE/api/auth/setup")
-case "$setup_status" in
+say "2/8 log in as the admin the scheduler minted at boot"
+login_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H "Content-Type: application/json" -d "{\"password\": \"$PW\"}" "$BASE/api/auth/login")
+case "$login_status" in
     200) ;;
-    409) fail "instance already has an admin — smoke needs a CLEAN stack (down -v first)" ;;
-    *)   fail "setup returned HTTP $setup_status" ;;
+    401) fail "admin password is not ours — smoke needs a CLEAN stack (down -v first)" ;;
+    *)   fail "login returned HTTP $login_status" ;;
 esac
 api POST /api/auth/login "{\"password\": \"$PW\"}" >/dev/null
 

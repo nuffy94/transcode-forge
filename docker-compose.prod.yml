@@ -43,6 +43,7 @@ services:
       TF_DB_URL: "postgresql://tf:${TF_PG_PASSWORD}@postgres:5432/transcode_forge"
       TF_REDIS_URL: "redis://redis:6379/0"
       TF_AUTH_SECRET: "${TF_AUTH_SECRET}"
+      TF_ADMIN_PASSWORD: "${TF_ADMIN_PASSWORD:-}"
       TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
       TF_SESSION_SECURE: "${TF_SESSION_SECURE:-false}"
       TF_LIBRARY_MOVIES: "/media/movies"

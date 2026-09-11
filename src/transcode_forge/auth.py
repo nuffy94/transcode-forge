@@ -1,12 +1,12 @@
 """Auth middleware + helpers.
 
 Public path policy:
-- /api/auth/*           — login/setup/status (auth itself, obviously)
+- /api/auth/*           — login/logout/status (auth itself, obviously)
 - /api/health           — for compose healthcheck and external monitoring
 - /api/worker/*         — worker token-based auth (separate flow, v0.5-3)
 - /metrics              — Prometheus scrape
 - /static/*             — assets
-- /login, /setup        — the auth pages themselves
+- /login                — the auth page itself
 - /partials/health      — the sidebar dot polls this; cheap + read-only
 
 Anything else in /api/* requires an authenticated session and returns
@@ -34,7 +34,7 @@ PUBLIC_PREFIXES = (
     "/static/",
     "/partials/health",
 )
-PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico"}
+PUBLIC_PATHS = {"/login", "/favicon.ico"}
 
 
 def _is_public(path: str) -> bool:
@@ -53,10 +53,9 @@ def _is_api(path: str) -> bool:
 # cookie-attack class).
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-# Origin-prefixed paths that DO need CSRF gating but happen BEFORE login
-# can establish a CSRF cookie — we whitelist these by path. Setup is the
-# only one (no admin exists yet, by definition).
-CSRF_EXEMPT_PATHS = frozenset({"/api/auth/setup", "/api/auth/login"})
+# Login happens BEFORE a session (and therefore a CSRF cookie) exists, so
+# it is whitelisted by path. It is the only one.
+CSRF_EXEMPT_PATHS = frozenset({"/api/auth/login"})
 
 
 def _csrf_check(scope: dict[str, Any]) -> Response | None:

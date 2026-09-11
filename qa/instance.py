@@ -3,15 +3,16 @@
 Every QA surface that needs a real HTTP server boots it through this module,
 always in demo-static mode (seeded, deterministic, no Redis/ffmpeg needed):
 
-* ``launch()`` — attached child process for pytest (tests/qa/ conftest and
-  test_setup_flow consume it via ``launch_qa_app``). Torn down on context
-  exit; raises with a server-log tail if the app dies or never gets ready.
+* ``launch()`` — attached child process for pytest (tests/qa/ conftest
+  consumes it via ``launch_qa_app``). Torn down on context exit; raises with
+  a server-log tail if the app dies or never gets ready.
 * ``start_detached()`` / ``stop_detached()`` — pidfile-managed instances that
   outlive the launching process, behind the qa/launch_demo.py CLI (the L3
   sweep's per-agent instances). Their printed ``READY``/``STOPPED`` lines are
   a contract the L3 workflow's agent prompts rely on — do not reword them.
-* ``bootstrap_admin()`` — the one first-run auth bootstrap (POST
-  /api/auth/setup), so no other surface carries its own copy.
+Instances own themselves from boot: ``demo_env()`` passes
+``TF_ADMIN_PASSWORD``, so the app mints the admin at startup (R-040) and no
+surface carries its own auth bootstrap.
 
 A future ``pg`` mode (same app pointed at a Postgres URL) hooks in here when
 S6b lands — not built yet.
@@ -19,7 +20,6 @@ S6b lands — not built yet.
 
 from __future__ import annotations
 
-import json
 import os
 import signal
 import socket
@@ -34,6 +34,10 @@ from pathlib import Path
 from typing import IO
 
 AUTH_SECRET = "qa-sweep-fixed-secret"
+
+# Every QA instance owns itself from boot (R-040): the app mints the admin
+# from this at startup, so nothing has to POST a bootstrap afterwards.
+QA_ADMIN_PASSWORD = "qa-sweep-password-123"
 _READY_ATTEMPTS = 60
 _READY_INTERVAL = 0.5
 
@@ -66,29 +70,9 @@ def demo_env(db: Path) -> dict[str, str]:
         "TF_DEMO_STATIC": "true",
         "TF_DB_URL": f"sqlite:///{db.resolve().as_posix()}",
         "TF_AUTH_SECRET": AUTH_SECRET,
+        "TF_ADMIN_PASSWORD": QA_ADMIN_PASSWORD,
         "TF_LOG_LEVEL": "warning",
     }
-
-
-def bootstrap_admin(base_url: str, password: str) -> None:
-    """First-run setup: create the admin so authenticated pages are reachable.
-
-    200 = created, 409 = already set up — both fine, so a seeded instance can
-    be bootstrapped idempotently.
-    """
-    req = urllib.request.Request(
-        f"{base_url}/api/auth/setup",
-        data=json.dumps({"password": password}).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status = resp.status
-    except urllib.error.HTTPError as e:
-        status = e.code
-    if status not in (200, 409):
-        raise RuntimeError(f"admin setup failed: HTTP {status}")
 
 
 def instance_paths(run_dir: Path, port: int) -> tuple[Path, Path, Path]:
@@ -149,12 +133,11 @@ def _log_tail(log_path: Path) -> str:
 
 
 @contextmanager
-def launch(instance_dir: Path, port: int, *, admin_password: str | None = None) -> Iterator[str]:
+def launch(instance_dir: Path, port: int) -> Iterator[str]:
     """Boot an attached demo-static instance on ``port``; yield its base URL.
 
-    ``admin_password`` completes first-run setup with that password (the
-    normal sweep target); ``None`` leaves the instance fresh so /setup itself
-    can be exercised. The instance is a child process — torn down on exit.
+    The instance mints its own admin at startup with ``QA_ADMIN_PASSWORD``.
+    It is a child process — torn down on exit.
     """
     instance_dir.mkdir(parents=True, exist_ok=True)
     db = instance_dir / "demo.db"
@@ -174,9 +157,6 @@ def launch(instance_dir: Path, port: int, *, admin_password: str | None = None) 
             raise RuntimeError(
                 f"QA demo server failed to become ready:\n{_log_tail(log_path)}"
             ) from None
-
-        if admin_password is not None:
-            bootstrap_admin(base_url, admin_password)
 
         yield base_url
     finally:

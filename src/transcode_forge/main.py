@@ -14,6 +14,7 @@ from redis.exceptions import RedisError
 from starlette.middleware.sessions import SessionMiddleware
 
 from transcode_forge import __version__
+from transcode_forge.admin import ensure_admin
 from transcode_forge.auth import AuthMiddleware
 from transcode_forge.config import Settings, get_settings
 from transcode_forge.db import DBConnection, close_db, init_db
@@ -79,75 +80,109 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = await init_db(db_url)
     logger.info("Database initialized: %s", db_url.split("@")[-1])
 
-    # Redis — optional in demo mode
-    app.state.redis = None
-    if not settings.demo_mode:
-        app.state.redis = await create_redis_pool(settings.redis_url)
-        logger.info("Redis connected at %s", settings.redis_url)
-    else:
-        try:
+    try:
+        # The instance gets an owner here, before anything can reach it (R-040).
+        # No password is ever generated or logged: it comes from the machine's
+        # own configuration, and boot fails loudly if it is missing.
+        if await ensure_admin(app.state.db, settings.admin_password or None):
+            logger.info("Admin account created from TF_ADMIN_PASSWORD.")
+
+        # Redis — optional in demo mode
+        app.state.redis = None
+        if not settings.demo_mode:
             app.state.redis = await create_redis_pool(settings.redis_url)
-            logger.info("Redis connected (optional in demo mode)")
-        except (RedisError, OSError) as exc:
-            # redis-py raises redis.exceptions.ConnectionError (NOT the builtin
-            # ConnectionError), so catch its base RedisError or demo mode would
-            # crash at startup whenever Redis is absent.
-            logger.warning("Redis unavailable — skipped (demo mode): %s", exc)
-            app.state.redis = None
-
-    if settings.demo_mode:
-        # Seed demo data
-        from transcode_forge.demo.seed import seed_demo_data
-
-        await seed_demo_data(app.state.db)
-
-        if settings.demo_static:
-            # No simulator, but seeded heartbeats must not decay into
-            # "HEARTBEAT LOST" cards mid-run — see demo/heartbeat.py.
-            from transcode_forge.demo.heartbeat import run_static_heartbeat
-
-            background_tasks.append(
-                _supervised(run_static_heartbeat(app.state.db), "demo-heartbeat")
-            )
-            logger.info("Demo data seeded (STATIC — simulator disabled, heartbeat keep-alive on)")
+            logger.info("Redis connected at %s", settings.redis_url)
         else:
-            from transcode_forge.demo.simulator import run_simulator
+            try:
+                app.state.redis = await create_redis_pool(settings.redis_url)
+                logger.info("Redis connected (optional in demo mode)")
+            except (RedisError, OSError) as exc:
+                # redis-py raises redis.exceptions.ConnectionError (NOT the builtin
+                # ConnectionError), so catch its base RedisError or demo mode would
+                # crash at startup whenever Redis is absent.
+                logger.warning("Redis unavailable — skipped (demo mode): %s", exc)
+                app.state.redis = None
 
-            background_tasks.append(_supervised(run_simulator(app.state.db), "demo-simulator"))
-            logger.info("Demo simulator started")
-    else:
-        # Nothing can be mid-scan at boot: scans are tasks of this process.
-        stranded = await scan_repo.fail_running(app.state.db)
-        if stranded:
-            logger.warning(
-                "Marked %d scan(s) left 'running' by a previous process as failed", stranded
+        if settings.demo_mode:
+            # Seed demo data
+            from transcode_forge.demo.seed import seed_demo_data
+
+            await seed_demo_data(app.state.db)
+
+            if settings.demo_static:
+                # No simulator, but seeded heartbeats must not decay into
+                # "HEARTBEAT LOST" cards mid-run — see demo/heartbeat.py.
+                from transcode_forge.demo.heartbeat import run_static_heartbeat
+
+                background_tasks.append(
+                    _supervised(run_static_heartbeat(app.state.db), "demo-heartbeat")
+                )
+                logger.info(
+                    "Demo data seeded (STATIC — simulator disabled, heartbeat keep-alive on)"
+                )
+            else:
+                from transcode_forge.demo.simulator import run_simulator
+
+                background_tasks.append(_supervised(run_simulator(app.state.db), "demo-simulator"))
+                logger.info("Demo simulator started")
+        else:
+            # Nothing can be mid-scan at boot: scans are tasks of this process.
+            stranded = await scan_repo.fail_running(app.state.db)
+            if stranded:
+                logger.warning(
+                    "Marked %d scan(s) left 'running' by a previous process as failed", stranded
+                )
+            # Production background tasks
+            background_tasks.append(
+                _supervised(run_scheduled_scans(settings, app.state.db), "scheduled-scans")
             )
-        # Production background tasks
-        background_tasks.append(
-            _supervised(run_scheduled_scans(settings, app.state.db), "scheduled-scans")
-        )
-        background_tasks.append(
-            _supervised(
-                _stale_worker_loop(app.state.db, settings.heartbeat_timeout), "stale-workers"
+            background_tasks.append(
+                _supervised(
+                    _stale_worker_loop(app.state.db, settings.heartbeat_timeout), "stale-workers"
+                )
             )
-        )
-        background_tasks.append(_supervised(_orphan_requeue_loop(app.state.db), "orphan-requeue"))
-        logger.info("Background tasks started (scans, stale worker cleanup, orphan job requeue)")
+            background_tasks.append(
+                _supervised(_orphan_requeue_loop(app.state.db), "orphan-requeue")
+            )
+            logger.info(
+                "Background tasks started (scans, stale worker cleanup, orphan job requeue)"
+            )
+
+    except Exception:
+        # Startup failed with the database (and possibly Redis and the
+        # background tasks) already open. Without this the process HANGS
+        # instead of exiting: the DB connection's worker thread outlives
+        # uvicorn's "Application startup failed. Exiting." and nothing
+        # ever reaps it, so a container sits there serving nothing.
+        logger.error("Startup failed — releasing resources and exiting")
+        await _release(app, background_tasks)
+        raise
 
     yield
 
-    # Shutdown
+    await _release(app, background_tasks)
+
+
+async def _release(app: FastAPI, background_tasks: list[asyncio.Task[None]]) -> None:
+    """Tear down everything startup opened.
+
+    Used by the normal shutdown path and by a failed startup, so the two can
+    never drift apart. Order matters: cancelled tasks finish their cleanup
+    (finally blocks, in-flight DB writes) BEFORE Redis and the DB are torn
+    down underneath them, and scans are tasks too, so none may outlive the DB.
+    """
     logger.info("Shutting down Transcode Forge")
     for task in background_tasks:
         task.cancel()
-    # Wait for cancelled tasks to finish their cleanup (finally blocks,
-    # in-flight DB writes) BEFORE tearing down Redis/DB underneath them.
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
-    await runner.cancel_all()  # scans are tasks too; none may outlive the DB
-    if app.state.redis is not None:
-        await close_redis_pool(app.state.redis)
-    await close_db(app.state.db)
+    await runner.cancel_all()
+    redis = getattr(app.state, "redis", None)
+    if redis is not None:
+        await close_redis_pool(redis)
+    db = getattr(app.state, "db", None)
+    if db is not None:
+        await close_db(db)
 
 
 def _supervised(coro: Coroutine[Any, Any, None], name: str) -> asyncio.Task[None]:

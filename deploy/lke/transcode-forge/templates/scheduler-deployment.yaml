@@ -60,6 +60,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "transcode-forge.fullname" . }}
                   key: TF_AUTH_SECRET
+            - name: TF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "transcode-forge.fullname" . }}
+                  key: TF_ADMIN_PASSWORD
             - name: TF_SESSION_SECURE
               value: {{ .Values.scheduler.sessionSecure | quote }}
             - name: TF_LOG_LEVEL

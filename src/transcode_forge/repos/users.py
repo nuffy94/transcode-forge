@@ -19,8 +19,28 @@ from transcode_forge.repos import system as system_repo
 ADMIN_USERNAME = "admin"
 _AUTH_SECRET_KEY = "auth_secret"
 
+MIN_PASSWORD_LEN = 8
+# bcrypt refuses anything over 72 BYTES — not characters. 40 accented
+# characters is already 80 bytes, so a password that looks short can still
+# be rejected. bcrypt 5 raises rather than truncating, so the rule lives
+# here, beside the only call, and every caller gets the same answer.
+MAX_PASSWORD_BYTES = 72
+
+
+def validate_password(plain: str) -> None:
+    """Raise ValueError if bcrypt could not hash this password."""
+    if len(plain) < MIN_PASSWORD_LEN:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+    encoded = len(plain.encode())
+    if encoded > MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"Password must be at most {MAX_PASSWORD_BYTES} bytes "
+            f"(this one is {encoded}; non-ASCII characters cost more than one byte each)."
+        )
+
 
 def hash_password(plain: str) -> str:
+    validate_password(plain)
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 

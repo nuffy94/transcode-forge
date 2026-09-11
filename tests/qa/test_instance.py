@@ -1,8 +1,8 @@
 """Substrate self-test — the detached CLI lifecycle in qa/instance.py.
 
 The attached `launch()` path gets live coverage from every other module in
-this suite (the session fixture boots through it; test_setup_flow exercises
-create_admin=False). What nothing else covers is the pidfile-managed detached
+this suite (the session fixture boots through it). What nothing else covers
+is the pidfile-managed detached
 mode behind qa/launch_demo.py — the L3 workflow's contract (`READY pid=…
 base=…` / `STOPPED …` stdout lines, exit codes, pidfile lifecycle). Lock the
 exact wording here: the L3 agent prompts parse these lines.

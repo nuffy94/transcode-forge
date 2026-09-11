@@ -25,6 +25,11 @@ image:
 # `helm upgrade --reuse-values --set secrets.workerToken=...`.
 secrets:
   authSecret: ""
+  # First-run admin password. Required for a FRESH install: the scheduler
+  # creates the admin from it at startup and there is no web page that can
+  # create one (R-040). Upgrades of an install that already has an admin
+  # ignore it, so it can be left empty there.
+  adminPassword: ""
   pgPassword: ""
   s3AccessKeyId: ""
   s3SecretAccessKey: ""
@@ -54,7 +59,7 @@ scheduler:
 worker:
   # Workers need a server-issued token, so the chart defaults to none and
   # rendering fails if replicas > 0 without secrets.workerToken. Flow:
-  # install with 0 -> /setup -> issue token -> upgrade with token + 1.
+  # install with 0 -> log in -> issue token -> upgrade with token + 1.
   replicas: 0
   # Encode slots per worker. Leave at 1 and scale replicas instead —
   # ffmpeg already threads across the CPU limit.

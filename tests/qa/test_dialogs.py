@@ -222,7 +222,7 @@ def test_worker_token_panels_live_refresh(
     token row is permanent, and the shared instance's /workers render is
     pixel-baselined (test_visual)."""
     qa_dir = tmp_path_factory.mktemp("qa-tokens")
-    with launch_qa_app(qa_dir, TOKENS_PORT, create_admin=True) as base_url:
+    with launch_qa_app(qa_dir, TOKENS_PORT) as base_url:
         ctx = browser.new_context(viewport={"width": 1440, "height": 900})
         page = ctx.new_page()
         page.on("dialog", lambda d: d.accept())  # revoke uses confirm()
