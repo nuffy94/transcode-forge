@@ -94,6 +94,85 @@ class TestBashSyntax:
         assert subprocess.run([BASH, "-n", str(WORKER)]).returncode == 0
 
 
+class TestPublishable:
+    """The Linode API rejects a StackScript containing any non-ASCII byte
+    ("Invalid special character at position N") and the publish tool prints
+    that as a 400 rather than failing loudly. Two em dashes added in #104
+    sat in the scheduler script for months, silently blocking every
+    republish, until R-040 made republishing a hard gate. ASCII-only is the
+    rule; nothing else checks it. It also matches the no-em-dash
+    register, which tests/test_template_copy.py enforces for the UI."""
+
+    @pytest.mark.parametrize("script", [SCHEDULER, WORKER], ids=["scheduler", "worker"])
+    def test_is_pure_ascii(self, script: Path):
+        text = script.read_text(encoding="utf-8")
+        offenders = [
+            (i, ch, text[:i].count("\n") + 1) for i, ch in enumerate(text) if ord(ch) > 127
+        ]
+        detail = "; ".join(
+            f"{script.name} line {line}: U+{ord(ch):04X} {ch!r} at position {i}"
+            for i, ch, line in offenders
+        )
+        assert not offenders, f"the Linode API will refuse to publish this: {detail}"
+
+
+class TestFailsLoudly:
+    """A deploy that dies must not leave a success artifact behind.
+
+    NEXT-STEPS.txt is written ~50 lines before the first risky command, so
+    when `docker compose pull` failed under `set -e` the script aborted and
+    left a dead instance that looked finished: no containers, no error, and
+    a cheerful next-steps file. That cost a 25 minute wait on a deploy which
+    had already given up. One function owns the failure verdict now, and it
+    withdraws the success artifact.
+    """
+
+    def test_failure_withdraws_the_success_artifact(self):
+        body = SCHEDULER.read_text(encoding="utf-8")
+        assert "deploy_failed()" in body, "no single owner for the failure verdict"
+        fn = body.split("deploy_failed()", 1)[1].split("\n}", 1)[0]
+        assert "rm -f" in fn and "NEXT-STEPS.txt" in fn, (
+            "deploy_failed must remove NEXT-STEPS.txt, or a dead deploy still looks finished"
+        )
+        assert "DEPLOY-FAILED.txt" in fn, "a failed deploy should say so on disk"
+
+    def test_every_risky_step_routes_to_it(self):
+        body = SCHEDULER.read_text(encoding="utf-8")
+        # The pull, the up, and the readiness gate are the three ways a
+        # deploy dies with the machine otherwise healthy.
+        assert body.count("deploy_failed ") >= 3, "a risky step is not routed through deploy_failed"
+        assert "WARNING: scheduler not ready" not in body, (
+            "not-ready is a failed deploy, not a warning"
+        )
+
+    def test_pull_is_retried_and_prefers_ipv4(self):
+        body = SCHEDULER.read_text(encoding="utf-8")
+        # ghcr.io is unreachable over IPv6 from us-ord; docker tries v6 first
+        # on a dual-stack host and the pull resets mid-transfer.
+        assert "precedence ::ffff:0:0/96" in body, "nothing makes the pull prefer IPv4"
+        assert "for attempt in" in body, "the image pull is not retried"
+
+
+class TestSshPolicy:
+    """The image ships PermitRootLogin yes and PasswordAuthentication yes,
+    and the Cloud Firewall allows 22 from anywhere, so an unhardened deploy
+    is a public root-password endpoint. The deploy already requires a key,
+    so password auth buys nothing. Lish does not go over SSH, so key-only
+    cannot lock an operator out."""
+
+    def test_scheduler_turns_off_password_auth(self):
+        body = SCHEDULER.read_text(encoding="utf-8")
+        assert "PasswordAuthentication no" in body
+        assert "KbdInteractiveAuthentication no" in body
+        assert "PermitRootLogin prohibit-password" in body
+
+    def test_it_lands_in_a_drop_in_not_an_edit(self):
+        # Editing sshd_config in place fights the image's own updates; a
+        # drop-in is additive and survives them.
+        body = SCHEDULER.read_text(encoding="utf-8")
+        assert "/etc/ssh/sshd_config.d/" in body
+
+
 class TestSchedulerRender:
     def test_full_stack(self, tmp_path: Path):
         _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
