@@ -158,12 +158,12 @@ Cloudflare DNS-01 token, certificates issue even before DNS propagates.
 
 ### 6. Log in
 
-The instance creates its own admin account on first boot and prints the
-password once, to the scheduler's log. Read it on the instance:
+The StackScript generated your admin password into `/opt/transcode-forge/.env`
+(mode 600, root only) alongside the other secrets, and the scheduler created
+the account from it on first boot. Read it on the instance:
 
 ```bash
-cd /opt/transcode-forge
-docker compose logs scheduler | grep -A4 'no admin account'
+grep TF_ADMIN_PASSWORD /opt/transcode-forge/.env
 ```
 
 Then open `https://<domain>` (no domain: tunnel with
@@ -171,12 +171,15 @@ Then open `https://<domain>` (no domain: tunnel with
 and log in as `admin`. Change the password whenever you like:
 
 ```bash
+cd /opt/transcode-forge
 docker compose exec scheduler python -m transcode_forge.admin reset-password
 ```
 
 There is no web page that creates the admin, on purpose: certificates put
 your hostname in the public transparency logs within seconds of issuing, so
-a first-run setup page on a public address is a race you can lose.
+a first-run setup page on a public address is a race you can lose. The
+password is never written to a log either, because a log is readable with
+less privilege than this account is worth and it outlives the instance.
 
 Then **Settings → Add library**:
 

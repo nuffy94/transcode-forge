@@ -120,6 +120,27 @@ class TestSchedulerRender:
         caddyfile = (tmp_path / "render" / "Caddyfile").read_text()
         assert "dns cloudflare" in caddyfile
 
+    def test_every_secret_in_env_reaches_the_scheduler(self, tmp_path: Path):
+        """A value written into .env that the generated compose never passes
+        through is silently dropped. For TF_ADMIN_PASSWORD that is fatal
+        rather than quiet: the scheduler refuses to boot without it (R-040),
+        so the whole deploy would come up dead. Nothing else in CI renders
+        this compose file, so the wiring is checked here."""
+        _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
+        env = _env_file(tmp_path)
+        scheduler_env = _compose(tmp_path)["services"]["scheduler"]["environment"]
+        passed_through = (
+            " ".join(str(v) for v in scheduler_env.values())
+            if isinstance(scheduler_env, dict)
+            else " ".join(scheduler_env)
+        )
+
+        for key in ("TF_ADMIN_PASSWORD", "TF_AUTH_SECRET", "TF_DB_URL"):
+            assert env.get(key), f"{key} is missing from the rendered .env"
+            assert f"${{{key}}}" in passed_through, (
+                f"{key} is written into .env but the scheduler container never receives it"
+            )
+
     def test_minimal_localhost_only(self, tmp_path: Path):
         _render(SCHEDULER, tmp_path, {})
         compose = _compose(tmp_path)

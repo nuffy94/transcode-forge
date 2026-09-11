@@ -89,9 +89,10 @@ class Settings(BaseSettings):
     # or TF_TOKEN_PEPPER in production so issued worker tokens survive restarts.
     token_pepper: str = ""
 
-    # First-run admin password. Empty -> startup generates one and prints it
-    # once. Either way the account is created on the machine; nothing on the
-    # network can create it (R-040). Ignored once an admin exists.
+    # First-run admin password. Required on an instance that has no admin
+    # yet: the account is created on the machine at startup and nothing on
+    # the network can create it (R-040). Ignored once an admin exists, so it
+    # can be rotated or removed from the environment afterwards.
     admin_password: str = ""
 
     # Logging verbosity for the scheduler + workers.

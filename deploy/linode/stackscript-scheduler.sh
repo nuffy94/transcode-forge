@@ -98,6 +98,7 @@ mkdir -p "$APP_DIR"
 
 PG_PASSWORD="$(random_token)"
 AUTH_SECRET="$(random_token)"
+ADMIN_PASSWORD="$(random_token)"
 
 if [[ -n "$MANAGED_DB_URL_PASSWORD" ]]; then
     DB_URL="$MANAGED_DB_URL_PASSWORD"
@@ -116,6 +117,7 @@ SESSION_SECURE="false"
     printf 'TF_DB_URL=%s\n' "$DB_URL"
     printf 'TF_PG_PASSWORD=%s\n' "$PG_PASSWORD"
     printf 'TF_AUTH_SECRET=%s\n' "$AUTH_SECRET"
+    printf 'TF_ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
     printf 'TF_SESSION_SECURE=%s\n' "$SESSION_SECURE"
     printf 'TF_LOG_LEVEL=info\n'
     printf 'TF_DOMAIN=%s\n' "$DOMAIN"
@@ -180,6 +182,7 @@ cat >> "$APP_DIR/docker-compose.yml" <<'EOF'
       TF_DB_URL: ${TF_DB_URL}
       TF_REDIS_URL: "redis://redis:6379/0"
       TF_AUTH_SECRET: ${TF_AUTH_SECRET}
+      TF_ADMIN_PASSWORD: ${TF_ADMIN_PASSWORD}
       TF_SESSION_SECURE: ${TF_SESSION_SECURE}
       TF_LOG_LEVEL: ${TF_LOG_LEVEL:-info}
       TF_LIBRARY_MOVIES: "/media/movies"
@@ -351,16 +354,16 @@ chmod +x "$APP_DIR/join-local-worker.sh"
     echo "============================"
     if [[ -n "$DOMAIN" ]]; then
         echo "1. Point DNS: an A record for ${DOMAIN} -> this instance's public IP."
-        echo "2. Get the admin password (generated at first boot, printed once):"
-        echo "     cd ${APP_DIR} && docker compose logs scheduler | grep -A4 'no admin account'"
-        echo "   Then open https://${DOMAIN} and log in as 'admin'."
+        echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
+        echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
+        echo "   Open https://${DOMAIN} and log in as 'admin'."
     else
         echo "1. No domain configured -- the UI listens on 127.0.0.1:8000 only."
         echo "   Reach it via an SSH tunnel (ssh -L 8000:127.0.0.1:8000 root@<ip>)"
         echo "   or add a proxy/tunnel before exposing it."
-        echo "2. Get the admin password (generated at first boot, printed once):"
-        echo "     cd ${APP_DIR} && docker compose logs scheduler | grep -A4 'no admin account'"
-        echo "   Then open http://localhost:8000 (through the tunnel) and log in"
+        echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
+        echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
+        echo "   Open http://localhost:8000 (through the tunnel) and log in"
         echo "   as 'admin'."
     fi
     if [[ -n "$S3_BUCKET" ]]; then

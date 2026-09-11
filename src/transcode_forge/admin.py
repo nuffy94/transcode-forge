@@ -6,6 +6,13 @@ model, the same way Nextcloud's `occ user:resetpassword` or Django's
 create or reset the admin: `ensure_admin()` runs at startup so an instance is
 owned before it serves its first request, and this CLI covers recovery.
 
+The password itself comes from the machine's own configuration
+(TF_ADMIN_PASSWORD, which bootstrap.sh and the StackScript generate into
+`.env` alongside the other secrets). The app never invents one, so there is
+no credential for it to hand back through a log — `kubectl logs` is a weaker
+permission than the exec that recovery needs, and shipped logs outlive the
+instance.
+
 There used to be a second door, `POST /api/auth/setup`, which handed the
 account to whoever loaded it first. On a public deploy Caddy publishes the
 hostname to the certificate transparency logs seconds before the operator has
@@ -28,62 +35,57 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
-import secrets
 import sys
-from typing import NamedTuple
 
 from transcode_forge.config import get_settings
 from transcode_forge.db import DBConnection, close_db, init_db
 from transcode_forge.repos import users as user_repo
 
-MIN_LEN = 8
-MAX_LEN = 200
-
-# 12 random bytes -> 16 URL-safe characters: far past guessing, still short
-# enough to read off a terminal and type once.
-_GENERATED_PASSWORD_BYTES = 12
+# Re-exported so the CLI's argument checking and the startup path agree
+# with the hash itself; the rule is defined beside bcrypt (repos/users.py).
+MIN_LEN = user_repo.MIN_PASSWORD_LEN
+MAX_BYTES = user_repo.MAX_PASSWORD_BYTES
 
 
-class AdminBootstrap(NamedTuple):
-    """What startup did about the admin account.
-
-    `generated_password` is set only when this call invented the password,
-    which is the only case where anything should be printed. An operator who
-    supplied TF_ADMIN_PASSWORD already knows it, so it stays out of the log.
-    """
-
-    created: bool
-    generated_password: str | None
-
-
-async def ensure_admin(db: DBConnection, password: str | None = None) -> AdminBootstrap:
+async def ensure_admin(db: DBConnection, password: str | None = None) -> bool:
     """Give this instance an owner before it can serve a request.
 
-    Called once at startup. If an admin already exists this is a no-op, so a
-    restart never rotates the credential out from under the operator.
+    Returns True if it created the account. Called once at startup: if an
+    admin already exists this is a no-op, so a restart never rotates the
+    credential out from under the operator.
     """
     if await user_repo.has_admin(db):
-        return AdminBootstrap(created=False, generated_password=None)
+        return False
 
-    if password is not None and not (MIN_LEN <= len(password) <= MAX_LEN):
-        # Refuse to boot rather than boot unowned — the whole point of this
-        # function is that an unowned instance never gets to serve traffic.
-        raise ValueError(f"TF_ADMIN_PASSWORD must be {MIN_LEN}-{MAX_LEN} characters.")
+    if password is None:
+        # Refuse to boot rather than boot unowned. Generating one here would
+        # mean handing it back through the log, and a log is readable with
+        # less privilege than this account is worth.
+        raise RuntimeError(
+            "This instance has no admin account and TF_ADMIN_PASSWORD is not "
+            "set, so there is nothing to create one from. Set it and start "
+            "again (bootstrap.sh and the Linode StackScript write it into "
+            ".env for you). The admin is only ever created on the machine, "
+            "never over the network."
+        )
 
-    generated = password is None
-    secret = password if password is not None else secrets.token_urlsafe(_GENERATED_PASSWORD_BYTES)
+    # Fail here rather than inside bcrypt, so the message names the setting.
+    try:
+        user_repo.validate_password(password)
+    except ValueError as exc:
+        raise ValueError(f"TF_ADMIN_PASSWORD is unusable: {exc}") from exc
 
     try:
-        await user_repo.create_admin(db, secret)
+        await user_repo.create_admin(db, password)
     except Exception:
         # Another scheduler replica can boot against the same database.
         # users.username is UNIQUE, so the loser's INSERT raises: whoever won
         # owns the instance, and its password is the live one.
         if await user_repo.has_admin(db):
-            return AdminBootstrap(created=False, generated_password=None)
+            return False
         raise
 
-    return AdminBootstrap(created=True, generated_password=secret if generated else None)
+    return True
 
 
 async def reset_admin_password(password: str) -> str:
@@ -125,8 +127,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "reset-password":
         password = _read_password(args.password)
-        if not (MIN_LEN <= len(password) <= MAX_LEN):
-            sys.exit(f"Password must be {MIN_LEN}-{MAX_LEN} characters.")
+        try:
+            user_repo.validate_password(password)
+        except ValueError as exc:
+            sys.exit(str(exc))
         action = asyncio.run(reset_admin_password(password))
         verb = "reset" if action == "updated" else "created"
         print(f"Admin password {verb}. Log in at your Transcode Forge URL.")

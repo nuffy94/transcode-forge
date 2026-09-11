@@ -25,6 +25,11 @@ image:
 # `helm upgrade --reuse-values --set secrets.workerToken=...`.
 secrets:
   authSecret: ""
+  # First-run admin password. Required for a FRESH install: the scheduler
+  # creates the admin from it at startup and there is no web page that can
+  # create one (R-040). Upgrades of an install that already has an admin
+  # ignore it, so it can be left empty there.
+  adminPassword: ""
   pgPassword: ""
   s3AccessKeyId: ""
   s3SecretAccessKey: ""

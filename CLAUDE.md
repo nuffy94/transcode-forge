@@ -210,9 +210,12 @@ Common knobs:
   not set; pin it in production. Worker tokens are HMAC-hashed with a
   pepper derived from it (`TF_TOKEN_PEPPER` overrides), so an unpinned
   secret invalidates issued worker tokens on restart, not just sessions.
-- `TF_ADMIN_PASSWORD` — the first-run admin password. Unset → startup
-  generates one and logs it once. Read once at boot and ignored after an
-  admin exists; there is no HTTP endpoint that creates the account.
+- `TF_ADMIN_PASSWORD` — the first-run admin password (8-72 **bytes**;
+  bcrypt's limit, enforced in `repos/users.validate_password`). Required on
+  an instance with no admin yet — startup refuses to boot without it rather
+  than generate one, because handing a credential back through a log is a
+  weaker permission than the account is worth. Ignored once an admin exists.
+  There is no HTTP endpoint that creates the account (R-040).
 - `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` — library paths.
 - `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
   file); mapped per encoder in `worker/encoder.py`.
