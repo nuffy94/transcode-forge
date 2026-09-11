@@ -164,8 +164,10 @@ file.**
 ### Auth
 
 Single-admin model. Startup creates the admin user on the machine
-(`admin.ensure_admin`: `TF_ADMIN_PASSWORD`, else a generated password logged
-once) — there is no HTTP door to create it (R-040). Subsequent
+(`admin.ensure_admin`, from `TF_ADMIN_PASSWORD`) — there is no HTTP door to
+create it, and the app never generates a password, so it has none to hand
+back through a log (R-040). An instance with no admin and no
+`TF_ADMIN_PASSWORD` refuses to boot rather than come up unowned. Subsequent
 boots route to `/login`. `AuthMiddleware` sits ahead of the routes and
 short-circuits unauthenticated requests with 401 (API) or 302 to /login
 (HTML). Worker-side endpoints (`/api/worker/*`) are exempt — they use
