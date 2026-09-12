@@ -345,12 +345,15 @@ class HttpWorkerAgent:
             # claim payload, or unexpected bug may exit this loop. A worker
             # process exits on SIGTERM/SIGINT and nothing else (spec D2).
             try:
-                # Outbox fence: drain undelivered reports BEFORE claiming
-                # any new work. Finished work's report outranks new work —
-                # and a pending entry for a retried job id must resolve
-                # before that job could ever be re-claimed here (a stale
-                # attempt-1 report landing on attempt-2 is the
-                # successful-job-marked-failed lie).
+                # Delivery priority: drain undelivered reports BEFORE
+                # claiming any new work, because finished work's report
+                # outranks new work. This used to carry the correctness
+                # load too (a stale attempt-1 report landing on attempt-2
+                # is the successful-job-marked-failed lie), and it could
+                # not hold it: the poison-park escape hatch below opens
+                # the fence on purpose so unrelated jobs stay claimable.
+                # The claim token carries that load now, at the scheduler,
+                # where every path into the job row passes it.
                 if await self._drain_outbox() is not DrainResult.EMPTY:
                     await asyncio.sleep(self._claim_backoff.next_delay())
                     continue
@@ -804,6 +807,7 @@ class HttpWorkerAgent:
                     speed=None,
                     phase=JobPhase.WAIT,
                     phase_detail=f"{owner[:8]} {age}s",
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Lock-wait progress update failed", exc_info=True)
@@ -1023,7 +1027,11 @@ class HttpWorkerAgent:
             # and retry every cooldown tick. If the parked report is a
             # terminal outcome the scheduler later re-assigns, its
             # eventual delivery resolves via the idempotent-receipt
-            # endpoints (duplicate → 204, conflict → 409 discard).
+            # endpoints (duplicate → 204, conflict → 409 discard) and,
+            # since it carries the claim token of the attempt that wrote
+            # it, a 403 rather than a hit on whatever attempt is running
+            # by then. That last part is what makes this safe rather than
+            # merely tidy.
             logger.warning(
                 "Outbox: %d poison entr%s parked (≥%d failed attempts) — "
                 "retrying every %ds without blocking claims; the scheduler "
