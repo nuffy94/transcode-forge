@@ -5,7 +5,10 @@ Steps:
 2. TRANSCODE — ffmpeg → .tf_tmp file (optionally preceded by a
                target-VMAF CRF search on short samples)
 3. VERIFY    — ffprobe output: duration match, codec correct, file > 0
-4. COMPARE   — output_size < source_size (skip if bigger) AND, when a
+4. COMPARE   — the output carries exactly the streams the encode plan
+               promised, in the planned order (StreamLossError → SKIPPED,
+               original kept) AND output_size < source_size (skip if
+               bigger) AND, when a
                target VMAF is set, the quality gate: full-file VMAF with
                the resolution-matched model must clear the absolute safety
                floors (mean ≥ vmaf_safety_mean AND worst-scenes perc5 ≥
@@ -35,16 +38,20 @@ that local path is passed here.
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from transcode_forge.models.job import JobPhase
-from transcode_forge.scanner.probe import ProbeError, ffprobe
+from transcode_forge.scanner.probe import ProbeError, StreamInfo, ffprobe, stream_inventory
 from transcode_forge.worker.encoder import (
+    PlannedStream,
+    StreamPlan,
     build_encode_command,
     map_quality,
+    plan_streams,
     run_encode,
     unmuxable_subtitle_indexes,
 )
@@ -157,6 +164,150 @@ class VmafGateError(PipelineError):
         )
 
 
+class StreamLossError(PipelineError):
+    """Raised when the encode would not carry every stream of the source.
+
+    The outcome is SKIP (keep the original, never replace) for the same
+    reason as SizeRegressionError: the encode is a valid file we refuse to
+    keep, not a broken one, and a retry reproduces it forever. Carries the
+    names of the streams that would go, so the skip explains itself on the
+    job row.
+    """
+
+    def __init__(
+        self,
+        step: str,
+        detail: str,
+        missing: Sequence[str],
+        *,
+        resolved_crf: int | None = None,
+        backend: str | None = None,
+    ):
+        self.missing = tuple(missing)
+        self.resolved_crf = resolved_crf
+        self.backend = backend
+        super().__init__(step, f"{detail}: {'; '.join(missing)}. Keeping the original.")
+
+
+def _describe(stream: StreamInfo) -> str:
+    """How a source stream is named in a skip message."""
+    language = f" [{stream.language}]" if stream.language else ""
+    picture = " (attached picture)" if stream.attached_pic else ""
+    return f"#{stream.index} {stream.codec_type} {stream.codec_name}{language}{picture}"
+
+
+def _describe_planned(planned: PlannedStream) -> str:
+    """How a planned output stream is named in a skip message."""
+    language = f" [{planned.language}]" if planned.language else ""
+    picture = " (attached picture)" if planned.attached_pic else ""
+    return (
+        f"#{planned.source_index} {planned.codec_type} {planned.codec_name}"
+        f"{language}{picture} at output position {planned.ordinal}"
+    )
+
+
+def _inventory_key(
+    codec_type: str, codec_name: str, language: str, attached_pic: bool, forced: bool
+) -> tuple[str, str, str, bool, bool]:
+    """The smallest description that tells real loss from a muxer rewrite.
+
+    Position carries the ordinal (these keys are compared as an ordered
+    sequence), so two tracks alike on every attribute still cannot stand
+    in for each other. Title and the default disposition are out on
+    purpose: a copy through matroska rewrites both.
+    """
+    return (codec_type, codec_name, language, attached_pic, forced)
+
+
+def _check_plan_covers_source(
+    inventory: Sequence[StreamInfo],
+    plan: StreamPlan,
+    *,
+    resolved_crf: int | None,
+    backend: str | None,
+) -> None:
+    """Every source stream must be either carried or named as dropped.
+
+    This runs before ffmpeg does: a plan that cannot account for the whole
+    source is a lossy encode we already know about, so there is no reason
+    to spend the encode first.
+    """
+    accounted = Counter(plan.accounted_indexes)
+    missing = [_describe(s) for s in inventory if accounted[s.index] == 0]
+    if missing:
+        raise StreamLossError(
+            "TRANSCODE",
+            "the encode would leave source streams behind",
+            missing,
+            resolved_crf=resolved_crf,
+            backend=backend,
+        )
+    source_indexes = {s.index for s in inventory}
+    confused = sorted(i for i, n in accounted.items() if n > 1 or i not in source_indexes)
+    if confused:
+        raise PipelineError(
+            "TRANSCODE",
+            f"Stream plan is malformed: source indexes {confused} are counted"
+            " twice or do not exist. Refusing to encode against it.",
+        )
+
+
+async def _verify_stream_inventory(
+    output_path: Path,
+    plan: StreamPlan,
+    *,
+    resolved_crf: int | None,
+    backend: str | None,
+) -> None:
+    """The output must be exactly the streams the plan promised, in order."""
+    try:
+        actual = await stream_inventory(output_path)
+    except ProbeError as e:
+        raise PipelineError(
+            "COMPARE", f"Could not list the output's streams, so it cannot be trusted: {e}"
+        ) from e
+
+    promised = tuple(
+        _inventory_key(p.codec_type, p.codec_name, p.language, p.attached_pic, p.forced)
+        for p in sorted(plan.kept, key=lambda p: p.ordinal)
+    )
+    produced = tuple(
+        _inventory_key(s.codec_type, s.codec_name, s.language, s.attached_pic, s.forced)
+        for s in actual
+    )
+    if promised == produced:
+        return
+
+    # Which planned streams are simply not there (a multiset difference, so
+    # one of two identical tracks going missing is one report, not two).
+    remaining = Counter(produced)
+    lost: list[str] = []
+    for planned in sorted(plan.kept, key=lambda p: p.ordinal):
+        key = _inventory_key(
+            planned.codec_type,
+            planned.codec_name,
+            planned.language,
+            planned.attached_pic,
+            planned.forced,
+        )
+        if remaining[key] > 0:
+            remaining[key] -= 1
+        else:
+            lost.append(_describe_planned(planned))
+    if not lost:
+        lost = [
+            f"the output holds {len(produced)} streams in an order the plan"
+            f" ({len(promised)} streams) does not describe"
+        ]
+    raise StreamLossError(
+        "COMPARE",
+        "the output does not carry every planned stream",
+        lost,
+        resolved_crf=resolved_crf,
+        backend=backend,
+    )
+
+
 async def run_pipeline(
     *,
     source_path: str,
@@ -215,6 +366,8 @@ async def run_pipeline(
         PipelineError: If any step fails (original file is always safe).
         SizeRegressionError: If output is larger than source (skip outcome).
         VmafGateError: If measured VMAF is below the floor (skip outcome).
+        StreamLossError: If the encode would not carry every source stream
+            (skip outcome).
     """
     src = Path(source_path)
     # Sidecar naming keeps the original extension so ffmpeg recognizes the
@@ -353,6 +506,18 @@ async def run_pipeline(
                 "no identifiable codec; matroska cannot copy them",
                 drop_subs,
             )
+        # The plan is the contract: which source stream lands on which
+        # output position, and which are left out on purpose. Its reference
+        # is this probe, taken here, never the builder's account of itself.
+        try:
+            source_streams = await stream_inventory(src)
+        except ProbeError as e:
+            raise PipelineError(
+                "TRANSCODE",
+                f"Could not list the source's streams, so nothing can promise to keep them: {e}",
+            ) from e
+        plan = plan_streams(source_streams, target_codec=codec, drop_sub_streams=drop_subs)
+        _check_plan_covers_source(source_streams, plan, resolved_crf=resolved_crf, backend=backend)
         cmd = build_encode_command(
             codec,
             backend,
@@ -379,7 +544,12 @@ async def run_pipeline(
         )
         logger.info("[VERIFY] Output verified: codec=%s, duration OK", codec)
 
-        # Step 4: COMPARE — size first, then the quality gate.
+        # Step 4: COMPARE — the stream inventory first (a file that lost a
+        # track is not a candidate at any size or score), then size, then
+        # the quality gate.
+        await _verify_stream_inventory(tmp_path, plan, resolved_crf=resolved_crf, backend=backend)
+        logger.info("[COMPARE] Output carries all %d planned streams", len(plan.kept))
+
         output_size = (await asyncio.to_thread(tmp_path.stat)).st_size
         if output_size >= source_size:
             raise SizeRegressionError(

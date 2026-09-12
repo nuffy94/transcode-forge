@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from transcode_forge.scanner.probe import StreamInfo
 from transcode_forge.worker.proc import managed_subprocess
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,126 @@ class EncodeResult:
     output_size: int
     returncode: int
     error_message: str | None = None
+
+
+# ── The stream plan ────────────────────────────────────────────────────
+#
+# The command builder decides what the encode carries; the muxer decides
+# what it accepts; before the plan, nothing compared the two, so a source
+# stream neither side wanted disappeared and the job still read COMPLETE.
+# The plan is that comparison made possible: it names every source stream
+# either as carried (with the output ordinal it lands on) or as a
+# deliberate omission with a reason. run_pipeline holds it against its own
+# probe of the source and then against the finished output.
+
+DROP_DATA_STREAM = "data stream, not carried into the output"
+DROP_UNKNOWN_STREAM = "stream of unknown type"
+DROP_UNMUXABLE_SUBTITLE = "subtitle with no identifiable codec"
+
+# Types the mapping carries. Anything else is a named omission.
+_CARRIED_TYPES = frozenset({"video", "audio", "subtitle", "attachment"})
+
+
+@dataclass(frozen=True)
+class PlannedStream:
+    """A source stream the encode carries, and where it lands.
+
+    `codec_name` is what the finished output must report for this stream:
+    the target codec for the one being re-encoded, the source codec for
+    every stream that is copied.
+    """
+
+    source_index: int
+    ordinal: int
+    codec_type: str
+    codec_name: str
+    language: str
+    attached_pic: bool
+    forced: bool
+
+
+@dataclass(frozen=True)
+class DroppedStream:
+    """A source stream the encode deliberately leaves out, and why."""
+
+    source_index: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class StreamPlan:
+    """What the encode command promises to do with every source stream."""
+
+    kept: tuple[PlannedStream, ...]
+    dropped: tuple[DroppedStream, ...]
+
+    @property
+    def accounted_indexes(self) -> tuple[int, ...]:
+        """Every source index the plan speaks for, carried or dropped."""
+        return tuple(p.source_index for p in self.kept) + tuple(
+            d.source_index for d in self.dropped
+        )
+
+
+def plan_streams(
+    inventory: Sequence[StreamInfo],
+    *,
+    target_codec: str,
+    drop_sub_streams: Sequence[int] = (),
+) -> StreamPlan:
+    """Declare what `_COMMON_TAIL`'s mapping does with this source.
+
+    The mapping is `0:V:0` (the first video stream that is not an attached
+    picture), then all audio, then all subtitles minus the unmuxable ones,
+    then all attachments, and ffmpeg lays the output out in that order.
+    Data and unknown-type streams are dropped on purpose: matroska's
+    support for them is spotty and carrying them would reintroduce the
+    exotic-stream failure class the mapping exists to end.
+
+    Anything this plan does not speak for is a stream the encode would
+    lose without saying so. It is not this function's job to notice that;
+    the pipeline compares the plan with its own probe of the source.
+
+    Args:
+        inventory: The source's streams, in index order.
+        target_codec: The codec the primary video stream is re-encoded to.
+        drop_sub_streams: Per-type subtitle indexes with no identifiable
+            codec (see unmuxable_subtitle_indexes).
+    """
+    subtitles = [s for s in inventory if s.codec_type == "subtitle"]
+    unmuxable = {subtitles[n].index for n in drop_sub_streams if 0 <= n < len(subtitles)}
+
+    primary = next((s for s in inventory if s.codec_type == "video" and not s.attached_pic), None)
+    carried: list[StreamInfo] = []
+    if primary is not None:
+        carried.append(primary)
+    carried += [s for s in inventory if s.codec_type == "audio"]
+    carried += [s for s in subtitles if s.index not in unmuxable]
+    carried += [s for s in inventory if s.codec_type == "attachment"]
+
+    kept = tuple(
+        PlannedStream(
+            source_index=s.index,
+            ordinal=ordinal,
+            codec_type=s.codec_type,
+            codec_name=target_codec if s is primary else s.codec_name,
+            language=s.language,
+            attached_pic=s.attached_pic,
+            forced=s.forced,
+        )
+        for ordinal, s in enumerate(carried)
+    )
+
+    dropped: list[DroppedStream] = []
+    for s in inventory:
+        if s.index in unmuxable:
+            dropped.append(DroppedStream(s.index, DROP_UNMUXABLE_SUBTITLE))
+        elif s.codec_type == "data":
+            dropped.append(DroppedStream(s.index, DROP_DATA_STREAM))
+        elif s.codec_type not in _CARRIED_TYPES:
+            dropped.append(DroppedStream(s.index, DROP_UNKNOWN_STREAM))
+
+    return StreamPlan(kept=kept, dropped=tuple(dropped))
 
 
 # ── Quality mapping ────────────────────────────────────────────────────

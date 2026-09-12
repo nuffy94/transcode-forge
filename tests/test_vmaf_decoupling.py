@@ -67,6 +67,11 @@ def _pipeline_patches(
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=make_probe())
         )
         stack.enter_context(patch("transcode_forge.worker.pipeline._decode_check"))
+        # These sources are placeholder bytes, not media: they have no
+        # streams for the inventory gate to preserve.
+        stack.enter_context(
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=())
+        )
         stack.enter_context(
             patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True))
         )

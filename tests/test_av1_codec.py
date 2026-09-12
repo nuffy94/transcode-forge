@@ -361,6 +361,7 @@ async def test_vmaf_below_floor_skips_and_keeps_original(tmp_path):
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
         patch("transcode_forge.worker.pipeline.ffprobe", return_value=_mock_probe()),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
         patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=damaged_vmaf),
     ):
@@ -400,6 +401,7 @@ async def test_vmaf_at_or_above_floor_completes_and_swaps(tmp_path):
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
         patch("transcode_forge.worker.pipeline.ffprobe", return_value=_mock_probe()),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
         patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=good_vmaf),
     ):
@@ -431,6 +433,7 @@ async def test_av1_output_verifies_as_av1(tmp_path):
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
         patch("transcode_forge.worker.pipeline.ffprobe", return_value=_mock_probe("av1")),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
     ):
         result = await run_pipeline(
             source_path=str(source),

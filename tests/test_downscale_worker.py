@@ -150,6 +150,7 @@ async def test_pipeline_verify_rejects_wrong_output_height(tmp_path):
             ),
         ),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
     ):
         with pytest.raises(PipelineError) as exc_info:
             await run_pipeline(
@@ -181,6 +182,7 @@ async def test_pipeline_refuses_upscale_even_if_job_row_lies(tmp_path):
             side_effect=_probe_sequence(make_probe("h264", height=720)),
         ),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
     ):
         with pytest.raises(PipelineError):
             await run_pipeline(
@@ -215,6 +217,7 @@ async def test_pipeline_fails_closed_when_source_height_unknowable(tmp_path):
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
         patch("transcode_forge.worker.pipeline.ffprobe", side_effect=probe_fails),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
     ):
         with pytest.raises(PipelineError) as exc_info:
             await run_pipeline(
@@ -264,6 +267,7 @@ async def test_pipeline_downscale_happy_path_wires_everything(tmp_path):
             ),
         ),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
         patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=fake_gauge),
     ):
@@ -310,6 +314,7 @@ async def test_pipeline_without_target_height_is_byte_identical(tmp_path):
         patch("transcode_forge.worker.pipeline.run_encode", side_effect=capture_encode),
         patch("transcode_forge.worker.pipeline.ffprobe", return_value=make_probe()),
         patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
         patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=fake_gauge),
     ):

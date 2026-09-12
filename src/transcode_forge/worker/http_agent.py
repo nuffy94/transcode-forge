@@ -28,6 +28,7 @@ from transcode_forge.worker.outbox import Outbox
 from transcode_forge.worker.pipeline import (
     PipelineError,
     SizeRegressionError,
+    StreamLossError,
     VmafGateError,
     run_pipeline,
 )
@@ -705,6 +706,20 @@ class HttpWorkerAgent:
                 },
             )
             logger.info("Job %s skipped (size regression)", job.id)
+        except StreamLossError as e:
+            await self._deliver(
+                job.id,
+                "skipped",
+                {
+                    "reason": "stream_loss",
+                    # The list of streams that would have gone rides in
+                    # here: the job row is the only place it is readable.
+                    "error_message": str(e),
+                    "resolved_crf": e.resolved_crf,
+                    "backend_used": e.backend,
+                },
+            )
+            logger.warning("Job %s skipped (stream loss): %s", job.id, e)
         except PipelineError as e:
             new_retry = job.retry_count + 1
             await self._deliver(

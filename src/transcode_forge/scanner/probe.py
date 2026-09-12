@@ -60,6 +60,31 @@ class ProbeResult:
         return "10" in self.pix_fmt or "p010" in self.pix_fmt
 
 
+# ffprobe spells "nobody tagged a language" two ways: matroska stores the
+# literal "und", mp4 and mkv both leave the tag off entirely. Both mean the
+# same thing, so both normalize to "" before they reach an inventory key.
+_UNTAGGED_LANGUAGES = frozenset({"und", "unknown"})
+
+
+@dataclass(frozen=True)
+class StreamInfo:
+    """One stream of a media file, reduced to the fields that decide
+    whether it survived a transcode.
+
+    Deliberately excluded: title, and every disposition except `forced`.
+    A copy through a muxer rewrites those (matroska promotes the first
+    video stream to default, measured 2026-09-12), so keying on them
+    would report a loss that did not happen.
+    """
+
+    index: int
+    codec_type: str
+    codec_name: str
+    language: str
+    attached_pic: bool
+    forced: bool
+
+
 class ProbeError(Exception):
     """Raised when ffprobe fails or returns unexpected output."""
 
@@ -158,6 +183,67 @@ async def ffprobe(path: str | Path) -> ProbeResult:
         file_size=file_size,
         pix_fmt=stream.get("pix_fmt", ""),
     )
+
+
+async def stream_inventory(path: str | Path) -> tuple[StreamInfo, ...]:
+    """Every stream in the file, in index order.
+
+    This is the reference the transcode pipeline holds its encode plan
+    against, so it never fails open: a file whose streams cannot be listed
+    is a file whose content nothing can promise to keep, and the caller
+    must stop rather than transcode blind.
+
+    Raises:
+        ProbeError: If ffprobe fails, times out, or returns invalid JSON.
+    """
+    target = str(path)
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_streams",
+        target,
+    ]
+
+    try:
+        async with managed_subprocess(
+            *cmd,
+            timeout=FFPROBE_TIMEOUT,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        ) as child:
+            stdout, stderr = await child.proc.communicate()
+    except TimeoutError as exc:
+        raise ProbeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s: {target}") from exc
+    except FileNotFoundError as exc:
+        raise ProbeError("ffprobe binary not found, is ffmpeg installed?") from exc
+
+    if child.proc.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()
+        raise ProbeError(f"ffprobe failed (exit {child.proc.returncode}): {detail}")
+
+    try:
+        data = json.loads(stdout.decode(errors="replace"))
+    except json.JSONDecodeError as exc:
+        raise ProbeError(f"ffprobe returned invalid JSON: {target}") from exc
+
+    inventory: list[StreamInfo] = []
+    for stream in data.get("streams", []):
+        disposition = stream.get("disposition") or {}
+        language = str((stream.get("tags") or {}).get("language") or "").strip().lower()
+        inventory.append(
+            StreamInfo(
+                index=int(stream.get("index", len(inventory))),
+                codec_type=str(stream.get("codec_type") or "unknown"),
+                codec_name=str(stream.get("codec_name") or "unknown"),
+                language="" if language in _UNTAGGED_LANGUAGES else language,
+                attached_pic=bool(disposition.get("attached_pic")),
+                forced=bool(disposition.get("forced")),
+            )
+        )
+    return tuple(inventory)
 
 
 def is_video_file(path: Path) -> bool:

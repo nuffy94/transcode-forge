@@ -8,10 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from transcode_forge.scanner.probe import ProbeResult
+from transcode_forge.scanner.probe import ProbeResult, StreamInfo
+from transcode_forge.worker.encoder import StreamPlan, plan_streams
 from transcode_forge.worker.pipeline import (
     PipelineError,
     SizeRegressionError,
+    StreamLossError,
     _verify_output,
     find_stale_locks,
     run_pipeline,
@@ -273,6 +275,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         ):
             result = await run_pipeline(
                 source_path=str(source),
@@ -321,6 +324,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         ):
             with pytest.raises(SizeRegressionError):
                 await run_pipeline(
@@ -351,7 +355,10 @@ class TestRunPipeline:
                 error_message="encoder crashed",
             )
 
-        with patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode):
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+        ):
             with pytest.raises(PipelineError, match="encoder crashed"):
                 await run_pipeline(
                     source_path=str(source),
@@ -398,6 +405,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         ):
             with pytest.raises(PipelineError, match="backup"):
                 await run_pipeline(
@@ -449,6 +457,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
             patch("transcode_forge.worker.pipeline.LOCK_TOUCH_INTERVAL", 0.02),
         ):
             await run_pipeline(
@@ -500,6 +509,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
         ):
             await run_pipeline(
                 source_path=str(source),
@@ -524,6 +534,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.run_encode", side_effect=mock_run_encode),
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
             patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
             patch(
                 "transcode_forge.worker.pipeline.measure_vmaf",
@@ -728,6 +739,7 @@ class TestUnmuxableSubtitleWiring:
                 worker.pipeline, "unmuxable_subtitle_indexes", AsyncMock(return_value=[2])
             ),
             patch.object(worker.pipeline, "run_encode", side_effect=fake_run_encode),
+            patch.object(worker.pipeline, "stream_inventory", AsyncMock(return_value=())),
         ):
             with pytest.raises(worker.pipeline.PipelineError):
                 await worker.pipeline.run_pipeline(
@@ -740,6 +752,255 @@ class TestUnmuxableSubtitleWiring:
                 )
         assert "-0:s:2" in captured["cmd"]
         assert "Dropping unmuxable subtitle stream" in caplog.text
+
+
+def _stream(
+    index: int,
+    codec_type: str,
+    codec_name: str,
+    *,
+    language: str = "",
+    attached_pic: bool = False,
+    forced: bool = False,
+) -> StreamInfo:
+    return StreamInfo(
+        index=index,
+        codec_type=codec_type,
+        codec_name=codec_name,
+        language=language,
+        attached_pic=attached_pic,
+        forced=forced,
+    )
+
+
+class TestStreamInventoryGate:
+    """One rule: the output carries exactly the streams the plan promised,
+    or the original is not replaced.
+
+    Before this gate, `-map 0:V:0 -map 0:a? -map 0:s? -map 0:t?` quietly
+    left secondary video and mp4 cover art out of the output, VERIFY
+    probed only v:0, and CLEANUP then deleted the only copy that still
+    had them.
+    """
+
+    @staticmethod
+    def _encode(size: int = 5000):
+        async def mock_run_encode(cmd, total_duration, progress_callback=None):
+            from transcode_forge.worker.encoder import EncodeResult
+
+            output = Path(cmd[-1])
+            output.write_bytes(b"y" * size)
+            return EncodeResult(
+                success=True, output_path=str(output), output_size=size, returncode=0
+            )
+
+        return mock_run_encode
+
+    @staticmethod
+    def _probe() -> ProbeResult:
+        return ProbeResult(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5000000,
+            duration=3600.0,
+            file_size=5000,
+        )
+
+    async def test_replacement_is_refused_when_a_source_stream_is_absent_from_plan_and_output(
+        self, tmp_path
+    ):
+        """The reference is the pipeline's own source probe, not the
+        builder's claim about itself: a plan that quietly leaves a source
+        stream out is caught before ffmpeg runs, and the original is
+        byte-identical afterwards."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "audio", "aac", language="eng"),
+            _stream(2, "subtitle", "subrip", language="eng"),
+        )
+        honest = plan_streams(inventory, target_codec="hevc")
+        # A builder that forgets the subtitle track: it neither carries it
+        # nor names it as a deliberate omission.
+        forgetful = StreamPlan(kept=honest.kept[:-1], dropped=honest.dropped)
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode()),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=inventory),
+            patch("transcode_forge.worker.pipeline.plan_streams", return_value=forgetful),
+        ):
+            with pytest.raises(StreamLossError, match="subtitle"):
+                await run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+
+        assert source.read_bytes() == b"x" * 10000
+        for suffix in (".tf_lock", ".tf_tmp", ".tf_bak"):
+            assert list(tmp_path.glob(f"*{suffix}*")) == [], f"leftover {suffix}"
+
+    async def test_replacement_is_refused_when_the_output_drops_one_of_two_identical_tracks(
+        self, tmp_path
+    ):
+        """Two audio tracks that are identical on every attribute: dropping
+        one leaves the SET of streams unchanged, so only an ordered
+        comparison by planned ordinal sees the loss."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "audio", "aac", language="eng"),
+            _stream(2, "audio", "aac", language="eng"),
+            _stream(3, "subtitle", "subrip", language="eng"),
+        )
+        # What the muxer actually wrote: one of the twins never made it.
+        output_inventory = (
+            _stream(0, "video", "hevc"),
+            _stream(1, "audio", "aac", language="eng"),
+            _stream(2, "subtitle", "subrip", language="eng"),
+        )
+        assert {(s.codec_type, s.codec_name, s.language) for s in output_inventory} == {
+            (s.codec_type, "hevc" if s.codec_type == "video" else s.codec_name, s.language)
+            for s in inventory
+        }, "the fixture must be set-equal, or it does not test the ordinal"
+
+        def inventory_of(path):
+            return output_inventory if Path(path) != source else inventory
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode()),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", side_effect=inventory_of),
+        ):
+            with pytest.raises(StreamLossError, match="audio"):
+                await run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+
+        assert source.read_bytes() == b"x" * 10000
+        for suffix in (".tf_lock", ".tf_tmp", ".tf_bak"):
+            assert list(tmp_path.glob(f"*{suffix}*")) == [], f"leftover {suffix}"
+
+    async def test_a_matching_output_is_swapped_in(self, tmp_path):
+        """The gate is not a blanket refusal: when the output carries what
+        the plan promised, the swap happens exactly as before."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "audio", "aac", language="eng"),
+        )
+        output_inventory = (
+            _stream(0, "video", "hevc"),
+            _stream(1, "audio", "aac", language="eng"),
+        )
+
+        def inventory_of(path):
+            return output_inventory if Path(path) != source else inventory
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode()),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", side_effect=inventory_of),
+        ):
+            result = await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job",
+                worker_id="test-worker",
+            )
+
+        assert result["output_size"] == 5000
+        assert source.read_bytes() == b"y" * 5000
+
+    async def test_an_unreadable_source_stops_the_job_before_the_encode(self, tmp_path):
+        """No inventory, no promise: a source whose streams cannot be
+        listed fails the job instead of transcoding blind."""
+        from transcode_forge.scanner.probe import ProbeError
+
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode()),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch(
+                "transcode_forge.worker.pipeline.stream_inventory",
+                side_effect=ProbeError("ffprobe failed (exit 1)"),
+            ),
+        ):
+            with pytest.raises(PipelineError, match="streams"):
+                await run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+
+        assert source.read_bytes() == b"x" * 10000
+
+
+class TestStreamPlan:
+    """What the plan promises for the mapping the encoder ships today."""
+
+    def test_data_and_unknown_streams_are_named_omissions(self):
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "audio", "aac"),
+            _stream(2, "data", "bin_data"),
+            _stream(3, "nut", "unknown"),
+        )
+        plan = plan_streams(inventory, target_codec="hevc")
+        assert [p.source_index for p in plan.kept] == [0, 1]
+        assert [d.source_index for d in plan.dropped] == [2, 3]
+
+    def test_the_primary_video_is_the_first_one_that_is_not_a_picture(self):
+        inventory = (
+            _stream(0, "video", "mjpeg", attached_pic=True),
+            _stream(1, "video", "h264"),
+            _stream(2, "audio", "aac"),
+        )
+        plan = plan_streams(inventory, target_codec="hevc")
+        primary = plan.kept[0]
+        assert (primary.source_index, primary.ordinal) == (1, 0)
+        assert primary.codec_name == "hevc", "the primary is the stream being re-encoded"
+
+    def test_an_unmuxable_subtitle_is_a_named_omission(self):
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "subtitle", "subrip"),
+            _stream(2, "subtitle", "unknown"),
+        )
+        plan = plan_streams(inventory, target_codec="hevc", drop_sub_streams=[1])
+        assert [p.source_index for p in plan.kept] == [0, 1]
+        assert [d.source_index for d in plan.dropped] == [2]
 
 
 class TestDecodeCheckDeadline:

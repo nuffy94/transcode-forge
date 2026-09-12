@@ -4,7 +4,7 @@
     {% for reason, count in counts.items() %}
     {% set pct = (count / total * 100)|int if total > 0 else 0 %}
     {% set color = 'forge-oxide' if reason == 'already_hevc'
-                   else 'forge-rust' if reason in ('size_regression', 'below_vmaf_floor')
+                   else 'forge-rust' if reason in ('size_regression', 'below_vmaf_floor', 'stream_loss')
                    else 'forge-steel-hi' if reason == 'not_h264'
                    else 'forge-brass' if reason == 'too_small'
                    else 'forge-mute' %}
@@ -15,6 +15,7 @@
                 {% elif reason == 'not_h264' %}Not H.264
                 {% elif reason == 'size_regression' %}Size regression
                 {% elif reason == 'below_vmaf_floor' %}Below VMAF floor
+                {% elif reason == 'stream_loss' %}Stream loss
                 {% elif reason == 'too_small' %}Too small
                 {% elif reason == 'manual_skip' %}Manual skip
                 {% else %}{{ reason|replace('_', ' ') }}{% endif %}
@@ -22,7 +23,7 @@
             <span class="text-{{ color }}">
                 {% if reason == 'already_hevc' %}{{ icon('check-circle', 'forge-icon--sm') }}
                 {% elif reason == 'not_h264' %}{{ icon('info', 'forge-icon--sm') }}
-                {% elif reason in ('size_regression', 'below_vmaf_floor') %}{{ icon('alert', 'forge-icon--sm') }}
+                {% elif reason in ('size_regression', 'below_vmaf_floor', 'stream_loss') %}{{ icon('alert', 'forge-icon--sm') }}
                 {% elif reason == 'too_small' %}{{ icon('shrink', 'forge-icon--sm') }}
                 {% else %}{{ icon('help', 'forge-icon--sm') }}{% endif %}
             </span>
