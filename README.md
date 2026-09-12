@@ -65,9 +65,10 @@ $EDITOR .env
 docker compose up -d
 ```
 
-Open http://localhost:8000 and pick an admin password on the setup screen.
-From there you scan your library, queue jobs, and watch progress on the
-dashboard.
+bootstrap generated your admin password into `.env` alongside the other
+secrets. Read it with `grep TF_ADMIN_PASSWORD .env`, then open
+http://localhost:8000 and log in as `admin` with that value. From there you
+scan your library, queue jobs, and watch progress on the dashboard.
 
 ### Pre-built image (skip the build)
 
