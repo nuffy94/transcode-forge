@@ -1,6 +1,6 @@
 # Backups
 
-Transcode Forge stores state in PostgreSQL and Redis. This guide covers backing up and restoring the database and configuration.
+Transcode Forge keeps its state in PostgreSQL. This guide covers backing up and restoring the database and configuration.
 
 ## What to back up
 
@@ -66,6 +66,10 @@ populated database is what turns a recovery into a loss: `psql` prints
 restore that did nothing reads as a finished one.
 
 ```bash
+# A failed gunzip hands psql an empty stream, and psql exits 0 on empty
+# input. pipefail makes the whole pipeline fail when either half does.
+set -o pipefail
+
 # Stop the scheduler. Nothing may write while the databases swap.
 docker compose stop scheduler
 
@@ -77,16 +81,21 @@ docker compose exec -T postgres createdb -U tf transcode_forge_restore
 gunzip < backup.sql.gz | docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U tf -d transcode_forge_restore
 
-# 3. Check the exit code before going further. Anything but 0 means the
-#    restore failed and the live database has not been touched yet.
+# 3. Prove the backup actually landed. An empty or partial target fails
+#    here, so a broken archive cannot reach the next step.
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U tf \
+  -d transcode_forge_restore -c 'SELECT count(*) FROM schema_migrations;'
+
+# 4. Check the exit code. Anything but 0 means the restore failed and the
+#    live database has not been touched. Stop here and fix the backup.
 echo $?
 
-# 4. Promote it. The live database is renamed, never dropped.
+# 5. Promote it. The live database is renamed, never dropped.
 docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U tf -d postgres \
   -c 'ALTER DATABASE transcode_forge RENAME TO transcode_forge_prerestore;' \
   -c 'ALTER DATABASE transcode_forge_restore RENAME TO transcode_forge;'
 
-# 5. Start the scheduler. Migrations auto-apply on boot.
+# 6. Start the scheduler. Migrations auto-apply on boot.
 docker compose up -d scheduler
 ```
 
@@ -94,7 +103,11 @@ For a plain (ungzipped) dump, step 2 is `docker compose exec -T postgres psql
 -v ON_ERROR_STOP=1 -U tf -d transcode_forge_restore` with `< backup.sql` on the
 host side.
 
-The rename in step 4 needs every other client off `transcode_forge`, which is
+The count in step 3 should match the number of migration files in the release
+that took the backup. Zero rows is not possible: `schema_migrations` does not
+exist in an empty database, so the query fails instead of returning 0.
+
+The rename in step 5 needs every other client off `transcode_forge`, which is
 why the scheduler is stopped. Two properties follow from restoring this way:
 
 - **Your backup is only ever read.** Nothing here writes to `backup.sql.gz`.

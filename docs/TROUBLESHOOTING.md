@@ -381,14 +381,24 @@ curl http://localhost:8000/api/health/ready
 
 **Postgres won't start**
 - Check disk space: `docker compose exec postgres df /var/lib/postgresql/data`
-- Corrupted data directory: restore your last good dump into a fresh database, see [BACKUP.md](./BACKUP.md#restore-postgresql-dump). That is the only repair that keeps your admin account, worker tokens, settings and job history.
-- No usable backup: reset the Postgres data directory and nothing else. Everything above is gone, so you re-create the admin from `TF_ADMIN_PASSWORD`, re-issue every worker token, and re-scan and re-queue your libraries.
+- Corrupted data directory: a server that will not start cannot be restored
+  into, so give it an empty data directory first, then restore your dump into
+  the cluster it initializes. Keep the damaged directory: it is the only copy
+  of anything the backup is missing.
   ```bash
+  # 1. Keep the damaged directory on the host. Skip if you don't want it.
   docker compose stop postgres
+  docker cp "$(docker compose ps -aq postgres)":/var/lib/postgresql/data ./pgdata-damaged
+
+  # 2. Empty the Postgres data directory and nothing else.
   docker compose run --rm --no-deps --entrypoint sh postgres \
     -c 'find /var/lib/postgresql/data -mindepth 1 -delete'
-  docker compose up -d
+
+  # 3. Start Postgres alone. It initializes a new empty cluster.
+  docker compose up -d postgres
   ```
+  Now restore your last good dump, see [BACKUP.md](./BACKUP.md#restore-postgresql-dump). It runs unchanged: the new cluster's `transcode_forge` is empty, and the restore renames it aside.
+- No usable backup: the empty cluster is what you have. Start the rest of the stack, re-create the admin from `TF_ADMIN_PASSWORD`, re-issue every worker token, and re-scan and re-queue your libraries. Settings and job history are gone.
 
 **Redis won't start**
 - Check logs: `docker compose logs redis`

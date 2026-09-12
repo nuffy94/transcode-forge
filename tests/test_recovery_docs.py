@@ -109,6 +109,23 @@ def test_restore_procedure_never_writes_a_file() -> None:
     )
 
 
+def test_restore_is_verified_before_promotion() -> None:
+    lines = _shell_lines(_section(BACKUP.read_text(encoding="utf-8"), "Restore procedure"))
+    assert any("pipefail" in line for line in lines), (
+        "The gzip restore is a pipeline. Without pipefail a failed gunzip "
+        "leaves psql reading empty input and exiting 0, so the exit-code "
+        "check passes on a restore that loaded nothing."
+    )
+    checked = next((i for i, line in enumerate(lines) if "schema_migrations" in line), None)
+    promoted = next((i for i, line in enumerate(lines) if "RENAME TO" in line), None)
+    assert checked is not None, "the restore never proves the target holds the backup"
+    assert promoted is not None, "the restore no longer promotes by rename"
+    assert checked < promoted, (
+        "The live database is renamed away before anything proves the "
+        "restored target is populated. Verify, then promote."
+    )
+
+
 def test_rollback_pins_the_old_image_before_restoring() -> None:
     section = _section(UPGRADE.read_text(encoding="utf-8"), "Rollback (if something goes wrong)")
     pin = section.find("TF_VERSION")
