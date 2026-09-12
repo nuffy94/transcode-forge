@@ -1313,7 +1313,7 @@ class TestJobsRepo:
         claimed = await job_repo.claim_next_job(db, "worker-1")
         assert claimed is not None
         assert claimed.id == job1.id
-        assert claimed.status == JobStatus.ASSIGNED
+        assert claimed.status == JobStatus.TRANSCODING
         assert claimed.worker_id == "worker-1"
 
     async def test_claim_next_job_fifo_order(self, db):
@@ -1378,10 +1378,34 @@ class TestJobsRepo:
 
         claimed = await job_repo.claim_next_job(db, "worker-123")
         assert claimed is not None
-        assert claimed.status == JobStatus.ASSIGNED
+        # One statement takes the job all the way to TRANSCODING and stamps
+        # the attempt's identity (R-020): there is no unfenced second write.
+        assert claimed.status == JobStatus.TRANSCODING
         assert claimed.worker_id == "worker-123"
+        assert claimed.claim_token
         assert claimed.started_at is not None
         assert claimed.updated_at is not None
+
+    async def test_every_claim_gets_a_new_token(self, db):
+        """The identity is per ATTEMPT, not per job or per worker: the same
+        worker re-claiming the same job id must get a different token, or a
+        report parked from the first attempt would still match."""
+        job = Job(
+            source_path="/retoken.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+
+        first = await job_repo.claim_next_job(db, "worker-1")
+        assert first is not None
+        await job_repo.update_job(
+            db, job.id, status=JobStatus.QUEUED, worker_id=None, claim_token=None
+        )
+        second = await job_repo.claim_next_job(db, "worker-1")
+        assert second is not None
+        assert second.claim_token and second.claim_token != first.claim_token
 
     async def test_claim_next_job_race_condition_prevention(self, db):
         """Test that only one job is claimed even with concurrent attempts."""

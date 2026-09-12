@@ -73,6 +73,7 @@ class WorkerHttpClient:
         capabilities: list[str],
         supported_codecs: list[str] | None = None,
         supports_downscale: bool = False,
+        sends_claim_token: bool = False,
         ffmpeg_version: str | None,
         max_concurrent: int,
     ) -> dict[str, Any]:
@@ -84,6 +85,7 @@ class WorkerHttpClient:
                 "capabilities": capabilities,
                 "supported_codecs": supported_codecs or ["hevc"],
                 "supports_downscale": supports_downscale,
+                "sends_claim_token": sends_claim_token,
                 "ffmpeg_version": ffmpeg_version,
                 "max_concurrent": max_concurrent,
             },
@@ -125,12 +127,16 @@ class WorkerHttpClient:
         phase: str | None = None,
         phase_pct: float | None = None,
         phase_detail: str | None = None,
+        claim_token: str | None = None,
     ) -> None:
         # Pre-0.12 schedulers ignore the extra phase_* fields (pydantic
         # drops unknown keys) — safe against version skew in either order.
+        # claim_token rides the same way: a scheduler that predates R-020
+        # ignores it, a current one fences on it.
         r = await self._client.post(
             f"/api/worker/job/{job_id}/progress",
             json={
+                "claim_token": claim_token,
                 "progress": progress,
                 "speed": speed,
                 "phase": phase,
@@ -153,10 +159,12 @@ class WorkerHttpClient:
         predicted_vmaf_perc5: float | None = None,
         resolved_crf: int | None = None,
         backend_used: str | None = None,
+        claim_token: str | None = None,
     ) -> None:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/complete",
             json={
+                "claim_token": claim_token,
                 "output_size": output_size,
                 "space_saved": space_saved,
                 "source_size": source_size,
@@ -170,10 +178,18 @@ class WorkerHttpClient:
         )
         _raise_for_status(r)
 
-    async def failed(self, *, job_id: str, error_message: str, retry_count: int = 0) -> None:
+    async def failed(
+        self,
+        *,
+        job_id: str,
+        error_message: str,
+        retry_count: int = 0,
+        claim_token: str | None = None,
+    ) -> None:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/failed",
             json={
+                "claim_token": claim_token,
                 "error_message": error_message[:MAX_ERROR_MESSAGE_LEN],
                 "retry_count": retry_count,
             },
@@ -192,6 +208,7 @@ class WorkerHttpClient:
         predicted_vmaf_perc5: float | None = None,
         resolved_crf: int | None = None,
         backend_used: str | None = None,
+        claim_token: str | None = None,
     ) -> None:
         """Report a skip outcome (VMAF gate / size regression) — the
         original was kept and the job should end SKIPPED, not FAILED.
@@ -200,6 +217,7 @@ class WorkerHttpClient:
         r = await self._client.post(
             f"/api/worker/job/{job_id}/skipped",
             json={
+                "claim_token": claim_token,
                 "reason": reason,
                 "error_message": error_message,
                 "achieved_vmaf": achieved_vmaf,
@@ -212,7 +230,9 @@ class WorkerHttpClient:
         )
         _raise_for_status(r)
 
-    async def check_derivative(self, *, job_id: str, derivative_key: str) -> dict[str, Any]:
+    async def check_derivative(
+        self, *, job_id: str, derivative_key: str, claim_token: str | None = None
+    ) -> dict[str, Any]:
         """Check if a derivative already exists (S3 dedup/reuse).
 
         Args:
@@ -224,7 +244,11 @@ class WorkerHttpClient:
         """
         r = await self._client.post(
             f"/api/worker/job/{job_id}/check-derivative",
-            json={"job_id": job_id, "derivative_key": derivative_key},
+            json={
+                "job_id": job_id,
+                "derivative_key": derivative_key,
+                "claim_token": claim_token,
+            },
         )
         _raise_for_status(r)
         data: dict[str, Any] = r.json()
@@ -239,6 +263,7 @@ class WorkerHttpClient:
         achieved_vmaf: float | None = None,
         resolved_crf: int | None = None,
         backend_used: str | None = None,
+        claim_token: str | None = None,
     ) -> None:
         """Register a derivative after S3 upload.
 
@@ -250,6 +275,11 @@ class WorkerHttpClient:
             job_id: The job ID.
             derivative_key: The goal-keyed derivative key.
             output_size: Size of the derivative in bytes.
+            claim_token: accepted so every journaled report has the same
+                shape, and deliberately NOT sent. The derivative row
+                describes an object that exists, not an attempt, so an
+                attempt that really did upload it must still be able to
+                register it.
         """
         r = await self._client.post(
             f"/api/worker/job/{job_id}/register-derivative",

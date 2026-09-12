@@ -35,6 +35,11 @@ class Worker(BaseModel):
     # requested downscale — claim filtering keeps such jobs away from it
     # (same pattern as supported_codecs).
     supports_downscale: bool = False
+    # Whether this worker stamps its claim token into every report it
+    # sends (migration 0017). Same rolling-update pattern again: a worker
+    # that advertised it is held to it, one that predates it is judged by
+    # worker id alone until it is upgraded.
+    sends_claim_token: bool = False
     ffmpeg_version: str | None = None
     max_concurrent: int = 1
     status: WorkerStatus = WorkerStatus.OFFLINE

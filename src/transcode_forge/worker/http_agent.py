@@ -114,6 +114,11 @@ class HttpWorkerAgent:
         self._pipeline_task: asyncio.Task[dict[str, Any]] | None = None
         self.worker_id: str | None = None
         self._current_job_id: str | None = None
+        # Identity of the attempt this worker is running (R-020), issued
+        # by the scheduler on the claim. Stamped into every report so a
+        # report parked from a previous attempt cannot land on the one
+        # that replaced it. One job loop, so one token at a time.
+        self._claim_token: str | None = None
         self._current_progress: float = 0.0
         self.capabilities: HardwareCapabilities | None = None
         self._client: WorkerHttpClient = WorkerHttpClient(server_url, token)
@@ -355,6 +360,7 @@ class HttpWorkerAgent:
                     await asyncio.sleep(2)
                     continue
                 job = Job.model_validate(job_dict)
+                self._claim_token = job_dict.get("_claim_token")
                 # Claim-time extras (library backend, media type, VMAF floors)
                 # ride on private attrs outside the validated model.
                 for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
@@ -522,7 +528,11 @@ class HttpWorkerAgent:
             self._current_progress = progress
             try:
                 await self._client.progress(
-                    job_id=job.id, progress=progress, speed=speed, phase=self._current_phase
+                    job_id=job.id,
+                    progress=progress,
+                    speed=speed,
+                    phase=self._current_phase,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Progress update failed", exc_info=True)
@@ -534,7 +544,11 @@ class HttpWorkerAgent:
             self._current_phase = phase
             try:
                 await self._client.progress(
-                    job_id=job.id, progress=self._current_progress, speed=None, phase=phase
+                    job_id=job.id,
+                    progress=self._current_progress,
+                    speed=None,
+                    phase=phase,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Phase update failed", exc_info=True)
@@ -550,6 +564,7 @@ class HttpWorkerAgent:
                     phase=self._current_phase,
                     phase_pct=pct,
                     phase_detail=detail,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Phase-progress update failed", exc_info=True)
@@ -820,6 +835,10 @@ class HttpWorkerAgent:
                     # VERIFY height pin, gauge-at-target) — advertise it so the
                     # scheduler's claim filter hands us downscale jobs.
                     supports_downscale=True,
+                    # This build stamps its claim token into every report,
+                    # so the scheduler may hold us to it and refuse any
+                    # report that arrives without one (R-020).
+                    sends_claim_token=True,
                     ffmpeg_version=self.capabilities.ffmpeg_version,
                     max_concurrent=self.settings.worker_max_concurrent,
                 )
@@ -899,6 +918,11 @@ class HttpWorkerAgent:
         FAILED report on a successful, already-swapped encode — that
         whole class dies at this seam.
         """
+        # Stamp the attempt this report speaks for, once, on the way into
+        # the journal — so the token survives a restart in the outbox file
+        # and every redelivery still names the attempt that earned it, not
+        # whichever one the worker happens to be running when it lands.
+        payload = {"claim_token": self._claim_token, **payload}
         try:
             self.outbox.append(job_id, kind, payload)
         except OSError:
@@ -1075,7 +1099,9 @@ class HttpWorkerAgent:
 
         try:
             result = await self._client.check_derivative(
-                job_id=job.id, derivative_key=derivative_key
+                job_id=job.id,
+                derivative_key=derivative_key,
+                claim_token=self._claim_token,
             )
             if result.get("found"):
                 return result

@@ -102,6 +102,16 @@ Restore and rollback as described above, then report the issue on GitHub.
 
 Workers can keep pulling jobs while the scheduler is down. When the scheduler restarts, workers reconnect automatically. No manual intervention needed.
 
+**Upgrade the scheduler first, then the workers, one at a time.** Since
+migration 0017, every claim issues a per-job claim token and the worker stamps
+it into its reports, which is what stops a report from a previous attempt
+at a job from landing on the current one. A worker only gets that
+protection once it is upgraded: the scheduler holds a worker to the token
+only if the worker advertised it at registration, so an old worker keeps
+reporting exactly as before and keeps the old risk until you swap it. In
+the other order an upgraded worker would send tokens to a scheduler with
+no column to check them against, and it would report unprotected anyway.
+
 ## Important: don't edit released migrations
 
 Migrations in the codebase are numbered SQL files. Once a release ships, those migrations are immutable. If you need a schema change after release, add a **new** numbered migration file (higher number). This ensures all deployments reach the same state.

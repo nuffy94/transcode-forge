@@ -101,6 +101,32 @@ async def _require_owned_job(db: DBConnection, job_id: str, token_row: dict[str,
     return job
 
 
+async def _require_claim_token(
+    db: DBConnection, token_row: dict[str, Any], claim_token: str | None
+) -> str | None:
+    """The attempt identity a report must carry, or None for a worker that
+    predates it.
+
+    The fallback is gated on the advertised capability, the same way
+    supported_codecs and supports_downscale are: a worker that said it
+    stamps its reports is held to it (403 if one arrives without a
+    token), and one that never said so is judged by worker id alone,
+    which is the pre-R-020 rule and what keeps a rolling update working.
+    The worker row is only read when the token is missing, so the
+    upgraded path costs no extra query.
+    """
+    if claim_token is not None:
+        return claim_token
+    worker_id = token_row.get("worker_id")
+    worker = await worker_repo.get_worker(db, worker_id) if worker_id else None
+    if worker is not None and worker.sends_claim_token:
+        raise HTTPException(
+            status_code=403,
+            detail="Report is missing the claim token issued with this job",
+        )
+    return None
+
+
 def _is_duplicate_terminal_report(job: Job, incoming: JobStatus) -> bool:
     """At-least-once delivery makes duplicate terminal reports normal
     (worker-resilience spec D3): the SAME outcome again is acknowledged as
@@ -169,6 +195,11 @@ class RegisterRequest(BaseModel):
     # doesn't advertise it never claims a target_height job (it would
     # encode at source resolution, silently ignoring the request).
     supports_downscale: bool = False
+    # Same guard for attempt identity (R-020): a worker that advertises
+    # this stamps its claim token into every report, and a report from it
+    # without one is refused. Workers that predate it keep the old
+    # worker-id-only rule until they are upgraded.
+    sends_claim_token: bool = False
     ffmpeg_version: str | None = None
     max_concurrent: int = Field(default=1, ge=1, le=8)
 
@@ -183,7 +214,15 @@ class ClaimRequest(BaseModel):
     worker_id: str
 
 
+# The attempt identity every report carries, declared once. None means
+# the sender predates it; whether that is allowed is _require_claim_token's
+# call, not the schema's — a schema that required it would refuse the
+# reports of every worker in a rolling update.
+_CLAIM_TOKEN_FIELD = Field(default=None, max_length=64)
+
+
 class ProgressRequest(BaseModel):
+    claim_token: str | None = _CLAIM_TOKEN_FIELD
     progress: float = Field(ge=0.0, le=1.0)
     speed: float | None = None
     # Pipeline phase (models.job.JobPhase value); older workers omit it and
@@ -197,6 +236,7 @@ class ProgressRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
+    claim_token: str | None = _CLAIM_TOKEN_FIELD
     output_size: int = Field(ge=0)
     space_saved: int = Field(ge=0)
     source_size: int = Field(ge=0)
@@ -228,6 +268,7 @@ MAX_ERROR_MESSAGE_LEN = 10_000
 
 
 class FailedRequest(BaseModel):
+    claim_token: str | None = _CLAIM_TOKEN_FIELD
     error_message: str
     retry_count: int = Field(default=0, ge=0)
 
@@ -236,6 +277,7 @@ class SkippedRequest(BaseModel):
     """A skip outcome the worker decided (VMAF gate / size regression) —
     the original file was kept; this is not a retryable failure."""
 
+    claim_token: str | None = _CLAIM_TOKEN_FIELD
     reason: str = Field(pattern=r"^(below_vmaf_floor|size_regression)$")
     error_message: str = ""
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
@@ -251,11 +293,19 @@ class SkippedRequest(BaseModel):
 
 
 class CheckDerivativeRequest(BaseModel):
+    claim_token: str | None = _CLAIM_TOKEN_FIELD
     job_id: str
     derivative_key: str = Field(min_length=1, max_length=512)
 
 
 class RegisterDerivativeRequest(BaseModel):
+    # Deliberately NO claim_token here. This endpoint does not mutate the
+    # job row: it inserts a content-addressed derivative keyed on
+    # derivative_key, and that row describes an object that exists, not
+    # an attempt. A stale attempt that really did upload the object must
+    # still be able to register it, and a token precheck in front of a
+    # non-conditional insert would only reproduce the check-then-act race
+    # on another table.
     derivative_key: str = Field(min_length=1, max_length=512)
     output_size: int = Field(ge=0)
     # Outcome attributes for the derivative row (complete arrives after
@@ -350,6 +400,7 @@ async def register(
         capabilities=body.capabilities,
         supported_codecs=body.supported_codecs or ["hevc"],
         supports_downscale=body.supports_downscale,
+        sends_claim_token=body.sends_claim_token,
         ffmpeg_version=body.ffmpeg_version,
         max_concurrent=body.max_concurrent,
         status=WorkerStatus.ONLINE,
@@ -363,8 +414,8 @@ async def register(
     # worker) can pick them up cleanly.
     active = ",".join("?" * len(ACTIVE_JOB_STATUSES))
     cur = await db.execute(
-        "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, phase = NULL, updated_at = ?"
+        "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
+        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
         f" WHERE worker_id = ? AND status IN ({active})",
         (
             JobStatus.QUEUED.value,
@@ -433,14 +484,6 @@ async def claim_job(
         db, body.worker_id, supported_codecs, supports_downscale=supports_downscale
     )
     if job is not None:
-        # claim_next_job returns ASSIGNED; bump it to TRANSCODING here so the
-        # job doesn't sit in ASSIGNED for the whole encode (which broke any
-        # widget filtering by status='transcoding').
-        from transcode_forge.models.job import JobStatus
-
-        await job_repo.update_job(db, job.id, status=JobStatus.TRANSCODING)
-        job = job.model_copy(update={"status": JobStatus.TRANSCODING})
-
         # Fetch the library to include backend + content info in the response.
         # Jobs carry the library NAME (migration 0008); fall back to an id
         # lookup for any stray pre-backfill row. Resolving by id alone
@@ -450,6 +493,11 @@ async def claim_job(
         if library is None:
             library = await library_repo.get_library(db, job.library)
         job_dict = job.model_dump(mode="json")
+        # The attempt identity for this claim, on the same private-attr
+        # channel as the backend and floor stamps. It is excluded from the
+        # model's own serialization, so this is the only response that
+        # ever carries it, to the one worker that just took the job.
+        job_dict["_claim_token"] = job.claim_token
         if library:
             job_dict["_backend_type"] = library.get("backend", "filesystem")
             job_dict["_s3_bucket"] = library.get("s3_bucket", "")
@@ -500,20 +548,34 @@ async def check_derivative(
     from transcode_forge.models.job import JobStatus
     from transcode_forge.repos import derivatives as deriv_repo
 
-    await _require_owned_job(db, job_id, token_row)
+    job = await _require_owned_job(db, job_id, token_row)
 
     existing = await deriv_repo.lookup_by_key(db, body.derivative_key)
     if existing:
-        # Mark the job COMPLETE since we found a reusable derivative.
-        await job_repo.update_job(
+        # The dedup shortcut ends the job, so it goes through the same
+        # fenced transition as a worker's own terminal report (R-012) —
+        # an unfenced UPDATE by job id here was the fourth door into the
+        # stale-report bug, and the only terminal one left open.
+        if _is_duplicate_terminal_report(job, JobStatus.COMPLETE):
+            return {
+                "found": True,
+                "output_size": existing.get("output_size"),
+                "derivative_key": body.derivative_key,
+            }
+        claim_token = await _require_claim_token(db, token_row, body.claim_token)
+        won = await job_repo.finalize_job(
             db,
             job_id,
-            status=JobStatus.COMPLETE,
+            job.worker_id or "",
+            JobStatus.COMPLETE,
+            claim_token=claim_token,
             output_size=existing.get("output_size"),
             space_saved=0,  # S3 doesn't reclaim space.
             progress=1.0,
             completed_at=datetime.now(UTC).isoformat(),
         )
+        if not won:
+            await _answer_lost_finalize(db, job_id, JobStatus.COMPLETE)
         logger.info(
             "Job %s marked COMPLETE via dedup (derivative_key=%s, output_size=%d)",
             job_id,
@@ -536,20 +598,26 @@ async def progress(
     db: DBConnection = Depends(get_db),
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
-    await _require_owned_job(db, job_id, token_row)
+    job = await _require_owned_job(db, job_id, token_row)
+    claim_token = await _require_claim_token(db, token_row, body.claim_token)
+    fields: dict[str, object] = {"progress": body.progress}
     if body.phase is not None:
         # phase_pct/phase_detail always ride along (None clears) so a
         # stale gauge % can't survive into the next phase.
-        await job_repo.update_job(
-            db,
-            job_id,
-            progress=body.progress,
-            phase=body.phase,
-            phase_pct=body.phase_pct,
-            phase_detail=body.phase_detail,
-        )
-    else:
-        await job_repo.update_job(db, job_id, progress=body.progress)
+        fields |= {
+            "phase": body.phase,
+            "phase_pct": body.phase_pct,
+            "phase_detail": body.phase_detail,
+        }
+    won = await job_repo.report_progress(
+        db, job_id, job.worker_id or "", claim_token=claim_token, **fields
+    )
+    if not won:
+        # The row is no longer running the attempt this report names. Say
+        # so instead of writing, and publish nothing: a stale writer here
+        # also bumps updated_at, which is the clock both reconciliation
+        # sweeps read.
+        raise HTTPException(status_code=403, detail="Job is not running this attempt")
     redis = getattr(request.app.state, "redis", None)
     if redis is not None:
         try:
@@ -585,8 +653,13 @@ async def complete_job(
     token_row: dict[str, Any] = Depends(require_worker_token),
 ) -> None:
     job = await _require_owned_job(db, job_id, token_row)
+    # Before the token check, deliberately: a duplicate of an outcome the
+    # scheduler already recorded settles 204 whatever attempt it names.
+    # A worker's outbox retries until it gets a 2xx, and the report that
+    # committed the outcome may well have come from a previous attempt.
     if _is_duplicate_terminal_report(job, JobStatus.COMPLETE):
         return
+    claim_token = await _require_claim_token(db, token_row, body.claim_token)
     # One transaction: the terminal transition and its side effects commit
     # together. A partial write here would be unhealable — the idempotency
     # guard 204s every retry once the job reads terminal, so nothing would
@@ -597,6 +670,7 @@ async def complete_job(
             job_id,
             job.worker_id or "",
             JobStatus.COMPLETE,
+            claim_token=claim_token,
             output_size=body.output_size,
             space_saved=body.space_saved,
             source_size=body.source_size,
@@ -648,6 +722,7 @@ async def skip_job(
     job = await _require_owned_job(db, job_id, token_row)
     if _is_duplicate_terminal_report(job, JobStatus.SKIPPED):
         return
+    claim_token = await _require_claim_token(db, token_row, body.claim_token)
     # Same atomicity contract as /complete: transition + skip record +
     # catalog sync land together or not at all.
     async with db.transaction() as tx:
@@ -656,6 +731,7 @@ async def skip_job(
             job_id,
             job.worker_id or "",
             JobStatus.SKIPPED,
+            claim_token=claim_token,
             error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
             achieved_vmaf=body.achieved_vmaf,
             achieved_vmaf_perc5=body.achieved_vmaf_perc5,
@@ -694,12 +770,14 @@ async def fail_job(
     job = await _require_owned_job(db, job_id, token_row)
     if _is_duplicate_terminal_report(job, JobStatus.FAILED):
         return
+    claim_token = await _require_claim_token(db, token_row, body.claim_token)
     async with db.transaction() as tx:
         won = await job_repo.finalize_job(
             tx,
             job_id,
             job.worker_id or "",
             JobStatus.FAILED,
+            claim_token=claim_token,
             error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN],
             retry_count=body.retry_count,
             completed_at=datetime.now(UTC).isoformat(),
