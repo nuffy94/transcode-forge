@@ -35,10 +35,33 @@ if (Test-Path $envFile) {
     exit 0
 }
 
+function Get-CodePointCount([string]$text) {
+    # .Length counts UTF-16 code units, so a supplementary character (most
+    # emoji, some CJK) counts as 2. The scheduler's own check (Python's
+    # len()) counts Unicode code points, so a surrogate pair must count as 1
+    # here too, or a password can clear this check and still fail there.
+    $count = 0
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $count++
+        if ([char]::IsHighSurrogate($text[$i])) { $i++ }
+    }
+    return $count
+}
+
 $adminPassword = Get-AdminPassword
 $adminPasswordBytes = [System.Text.Encoding]::UTF8.GetByteCount($adminPassword)
-if ($adminPassword.Length -lt $MinPasswordChars -or $adminPasswordBytes -gt $MaxPasswordBytes) {
+if ((Get-CodePointCount $adminPassword) -lt $MinPasswordChars -or $adminPasswordBytes -gt $MaxPasswordBytes) {
     Write-Error "TF_ADMIN_PASSWORD must be $MinPasswordChars-$MaxPasswordBytes bytes (bcrypt's limit). Nothing was written."
+    exit 1
+}
+
+# The value below is written single-quoted so Compose's own .env parser
+# can't reinterpret a $ or # in the password. Single quotes can't be
+# escaped inside a single-quoted dotenv value, so a password containing
+# one can't be represented safely; refuse rather than write something
+# that silently isn't what the user typed.
+if ($adminPassword -match "['`r`n]") {
+    Write-Error "TF_ADMIN_PASSWORD can't contain a single quote or a newline. Nothing was written."
     exit 1
 }
 
@@ -59,7 +82,7 @@ TF_AUTH_SECRET=$authSecret
 # First-run admin password. The scheduler creates the admin account from
 # this on first boot; there is no web page that can create one. Log in as
 # 'admin' with this value.
-TF_ADMIN_PASSWORD=$adminPassword
+TF_ADMIN_PASSWORD='$adminPassword'
 
 # Where to find your media. Edit these to point at your library.
 TF_LIBRARY_MOVIES=./media/movies
@@ -75,6 +98,6 @@ New-Item -ItemType Directory -Force -Path "./media/movies" | Out-Null
 New-Item -ItemType Directory -Force -Path "./media/tv" | Out-Null
 
 Write-Host "Wrote $envFile with random secrets and created ./media/{movies,tv}."
-Write-Host "Your admin login is 'admin' plus the TF_ADMIN_PASSWORD line in $envFile."
+Write-Host "Your admin login is 'admin' plus the TF_ADMIN_PASSWORD value in $envFile (the value between the single quotes)."
 Write-Host "Edit TF_LIBRARY_MOVIES / TF_LIBRARY_TV in .env to point at your real library."
 Write-Host "Then: docker compose up -d"
