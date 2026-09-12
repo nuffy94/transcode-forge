@@ -711,7 +711,7 @@ class TestVerifyOutputDeepCheck:
 
 class TestUnmuxableSubtitleWiring:
     """The pipeline threads the pre-encode subtitle probe into the encode
-    command (review of #88: the glue was untested — the probe ran
+    plan (review of #88: the glue was untested — the probe ran
     unmocked and fail-open in every pipeline test)."""
 
     async def test_probe_result_reaches_encode_command(self, tmp_path, monkeypatch, caplog):
@@ -724,6 +724,16 @@ class TestUnmuxableSubtitleWiring:
         src.write_bytes(b"x" * 10_000)
         captured: dict = {}
 
+        # Three subtitle streams; the third one (per-type index 2, source
+        # index 4) is the one matroska cannot copy.
+        inventory = (
+            _stream(0, "video", "h264"),
+            _stream(1, "audio", "aac"),
+            _stream(2, "subtitle", "subrip"),
+            _stream(3, "subtitle", "subrip"),
+            _stream(4, "subtitle", "unknown"),
+        )
+
         async def fake_run_encode(cmd, **kwargs):
             captured["cmd"] = cmd
             return EncodeResult(
@@ -731,7 +741,7 @@ class TestUnmuxableSubtitleWiring:
                 output_path="",
                 output_size=0,
                 returncode=1,
-                error_message="stop here — command capture is the assertion",
+                error_message="stop here, command capture is the assertion",
             )
 
         with (
@@ -739,7 +749,7 @@ class TestUnmuxableSubtitleWiring:
                 worker.pipeline, "unmuxable_subtitle_indexes", AsyncMock(return_value=[2])
             ),
             patch.object(worker.pipeline, "run_encode", side_effect=fake_run_encode),
-            patch.object(worker.pipeline, "stream_inventory", AsyncMock(return_value=())),
+            patch.object(worker.pipeline, "stream_inventory", AsyncMock(return_value=inventory)),
         ):
             with pytest.raises(worker.pipeline.PipelineError):
                 await worker.pipeline.run_pipeline(
@@ -750,7 +760,9 @@ class TestUnmuxableSubtitleWiring:
                     job_id="j1",
                     worker_id="w1",
                 )
-        assert "-0:s:2" in captured["cmd"]
+        cmd = captured["cmd"]
+        maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
+        assert maps == ["0:0", "0:1", "0:2", "0:3"], "the broken subtitle is not mapped"
         assert "Dropping unmuxable subtitle stream" in caplog.text
 
 
@@ -935,6 +947,56 @@ class TestStreamInventoryGate:
 
         assert result["output_size"] == 5000
         assert source.read_bytes() == b"y" * 5000
+
+    async def test_the_crf_search_is_told_which_stream_gets_re_encoded(self, tmp_path):
+        """The plan names the primary once, and the CRF search samples that
+        same index. Otherwise a file whose second video stream carries the
+        default flag has its quality tuned against a stream the encoder
+        never touches."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        inventory = (
+            _stream(0, "video", "mjpeg", attached_pic=True),
+            _stream(1, "video", "h264"),
+            _stream(2, "audio", "aac"),
+        )
+        output_inventory = (
+            _stream(0, "video", "hevc"),
+            _stream(1, "video", "mjpeg", attached_pic=True),
+            _stream(2, "audio", "aac"),
+        )
+        search = AsyncMock(return_value=None)
+
+        from transcode_forge.worker.vmaf import VmafScore
+
+        gauge = AsyncMock(return_value=VmafScore(mean=99.0, perc5=98.0, min=97.0))
+
+        def inventory_of(path):
+            return output_inventory if Path(path) != source else inventory
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode()),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", side_effect=inventory_of),
+            patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
+            patch("transcode_forge.worker.pipeline.measure_vmaf", gauge),
+            patch("transcode_forge.worker.pipeline.find_quality_for_target", search),
+        ):
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job",
+                worker_id="test-worker",
+                target_vmaf=97.0,
+                crf_search=True,
+            )
+
+        assert search.await_args.kwargs["primary_index"] == 1
 
     async def test_an_unreadable_source_stops_the_job_before_the_encode(self, tmp_path):
         """No inventory, no promise: a source whose streams cannot be

@@ -2,15 +2,36 @@
 
 import pytest
 
+from transcode_forge.scanner.probe import StreamInfo
 from transcode_forge.worker.encoder import (
     ENCODER_BUILDERS,
     build_encode_command,
     map_quality,
     parse_progress,
     parse_speed,
+    plan_streams,
 )
 
 ALL_PAIRS = sorted(ENCODER_BUILDERS.keys())
+
+
+def _stream(
+    index: int,
+    codec_type: str,
+    codec_name: str,
+    *,
+    language: str = "",
+    attached_pic: bool = False,
+    forced: bool = False,
+) -> StreamInfo:
+    return StreamInfo(
+        index=index,
+        codec_type=codec_type,
+        codec_name=codec_name,
+        language=language,
+        attached_pic=attached_pic,
+        forced=forced,
+    )
 
 
 class TestBuildCommands:
@@ -19,29 +40,29 @@ class TestBuildCommands:
         assert cmd[0] == "ffmpeg"
         assert "-hwaccel" in cmd
         assert "qsv" in cmd
-        assert cmd[cmd.index("-c:v") + 1] == "hevc_qsv"
-        assert cmd[cmd.index("-global_quality") + 1] == "21"
+        assert cmd[cmd.index("-c:v:0") + 1] == "hevc_qsv"
+        assert cmd[cmd.index("-global_quality:v:0") + 1] == "21"
         assert cmd[-1] == "/output.mkv"
 
     def test_nvenc_command_maps_quality(self):
         """nvenc -cq must be mapped (≈ crf+11), never the raw reference value."""
         cmd = build_encode_command("hevc", "nvenc", "/input.mkv", "/output.mkv", 22)
-        assert cmd[cmd.index("-c:v") + 1] == "hevc_nvenc"
-        assert cmd[cmd.index("-cq") + 1] == "33"
+        assert cmd[cmd.index("-c:v:0") + 1] == "hevc_nvenc"
+        assert cmd[cmd.index("-cq:v:0") + 1] == "33"
         assert "cuda" in cmd
-        assert cmd[cmd.index("-b:v") + 1] == "0"  # cq is the sole rate control
+        assert cmd[cmd.index("-b:v:0") + 1] == "0"  # cq is the sole rate control
 
     def test_software_command(self):
         cmd = build_encode_command("hevc", "cpu", "/input.mkv", "/output.mkv", 20)
-        assert cmd[cmd.index("-c:v") + 1] == "libx265"
-        assert cmd[cmd.index("-crf") + 1] == "20"
+        assert cmd[cmd.index("-c:v:0") + 1] == "libx265"
+        assert cmd[cmd.index("-crf:v:0") + 1] == "20"
         assert "-hwaccel" not in cmd
 
     def test_svtav1_command(self):
         cmd = build_encode_command("av1", "cpu", "/input.mkv", "/output.mkv", 20)
-        assert cmd[cmd.index("-c:v") + 1] == "libsvtav1"
-        assert cmd[cmd.index("-crf") + 1] == "27"  # reference 20 + AV1 offset 7
-        assert cmd[cmd.index("-svtav1-params") + 1] == "tune=0:scm=0"
+        assert cmd[cmd.index("-c:v:0") + 1] == "libsvtav1"
+        assert cmd[cmd.index("-crf:v:0") + 1] == "27"  # reference 20 + AV1 offset 7
+        assert cmd[cmd.index("-svtav1-params:v:0") + 1] == "tune=0:scm=0"
 
     def test_build_encode_command_unknown(self):
         with pytest.raises(ValueError, match="Unknown"):
@@ -51,26 +72,28 @@ class TestBuildCommands:
 
     def test_anime_content_enables_aq_mode(self):
         cmd = build_encode_command("hevc", "cpu", "/in", "/out", 19, content="anime")
-        assert cmd[cmd.index("-x265-params") + 1] == "aq-mode=3"
+        assert cmd[cmd.index("-x265-params:v:0") + 1] == "aq-mode=3"
         plain = build_encode_command("hevc", "cpu", "/in", "/out", 19)
-        assert "-x265-params" not in plain
+        assert "-x265-params:v:0" not in plain
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
-    def test_all_commands_copy_audio(self, codec, backend):
+    def test_all_commands_copy_everything_but_the_primary(self, codec, backend):
+        """`-c copy` has to come BEFORE the encoder option: ffmpeg lets the
+        last matching option win, so this order encodes the primary and
+        copies every other stream. Reversed, the whole file is copied and
+        no transcode happens at all."""
         cmd = build_encode_command(codec, backend, "/in", "/out", 21)
-        assert cmd[cmd.index("-c:a") + 1] == "copy"
-
-    @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
-    def test_all_commands_copy_subtitles(self, codec, backend):
-        cmd = build_encode_command(codec, backend, "/in", "/out", 21)
-        assert cmd[cmd.index("-c:s") + 1] == "copy"
+        assert cmd[cmd.index("-c") + 1] == "copy"
+        assert cmd.index("-c") < cmd.index("-c:v:0")
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
     def test_all_commands_map_real_streams_only(self, codec, backend):
-        """`-map 0` fed attached cover art to the video encoder and killed
-        whole encodes on the JPEG's dimensions (fleet, 2026-07-20). The
-        contract is now: FIRST real video stream (0:V:0 excludes attached
-        pics), all audio/subs/attachments, unknown-TYPE streams dropped."""
+        """Without a plan (the CRF search's samples), the historical
+        selector mapping stands: FIRST real video stream (0:V:0 excludes
+        attached pics), all audio/subs/attachments, unknown-TYPE streams
+        dropped. `-map 0` fed attached cover art to the video encoder and
+        killed whole encodes on the JPEG's dimensions (fleet,
+        2026-07-20)."""
         cmd = build_encode_command(codec, backend, "/in", "/out", 21)
         maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
         assert maps == ["0:V:0", "0:a?", "0:s?", "0:t?"]
@@ -78,12 +101,22 @@ class TestBuildCommands:
         assert "0" not in maps  # the bare catch-all must never come back
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
-    def test_drop_sub_streams_negative_maps(self, codec, backend):
-        """Unmuxable subtitle streams are excluded via negative maps,
-        inserted after the inclusive maps (order matters to ffmpeg)."""
-        cmd = build_encode_command(codec, backend, "/in", "/out", 21, drop_sub_streams=[1, 3])
+    def test_a_plan_maps_every_carried_stream_by_absolute_index(self, codec, backend):
+        """With a plan, the primary goes first (so `:v:0` names it) and
+        every other carried stream follows by absolute source index. The
+        unmuxable subtitle is simply not mapped: it is an omission the
+        plan already named, so there is no negative map to get wrong."""
+        inventory = (
+            _stream(0, "video", "mjpeg", attached_pic=True),
+            _stream(1, "video", "h264"),
+            _stream(2, "audio", "aac"),
+            _stream(3, "subtitle", "unknown"),
+            _stream(4, "attachment", "ttf"),
+        )
+        plan = plan_streams(inventory, target_codec=codec, drop_sub_streams=[0])
+        cmd = build_encode_command(codec, backend, "/in", "/out", 21, plan=plan)
         maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
-        assert maps == ["0:V:0", "0:a?", "0:s?", "0:t?", "-0:s:1", "-0:s:3"]
+        assert maps == ["0:1", "0:0", "0:2", "0:4"]
 
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
     def test_all_commands_overwrite(self, codec, backend):
@@ -103,7 +136,7 @@ class TestBuildCommands:
     @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
     def test_all_commands_are_10bit(self, codec, backend):
         cmd = build_encode_command(codec, backend, "/in", "/out", 21)
-        assert cmd[cmd.index("-pix_fmt") + 1] in ("yuv420p10le", "p010le")
+        assert cmd[cmd.index("-pix_fmt:v:0") + 1] in ("yuv420p10le", "p010le")
 
 
 class TestMapQuality:

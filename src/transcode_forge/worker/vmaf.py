@@ -347,8 +347,19 @@ async def measure_vmaf(
     return score
 
 
-async def _extract_samples(source: Path, duration: float, out_dir: Path) -> list[Path]:
-    """Stream-copy short clips from the source at the sample offsets."""
+async def _extract_samples(
+    source: Path, duration: float, out_dir: Path, primary_index: int | None = None
+) -> list[Path]:
+    """Stream-copy short clips from the source at the sample offsets.
+
+    `primary_index` is the source index of the stream the encode is
+    actually going to re-encode. Without it ffmpeg picks the "best" video
+    stream by its own rules, which prefers the default disposition: on a
+    file whose second video stream carries that flag, the search would
+    tune the CRF against a stream the encoder never touches (measured
+    2026-09-12, a 640x480 default-flagged second angle beat the 320x240
+    primary).
+    """
     # Short file → one sample is the whole thing (still stream-copied so the
     # encode candidates all start from identical input).
     short = duration <= SAMPLE_SECONDS * 2
@@ -368,6 +379,7 @@ async def _extract_samples(source: Path, duration: float, out_dir: Path) -> list
             str(source),
             "-t",
             f"{SAMPLE_SECONDS:.2f}",
+            *(["-map", f"0:{primary_index}"] if primary_index is not None else []),
             "-c",
             "copy",
             "-an",
@@ -435,6 +447,7 @@ async def find_quality_for_target(
     duration: float,
     height: int | None = None,
     target_height: int | None = None,
+    primary_index: int | None = None,
     on_probe: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> QualitySearchResult | None:
     """Binary-search the largest reference quality (smallest file) whose
@@ -443,6 +456,9 @@ async def find_quality_for_target(
     Returns None when even the best-quality end of the range can't meet the
     target (the caller falls back to the fixed preset and lets the full-file
     gate decide) — a search failure never blocks the encode.
+
+    `primary_index` names the source stream the encode will re-encode, so
+    the samples come from that stream (see _extract_samples).
 
     Raises:
         VmafUnavailableError: If ffmpeg lacks libvmaf (caller should fall
@@ -456,7 +472,7 @@ async def find_quality_for_target(
     probes_done = 0
     with tempfile.TemporaryDirectory(prefix="tf-crf-search-") as tmp:
         work_dir = Path(tmp)
-        samples = await _extract_samples(src, duration, work_dir)
+        samples = await _extract_samples(src, duration, work_dir, primary_index)
 
         async def meets(q: int) -> tuple[bool, float, float]:
             nonlocal probes_done

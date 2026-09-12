@@ -48,15 +48,15 @@ def test_builder_adds_scale_filter_for_target_height(codec, backend):
     """E: every (codec, backend) pair gains `-vf scale=-2:H` when a
     downscale is requested — width auto, always even, aspect preserved."""
     cmd = build_encode_command(codec, backend, "in.mkv", "out.mkv", quality=20, target_height=1080)
-    assert "-vf" in cmd
-    assert cmd[cmd.index("-vf") + 1] == "scale=-2:1080"
+    assert "-filter:v:0" in cmd
+    assert cmd[cmd.index("-filter:v:0") + 1] == "scale=-2:1080"
 
 
 @pytest.mark.parametrize("codec,backend", ALL_PAIRS)
 def test_builder_no_scale_filter_without_target_height(codec, backend):
     """E: no downscale → the command is scale-free (pre-feature identical)."""
     cmd = build_encode_command(codec, backend, "in.mkv", "out.mkv", quality=20)
-    assert "-vf" not in cmd
+    assert "-filter:v:0" not in cmd
     assert not any("scale=" in arg for arg in cmd)
 
 
@@ -346,7 +346,7 @@ async def test_crf_search_forwards_target_height(tmp_path):
 
     eval_calls: list[dict] = []
 
-    async def fake_extract(source, duration, out_dir):
+    async def fake_extract(source, duration, out_dir, primary_index=None):
         return [sample]
 
     async def fake_encode(cmd, total_duration, progress_callback=None):

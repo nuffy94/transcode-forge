@@ -437,6 +437,23 @@ async def run_pipeline(
             _lock_heartbeat(lock_path, job_id=job_id, worker_id=worker_id, guard=heartbeat_guard)
         )
 
+        # The source's streams, probed here and nowhere else. This is the
+        # reference the encode plan is held against, and it also names the
+        # one video stream that is going to be re-encoded, so the CRF
+        # search samples that stream and not whichever one ffmpeg's
+        # default selection would have preferred.
+        try:
+            source_streams = await stream_inventory(src)
+        except ProbeError as e:
+            raise PipelineError(
+                "TRANSCODE",
+                f"Could not list the source's streams, so nothing can promise to keep them: {e}",
+            ) from e
+        primary_index = next(
+            (s.index for s in source_streams if s.codec_type == "video" and not s.attached_pic),
+            None,
+        )
+
         # Optional pre-step: target-VMAF quality search on short samples.
         # Any failure here falls back to the fixed preset — the full-file
         # gate below still has the final word on quality.
@@ -477,6 +494,7 @@ async def run_pipeline(
                     duration=source_duration,
                     height=source_height,
                     target_height=target_height,
+                    primary_index=primary_index,
                     on_probe=_on_probe if phase_progress_callback is not None else None,
                 )
                 if search is not None:
@@ -508,14 +526,8 @@ async def run_pipeline(
             )
         # The plan is the contract: which source stream lands on which
         # output position, and which are left out on purpose. Its reference
-        # is this probe, taken here, never the builder's account of itself.
-        try:
-            source_streams = await stream_inventory(src)
-        except ProbeError as e:
-            raise PipelineError(
-                "TRANSCODE",
-                f"Could not list the source's streams, so nothing can promise to keep them: {e}",
-            ) from e
+        # is the inventory probed above, never the builder's account of
+        # itself.
         plan = plan_streams(source_streams, target_codec=codec, drop_sub_streams=drop_subs)
         _check_plan_covers_source(source_streams, plan, resolved_crf=resolved_crf, backend=backend)
         cmd = build_encode_command(
@@ -524,9 +536,9 @@ async def run_pipeline(
             str(src),
             str(tmp_path),
             quality,
-            drop_sub_streams=drop_subs,
             content=content,
             target_height=target_height,
+            plan=plan,
         )
         result = await run_encode(
             cmd,

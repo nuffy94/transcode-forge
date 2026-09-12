@@ -46,8 +46,8 @@ def test_builder_resolves_ffmpeg_encoder_per_codec_backend(codec, backend, expec
     from transcode_forge.worker.encoder import build_encode_command
 
     cmd = build_encode_command(codec, backend, "in.mkv", "out.mkv", quality=20)
-    assert "-c:v" in cmd
-    assert cmd[cmd.index("-c:v") + 1] == expected_encoder
+    assert "-c:v:0" in cmd
+    assert cmd[cmd.index("-c:v:0") + 1] == expected_encoder
 
 
 @pytest.mark.parametrize(
@@ -86,9 +86,9 @@ def test_quality_maps_per_encoder_not_shared():
 
     cpu = build_encode_command("hevc", "cpu", "i", "o", quality=20)
     nvenc = build_encode_command("hevc", "nvenc", "i", "o", quality=20)
-    assert cpu[cpu.index("-crf") + 1] == "20"
-    assert nvenc[nvenc.index("-cq") + 1] != "20"  # must be mapped, not shared
-    assert nvenc[nvenc.index("-cq") + 1] == "31"
+    assert cpu[cpu.index("-crf:v:0") + 1] == "20"
+    assert nvenc[nvenc.index("-cq:v:0") + 1] != "20"  # must be mapped, not shared
+    assert nvenc[nvenc.index("-cq:v:0") + 1] == "31"
 
 
 def test_av1_quality_maps_from_reference_scale():
@@ -97,11 +97,11 @@ def test_av1_quality_maps_from_reference_scale():
     from transcode_forge.worker.encoder import build_encode_command
 
     cpu = build_encode_command("av1", "cpu", "i", "o", quality=20)
-    assert cpu[cpu.index("-crf") + 1] == "27"
+    assert cpu[cpu.index("-crf:v:0") + 1] == "27"
     nvenc = build_encode_command("av1", "nvenc", "i", "o", quality=20)
-    assert nvenc[nvenc.index("-cq") + 1] == "26"
+    assert nvenc[nvenc.index("-cq:v:0") + 1] == "26"
     qsv = build_encode_command("av1", "qsv", "i", "o", quality=20)
-    assert qsv[qsv.index("-global_quality") + 1] == "24"
+    assert qsv[qsv.index("-global_quality:v:0") + 1] == "24"
 
 
 # ── Shared seeding helpers ───────────────────────────────────────────────────────────

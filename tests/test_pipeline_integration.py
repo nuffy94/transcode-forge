@@ -15,7 +15,7 @@ import subprocess
 
 import pytest
 
-from transcode_forge.scanner.probe import ffprobe
+from transcode_forge.scanner.probe import ffprobe, stream_inventory
 from transcode_forge.worker.pipeline import PipelineError, _decode_check, run_pipeline
 
 _FFMPEG = shutil.which("ffmpeg")
@@ -110,6 +110,297 @@ async def test_real_cpu_encode_replaces_original(tmp_path, codec, encoder):
     for suffix in (".tf_lock", ".tf_tmp", ".tf_bak"):
         leftovers = list(tmp_path.glob(f"*{suffix}*"))
         assert leftovers == [], f"leftover {suffix} files: {leftovers}"
+
+
+def _make_multi_stream_mkv(path, *, duration: float = 2.0) -> None:
+    """A source with everything the old mapping used to lose: a second
+    video angle and a picture stream beside the primary, plus audio, a
+    forced subtitle and a font attachment. The primary is LOSSLESS so the
+    lossy re-encode is guaranteed smaller."""
+    directory = path.parent
+    subs = directory / "subs.srt"
+    subs.write_text("1\n00:00:00,000 --> 00:00:02,000\nhi\n\n", encoding="utf-8")
+    font = directory / "font.ttf"
+    font.write_bytes(b"not a real font, just bytes to attach")
+    cover = directory / "cover.png"
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64:d=0.04",
+            "-frames:v",
+            "1",
+            "-y",
+            str(cover),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x240:rate=24:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size=160x120:rate=24:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={duration}",
+            "-i",
+            str(subs),
+            "-i",
+            str(cover),
+            "-attach",
+            str(font),
+            "-metadata:s:t:0",
+            "mimetype=application/x-truetype-font",
+            "-map",
+            "0:v",
+            "-map",
+            "1:v",
+            "-map",
+            "2:a",
+            "-map",
+            "3:s",
+            "-map",
+            "4:v",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-qp",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v:2",
+            "copy",
+            "-c:a",
+            "aac",
+            "-c:s",
+            "copy",
+            "-disposition:s:0",
+            "forced",
+            "-y",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _make_cover_art_mp4(path, *, duration: float = 2.0) -> None:
+    """An mp4 whose cover art is a real attached_pic stream, the shape the
+    old mapping dropped without a word."""
+    cover = path.parent / "cover.png"
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=64x64:d=0.04",
+            "-frames:v",
+            "1",
+            "-y",
+            str(cover),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x240:rate=24:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={duration}",
+            "-i",
+            str(cover),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map",
+            "2:v",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-qp",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v:1",
+            "copy",
+            "-c:a",
+            "aac",
+            "-disposition:v:1",
+            "attached_pic",
+            "-y",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "name,build,expected",
+    [
+        pytest.param(
+            "angles.mkv",
+            _make_multi_stream_mkv,
+            [
+                ("video", "hevc", False),
+                ("video", "h264", False),
+                ("audio", "aac", False),
+                ("subtitle", "subrip", False),
+                ("video", "png", False),
+                ("attachment", "ttf", False),
+            ],
+            id="mkv-second-angle-and-picture",
+        ),
+        pytest.param(
+            "cover.mp4",
+            _make_cover_art_mp4,
+            [
+                ("video", "hevc", False),
+                ("audio", "aac", False),
+                ("video", "png", True),
+            ],
+            id="mp4-attached-cover-art",
+        ),
+    ],
+)
+async def test_secondary_video_and_cover_art_survive_a_real_encode(tmp_path, name, build, expected):
+    """Only a real mux can drop a stream, so only a real encode can prove
+    it does not. The file left at the original path must carry every
+    stream the source had, in the planned order, with the primary video
+    re-encoded and everything else copied byte for byte."""
+    if not _encoder_available("libx265"):
+        pytest.skip("ffmpeg build lacks libx265")
+
+    source = tmp_path / name
+    await asyncio.to_thread(build, source)
+    before = await stream_inventory(source)
+    source_size = source.stat().st_size
+
+    result = await run_pipeline(
+        source_path=str(source),
+        codec="hevc",
+        backend="cpu",
+        quality=28,
+        source_duration=2.0,
+        job_id="itest-streams",
+        worker_id="itest-worker",
+    )
+    assert result["output_size"] < source_size
+
+    after = await stream_inventory(source)
+    assert [(s.codec_type, s.codec_name, s.attached_pic) for s in after] == expected
+
+    # The copied streams keep the attributes the inventory key checks.
+    for original, replacement in zip(before[1:], after[1:], strict=True):
+        assert (original.codec_type, original.codec_name) == (
+            replacement.codec_type,
+            replacement.codec_name,
+        )
+        assert original.forced == replacement.forced
+        assert original.language == replacement.language
+
+    for suffix in (".tf_lock", ".tf_tmp", ".tf_bak"):
+        assert list(tmp_path.glob(f"*{suffix}*")) == [], f"leftover {suffix} files"
+
+
+async def test_crf_samples_come_from_the_stream_the_encoder_will_re_encode(tmp_path):
+    """ffmpeg's default video selection prefers the default disposition,
+    not the first real video stream. On a file whose second angle carries
+    that flag the two disagree, and a CRF search tuned against a stream
+    the encoder never touches is tuned against nothing."""
+    from transcode_forge.worker.vmaf import _extract_samples
+
+    source = tmp_path / "angles.mkv"
+    await asyncio.to_thread(
+        lambda: subprocess.run(
+            [
+                _FFMPEG,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x240:rate=24:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=640x480:rate=24:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-map",
+                "0:v",
+                "-map",
+                "1:v",
+                "-map",
+                "2:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-qp",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-disposition:v:0",
+                "0",
+                "-disposition:v:1",
+                "default",
+                "-y",
+                str(source),
+            ],
+            check=True,
+        )
+    )
+    # The plan's primary is source stream 0: the first video that is not an
+    # attached picture, whatever the disposition flags say.
+    assert [s.index for s in await stream_inventory(source) if s.codec_type == "video"] == [0, 1]
+
+    picked = tmp_path / "picked"
+    picked.mkdir()
+    left_alone = tmp_path / "left-alone"
+    left_alone.mkdir()
+
+    with_index = await _extract_samples(source, 2.0, picked, 0)
+    without_index = await _extract_samples(source, 2.0, left_alone, None)
+
+    assert (await ffprobe(with_index[0])).width == 320, "the sample must be the primary"
+    assert (await ffprobe(without_index[0])).width == 640, (
+        "if this ever equals 320, ffmpeg's default selection changed and the"
+        " -map is no longer what makes the sample match the encode"
+    )
 
 
 # --- R-005: VERIFY's decode check must fail on damage ffmpeg only complains about
