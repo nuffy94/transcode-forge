@@ -331,6 +331,147 @@ async def test_secondary_video_and_cover_art_survive_a_real_encode(tmp_path, nam
         assert list(tmp_path.glob(f"*{suffix}*")) == [], f"leftover {suffix} files"
 
 
+def _make_chapter_mp4(path, *, duration: float = 2.0) -> None:
+    """An mp4 that carries chapters. ffmpeg stores them as a data stream
+    AND as chapter metadata, and the muxer writes a fresh chapter track of
+    its own on the way out."""
+    meta = path.parent / "chapters.txt"
+    meta.write_text(
+        ";FFMETADATA1\ntitle=test\n\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=2000\ntitle=Two\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x240:rate=24:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={duration}",
+            "-i",
+            str(meta),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map_metadata",
+            "2",
+            "-map_chapters",
+            "2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-qp",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+async def test_a_chapter_bearing_mp4_is_not_refused_for_the_track_the_muxer_adds(tmp_path):
+    """mp4 chapters ride as a data stream, which the plan leaves out by
+    name, and the muxer then writes a chapter track of its own from the
+    copied chapter metadata. That is an addition, not a loss. Refusing a
+    good encode over it would skip every chapter-bearing file in a
+    library."""
+    if not _encoder_available("libx265"):
+        pytest.skip("ffmpeg build lacks libx265")
+
+    source = tmp_path / "chapters.mp4"
+    await asyncio.to_thread(_make_chapter_mp4, source)
+    before = await stream_inventory(source)
+    assert [s.codec_type for s in before] == ["video", "audio", "data"]
+
+    result = await run_pipeline(
+        source_path=str(source),
+        codec="hevc",
+        backend="cpu",
+        quality=28,
+        source_duration=2.0,
+        job_id="itest-chapters",
+        worker_id="itest-worker",
+    )
+    assert result["output_size"] > 0
+
+    after = await stream_inventory(source)
+    assert [(s.codec_type, s.codec_name) for s in after][:2] == [
+        ("video", "hevc"),
+        ("audio", "aac"),
+    ]
+
+
+async def test_verify_decodes_the_re_encoded_primary_not_a_copied_angle(tmp_path):
+    """Now that the output can hold more than one video stream, ffmpeg's
+    default selection is a hazard in VERIFY too: it prefers the default
+    disposition and then the larger frame, so the deep decode check would
+    read a copied angle and pass a damaged encode straight through to SWAP
+    and CLEANUP."""
+    if not _encoder_available("libx265"):
+        pytest.skip("ffmpeg build lacks libx265")
+
+    clean = tmp_path / "clean.mkv"
+    _make_hevc(clean)
+    damaged = tmp_path / "damaged.mkv"
+    _drop_reference_frames(clean, damaged)
+
+    # The shape the widened mapping produces: the encoded primary at v:0
+    # and a copied second angle that wins both default-selection
+    # tie-breaks against it.
+    multi = tmp_path / "multi.mkv"
+    subprocess.run(
+        [
+            _FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(damaged),
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=640x480:rate=24:duration=16",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:v",
+            "-c:v:0",
+            "copy",
+            "-c:v:1",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-disposition:v:0",
+            "0",
+            "-disposition:v:1",
+            "default",
+            "-y",
+            str(multi),
+        ],
+        check=True,
+    )
+    duration = (await ffprobe(multi)).duration
+
+    with pytest.raises(PipelineError, match="Decode test failed"):
+        await _decode_check(multi, duration)
+
+
 async def test_crf_samples_come_from_the_stream_the_encoder_will_re_encode(tmp_path):
     """ffmpeg's default video selection prefers the default disposition,
     not the first real video stream. On a file whose second angle carries

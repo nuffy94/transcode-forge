@@ -52,6 +52,7 @@ from transcode_forge.worker.encoder import (
     build_encode_command,
     map_quality,
     plan_streams,
+    primary_video_index,
     run_encode,
     unmuxable_subtitle_indexes,
 )
@@ -219,6 +220,15 @@ def _inventory_key(
     return (codec_type, codec_name, language, attached_pic, forced)
 
 
+def _covers_in_order(
+    promised: Sequence[tuple[str, str, str, bool, bool]],
+    produced: Sequence[tuple[str, str, str, bool, bool]],
+) -> bool:
+    """True when every promised key appears in produced, in that order."""
+    remaining = iter(produced)
+    return all(any(candidate == key for candidate in remaining) for key in promised)
+
+
 def _check_plan_covers_source(
     inventory: Sequence[StreamInfo],
     plan: StreamPlan,
@@ -275,7 +285,17 @@ async def _verify_stream_inventory(
         _inventory_key(s.codec_type, s.codec_name, s.language, s.attached_pic, s.forced)
         for s in actual
     )
-    if promised == produced:
+    # Every planned stream has to be there, in the planned order. A stream
+    # the muxer added on its own is not a loss: an mp4 with chapters comes
+    # back with a fresh chapter track written from the chapter metadata
+    # (measured 2026-09-12), and refusing that encode would skip every
+    # chapter-bearing file in a library.
+    if _covers_in_order(promised, produced):
+        if len(produced) > len(promised):
+            logger.info(
+                "[COMPARE] Output carries %d stream(s) the plan did not name; the muxer added them",
+                len(produced) - len(promised),
+            )
         return
 
     # Which planned streams are simply not there (a multiset difference, so
@@ -296,8 +316,7 @@ async def _verify_stream_inventory(
             lost.append(_describe_planned(planned))
     if not lost:
         lost = [
-            f"the output holds {len(produced)} streams in an order the plan"
-            f" ({len(promised)} streams) does not describe"
+            f"the output holds all {len(promised)} planned streams but not in the planned order"
         ]
     raise StreamLossError(
         "COMPARE",
@@ -449,10 +468,7 @@ async def run_pipeline(
                 "TRANSCODE",
                 f"Could not list the source's streams, so nothing can promise to keep them: {e}",
             ) from e
-        primary_index = next(
-            (s.index for s in source_streams if s.codec_type == "video" and not s.attached_pic),
-            None,
-        )
+        primary_index = primary_video_index(source_streams)
 
         # Optional pre-step: target-VMAF quality search on short samples.
         # Any failure here falls back to the fixed preset — the full-file
@@ -760,6 +776,13 @@ async def _decode_check(path: Path, duration: float) -> None:
     exit OR any stderr fails VERIFY (ledger R-005). Damage the decoder
     never notices (a clean decode of a garbage picture) is the VMAF
     gate's job, not this check's.
+
+    The `-map 0:v:0` is what makes this check read the stream that was
+    re-encoded. Outputs carry copied video streams now, and ffmpeg's
+    default selection prefers the default disposition and then the larger
+    frame, so without the map a copied second angle gets decoded instead
+    and damage in the primary reaches SWAP unseen (measured 2026-09-12).
+    The plan puts the primary at v:0 for exactly this reason.
     """
     if duration < DECODE_SAMPLE_SECONDS * 1.5:
         # File too short to bother sampling — decode the whole thing once.
@@ -780,6 +803,8 @@ async def _decode_check(path: Path, duration: float) -> None:
             str(path),
             "-t",
             f"{sample:.2f}",
+            "-map",
+            "0:v:0",
             "-an",
             "-sn",
             "-f",

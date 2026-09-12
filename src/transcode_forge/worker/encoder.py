@@ -136,6 +136,20 @@ class StreamPlan:
         )
 
 
+def primary_video_index(inventory: Sequence[StreamInfo]) -> int | None:
+    """The source index of the stream the encode re-encodes: the first
+    video stream that is not an attached picture.
+
+    One home for that rule. The plan, the command it builds and the CRF
+    search all read it here, so they cannot disagree about which stream
+    the job is actually about. None when the file has no real video
+    stream, which the encode itself then fails on.
+    """
+    return next(
+        (s.index for s in inventory if s.codec_type == "video" and not s.attached_pic), None
+    )
+
+
 def plan_streams(
     inventory: Sequence[StreamInfo],
     *,
@@ -180,8 +194,8 @@ def plan_streams(
             return DROP_UNKNOWN_STREAM
         return None
 
-    primary = next((s for s in inventory if s.codec_type == "video" and not s.attached_pic), None)
-    primary_index = primary.index if primary is not None else None
+    primary_index = primary_video_index(inventory)
+    primary = next((s for s in inventory if s.index == primary_index), None)
 
     carried: list[StreamInfo] = []
     if primary is not None:
