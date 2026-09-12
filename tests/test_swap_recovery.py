@@ -335,6 +335,42 @@ class TestOwnedLockToken:
         assert not own.lock_path.exists(), "a late touch resurrected the released lock"
         assert not any(p.name.endswith(".new") for p in tmp_path.iterdir())
 
+    async def test_a_failed_refresh_never_traps_the_release(self, tmp_path: Path, monkeypatch):
+        """A touch that fails while the release is cancelling the heartbeat
+        must still end the loop. An exception leaving a settled unit takes
+        the pending cancellation with it, so a heartbeat that swallowed
+        the error and looped would leave the release waiting on it for
+        ever, with the rollback and the unlock never reached."""
+        import threading
+
+        monkeypatch.setattr(ownership, "LOCK_TOUCH_INTERVAL", 0.01)
+        started = threading.Event()
+        release = threading.Event()
+
+        def failing_touch(lock_path, *, job_id, worker_id):
+            started.set()
+            assert release.wait(timeout=10), "test deadlock"
+            raise OSError("the mount stopped answering")
+
+        monkeypatch.setattr(ownership, "_touch_lock", failing_touch)
+
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(ORIGINAL_BYTES)
+        own = SourceOwnership(source, job_id="job-1", worker_id=WORKER)
+        await own.__aenter__()
+
+        assert await asyncio.to_thread(started.wait, 10), "the heartbeat never touched"
+        exiting = asyncio.ensure_future(own.__aexit__(None, None, None))
+        await asyncio.sleep(0.05)
+        release.set()
+        try:
+            await asyncio.wait_for(exiting, timeout=5)
+        finally:
+            if own._heartbeat is not None and not own._heartbeat.done():
+                own._heartbeat.cancel()
+
+        assert not own.lock_path.exists(), "the release never reached the unlock"
+
 
 class TestRecoverSourcePath:
     """Claim-time single-path recovery: the same crash matrix as the

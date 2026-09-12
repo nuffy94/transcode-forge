@@ -168,8 +168,8 @@ class FilesystemBackend:
     async def cleanup(self, job: Any) -> None:
         """Clean up temporary resources after a job.
 
-        For filesystem backend, the pipeline's finally block already
-        deletes .tf_lock and .tf_tmp files, so this is a no-op.
+        For filesystem backend, the pipeline's owned transaction already
+        deletes .tf_tmp and .tf_lock at its exit, so this is a no-op.
 
         Args:
             job: Job dict (unused).

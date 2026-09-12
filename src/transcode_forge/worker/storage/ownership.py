@@ -56,7 +56,10 @@ async def settled[T](coro: Coroutine[Any, Any, T]) -> T:
     than "return while it runs". A cancellation delivered during the wait
     is re-raised after the coroutine finishes. An exception raised by the
     coroutine wins over a pending cancellation, so the failure reason is
-    never lost.
+    never lost. That last part is the one thing a caller has to know: an
+    exception out of here carries the cancellation away with it, so never
+    swallow one and carry on. Give the coroutine its own error handling
+    instead, the way the heartbeat's refresh does.
 
     Only ever wrap something short. These regions are renames and
     unlinks; the decode samples in CONFIRM stay cancellable so the second
@@ -212,25 +215,32 @@ class SourceOwnership:
             _safe_delete(self.lock_path)
 
     def _refresh_lock(self) -> None:
-        """One heartbeat write, skipped when the lock is no longer ours."""
+        """One heartbeat write, skipped when the lock is no longer ours.
+
+        Never raises. A failed touch is not fatal (the transaction owns
+        the lock either way, the heartbeat only keeps its liveness
+        visible), and handling it here rather than around the settled
+        call is what keeps the loop stoppable: an exception leaving a
+        settled unit takes a pending cancellation with it, so a caller
+        that swallowed one would restart the loop after the release
+        asked it to end.
+        """
         if not _lock_matches(self.lock_path, job_id=self.job_id, worker_id=self.worker_id):
             logger.warning(
                 "Lock %s no longer carries this job's token, not refreshing it",
                 self.lock_path,
             )
             return
-        _touch_lock(self.lock_path, job_id=self.job_id, worker_id=self.worker_id)
+        try:
+            _touch_lock(self.lock_path, job_id=self.job_id, worker_id=self.worker_id)
+        except OSError as e:
+            logger.warning("Could not refresh lock %s: %s", self.lock_path, e)
 
     async def _beat(self) -> None:
         """Refresh the lock's timestamp every LOCK_TOUCH_INTERVAL seconds
         until the transaction releases, so "stale" means dead rather than
-        old across multi-hour encodes. A failed touch is logged, never
-        fatal: the transaction owns the lock either way, the heartbeat
-        only keeps its liveness visible. Each touch is a settled unit, so
+        old across multi-hour encodes. Each touch is a settled unit, so
         cancelling this task at release waits for an in-flight write."""
         while True:
             await asyncio.sleep(LOCK_TOUCH_INTERVAL)
-            try:
-                await settled(asyncio.to_thread(self._refresh_lock))
-            except OSError as e:
-                logger.warning("Could not refresh lock %s: %s", self.lock_path, e)
+            await settled(asyncio.to_thread(self._refresh_lock))
