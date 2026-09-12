@@ -4,9 +4,9 @@ Transcode Forge stores state in PostgreSQL and Redis. This guide covers backing 
 
 ## What to back up
 
-- **Database** — PostgreSQL (`postgres:16-alpine` service) holds all jobs, library metadata, user data, and settings.
-- **Redis state** — optional, but recommended if you have queued jobs you'd like to survive a crash. Redis is rebuilt from the database on scheduler restart if lost.
-- **Configuration** — your `.env` file (contains credentials and library paths). Keep this safe.
+- **Database**: PostgreSQL (`postgres:16-alpine` service) holds all jobs, library metadata, user data, and settings.
+- **Redis state**: optional, and rarely worth it. Redis relays live progress to the browser; the queue itself lives in PostgreSQL, so losing Redis costs you nothing a scheduler restart does not rebuild.
+- **Configuration**: your `.env` file (contains credentials and library paths). Keep this safe.
 
 ## Database backup (PostgreSQL)
 
@@ -29,17 +29,21 @@ docker compose exec -T postgres pg_dump -U tf transcode_forge | gzip > backup.sq
 
 Compresses the dump, saving disk space.
 
-## Database backup (SQLite — dev/test only)
+## Database backup (SQLite, dev and test only)
 
-If you're running with SQLite (`TF_DB_URL=sqlite:///transcode_forge.db`), simply copy the database file:
+If you're running with SQLite (`TF_DB_URL=sqlite:///transcode_forge.db`), take the backup through SQLite:
 
 ```bash
-cp transcode_forge.db transcode_forge.db.bak
+sqlite3 transcode_forge.db ".backup transcode_forge.db.bak"
 ```
+
+The scheduler runs SQLite in WAL mode, so a committed row can still be sitting in `transcode_forge.db-wal` when you take the backup. `cp` copies the main file alone and drops that row. `.backup` reads through a real connection, so it captures everything committed, and it is safe to run while the scheduler is up.
+
+`VACUUM INTO 'transcode_forge.db.bak'` produces the same consistent snapshot, compacted, and refuses to overwrite an existing file.
 
 ## Redis data (optional)
 
-Redis lives on the internal Docker network and is not backed up by default. If you want to preserve queued jobs:
+Redis lives on the internal Docker network and is not backed up by default. If you want a snapshot of the relay anyway:
 
 ```bash
 docker compose exec -T redis redis-cli SAVE
@@ -52,27 +56,51 @@ On restore, copy `redis-dump.rdb` back into the Redis container before restartin
 
 ### Restore PostgreSQL dump
 
+Load the dump into a fresh database, then promote it. Importing over the
+populated database is what turns a recovery into a loss: `psql` prints
+"already exists" and duplicate-key errors line by line, then exits 0, so a
+restore that did nothing reads as a finished one.
+
 ```bash
-# Stop the scheduler (workers can continue).
+# Stop the scheduler. Nothing may write while the databases swap.
 docker compose stop scheduler
 
-# Restore from a plain-text dump:
-docker compose exec -T postgres psql -U tf transcode_forge < backup.sql
+# 1. An empty target beside the live database.
+docker compose exec -T postgres createdb -U tf transcode_forge_restore
 
-# Or restore from gzip:
-gunzip < backup.sql.gz | docker compose exec -T postgres psql -U tf transcode_forge
+# 2. Load the backup into it. ON_ERROR_STOP=1 stops at the first error and
+#    exits non-zero instead of running to the end.
+gunzip < backup.sql.gz | docker compose exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U tf -d transcode_forge_restore
 
-# Restart the scheduler. Migrations auto-apply on boot.
+# 3. Check the exit code before going further. Anything but 0 means the
+#    restore failed and the live database has not been touched yet.
+echo $?
+
+# 4. Promote it. The live database is renamed, never dropped.
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U tf -d postgres \
+  -c 'ALTER DATABASE transcode_forge RENAME TO transcode_forge_prerestore;' \
+  -c 'ALTER DATABASE transcode_forge_restore RENAME TO transcode_forge;'
+
+# 5. Start the scheduler. Migrations auto-apply on boot.
 docker compose up -d scheduler
 ```
 
-If a restore hits "already exists" conflicts, take the dump with `--clean
---if-exists` (a `pg_dump` option) so it drops objects before recreating them,
-then restore it the same way:
+For a plain (ungzipped) dump, step 2 is `docker compose exec -T postgres psql
+-v ON_ERROR_STOP=1 -U tf -d transcode_forge_restore` with `< backup.sql` on the
+host side.
 
-```bash
-docker compose exec -T postgres pg_dump -U tf --clean --if-exists transcode_forge | gzip > backup.sql.gz
-```
+The rename in step 4 needs every other client off `transcode_forge`, which is
+why the scheduler is stopped. Two properties follow from restoring this way:
+
+- **Your backup is only ever read.** Nothing here writes to `backup.sql.gz`.
+- **The restore is reversible.** `transcode_forge_prerestore` still holds the
+  state you started with, so a wrong backup costs you a second rename, not the
+  data. Drop it once the instance looks right.
+
+There is no need for `pg_dump --clean --if-exists` here. A fresh target has
+nothing to drop, so the "already exists" conflicts that option works around
+cannot happen.
 
 ### Restore SQLite
 
@@ -80,12 +108,16 @@ docker compose exec -T postgres pg_dump -U tf --clean --if-exists transcode_forg
 # Stop the scheduler.
 docker compose stop scheduler
 
-# Restore the backup.
-cp transcode_forge.db.bak transcode_forge.db
+# Write the backup back through SQLite.
+sqlite3 transcode_forge.db ".restore transcode_forge.db.bak"
 
 # Restart.
 docker compose up -d scheduler
 ```
+
+A plain `cp` would drop the backup's pages next to the live database's stale
+`-wal` and `-shm` sidecars, which SQLite can then replay over them. `.restore`
+writes through a real connection, so the file and its sidecars agree.
 
 ### Restore Redis (optional)
 

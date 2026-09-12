@@ -93,7 +93,7 @@ Worker <id> came online — released <N> orphan job(s) back to the queue
     -b "session=<your-session-cookie>"
   ```
 - A job genuinely stuck *in-progress* (status transcoding/assigned) is released
-  by restarting its worker — see above; you don't re-queue it by hand.
+  by restarting its worker (see above); you don't re-queue it by hand.
 
 **Check for more details**
 - Dashboard → History to see error messages from failed jobs.
@@ -112,12 +112,12 @@ QSV or NVENC initialization failed; the worker fell back to software x265.
 
 Look for these patterns in worker logs:
 
-**QSV failed** — a line like:
+**QSV failed**: a line like:
 ```
 Failed to set value 'qsv=hw' for option 'init_hw_device' ...
 ```
 
-**NVENC failed** — a line like:
+**NVENC failed**: a line like:
 ```
 NVENC not available: ...
 ```
@@ -218,7 +218,7 @@ If the forced encoder fails to initialize, the worker will still fall back to CP
    docker compose restart scheduler
    ```
 
-6. Go back to the dashboard — the issue should clear within a few seconds.
+6. Go back to the dashboard. The issue should clear within a few seconds.
 
 ## Lost admin password
 
@@ -227,7 +227,7 @@ If the forced encoder fails to initialize, the worker will still fall back to CP
 
 ### Fix
 
-Reset it from the server with the admin CLI — no SQL, no restart, and your
+Reset it from the server with the admin CLI: no SQL, no restart, and your
 catalog/jobs/workers are untouched (only the login changes):
 
 ```bash
@@ -241,7 +241,7 @@ docker compose exec -T scheduler python -m transcode_forge.admin reset-password 
 Then log in with the new password. The command resets the admin if one exists,
 or creates it if not (so it also covers a headless first-run). This is the same
 server-side recovery model as Nextcloud's `occ user:resetpassword` or Django's
-`changepassword` — shell access to the host is the trust boundary.
+`changepassword`. Shell access to the host is the trust boundary.
 
 ## Lost worker token
 
@@ -298,7 +298,7 @@ If `TF_AUTH_SECRET` is set, sessions and worker tokens survive restarts.
 
 ### Schema migrations
 
-When the scheduler starts, it automatically applies any pending database migrations. This is idempotent — if a migration has already been applied, it's skipped. Safe to restart; the database will not be corrupted.
+When the scheduler starts, it automatically applies any pending database migrations. This is idempotent: if a migration has already been applied, it's skipped. Safe to restart; the database will not be corrupted.
 
 ## FFmpeg or ffprobe missing
 
@@ -381,16 +381,26 @@ curl http://localhost:8000/api/health/ready
 
 **Postgres won't start**
 - Check disk space: `docker compose exec postgres df /var/lib/postgresql/data`
-- Corrupted data directory: back up and delete the volume:
+- Corrupted data directory: restore your last good dump into a fresh database, see [BACKUP.md](./BACKUP.md#restore-postgresql-dump). That is the only repair that keeps your admin account, worker tokens, settings and job history.
+- No usable backup: reset the Postgres data directory and nothing else. Everything above is gone, so you re-create the admin from `TF_ADMIN_PASSWORD`, re-issue every worker token, and re-scan and re-queue your libraries.
   ```bash
-  docker compose down -v
+  docker compose stop postgres
+  docker compose run --rm --no-deps --entrypoint sh postgres \
+    -c 'find /var/lib/postgresql/data -mindepth 1 -delete'
   docker compose up -d
-  # Data is lost; re-scan and re-queue jobs.
   ```
 
 **Redis won't start**
 - Check logs: `docker compose logs redis`
-- If data is corrupted: `docker compose down -v && docker compose up -d`
+- Corrupted data: Redis relays live progress to the browser and holds nothing else. Jobs, catalog, accounts and settings all live in Postgres, so dropping the snapshot costs you nothing.
+  ```bash
+  docker compose stop redis
+  docker compose run --rm --no-deps --entrypoint sh redis \
+    -c 'rm -f /data/dump.rdb /data/appendonly.aof'
+  docker compose up -d redis
+  ```
+
+Both resets name one service and one path on purpose. A project-wide volume wipe is never the right repair here: it removes every named volume in the project, so fixing Redis would take the Postgres database with it.
 
 ---
 
