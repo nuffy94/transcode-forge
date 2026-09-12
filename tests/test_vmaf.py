@@ -1,5 +1,6 @@
 """Unit tests for VMAF measurement pooling + the target-VMAF quality search."""
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -9,6 +10,7 @@ from transcode_forge.worker.vmaf import (
     VMAF_MODEL_4K,
     VMAF_MODEL_HD,
     VmafError,
+    VmafScore,
     VmafUnavailableError,
     _pool,
     find_quality_for_target,
@@ -364,3 +366,79 @@ class TestMissingModelIsUnavailable:
         with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=Proc())):
             with pytest.raises(VmafUnavailableError, match="update the worker image"):
                 await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+
+
+def _exec_writing_log(payload: str):
+    """A stand-in ffmpeg that exits 0 and drops `payload` at the log_path
+    the filter graph asked for, so the real parser reads it."""
+
+    async def fake_exec(*args, **kwargs):
+        graph = next(str(a) for a in args if "libvmaf" in str(a))
+        # Split on the NEXT option, not on ':', because a Windows log_path
+        # starts with a drive letter and a colon.
+        log_path = graph.split("log_path=", 1)[1].split(":n_subsample=", 1)[0]
+        Path(log_path).write_text(payload, encoding="utf-8")
+
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        return Proc()
+
+    return fake_exec
+
+
+class TestNonfiniteScores:
+    """Codex full review 2026-09-12, finding F2.
+
+    libvmaf can write NaN or Infinity into its JSON log and Python's json
+    parser accepts both literals. Pooled into a score they reached the
+    gate, where every check is a "below the floor" comparison, and those
+    are False for NaN and for +inf. So a gauge that produced no usable
+    number passed the gate and the encode replaced the original. A score
+    that is not a number at all is a measurement failure too.
+    """
+
+    @pytest.mark.parametrize("field", ["mean", "perc5", "min"])
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_score_cannot_hold_a_nonfinite_value(self, field, bad):
+        fields = {"mean": 98.0, "perc5": 96.0, "min": 95.0}
+        fields[field] = bad
+        with pytest.raises(VmafError, match="finite"):
+            VmafScore(**fields)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_pool_rejects_a_nonfinite_frame(self, bad):
+        with pytest.raises(VmafError):
+            _pool([98.0] * 20 + [bad])
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param('{"frames": [{"metrics": {"vmaf": NaN}}, {"metrics": {"vmaf": 98.0}}]}'),
+            pytest.param('{"frames": [{"metrics": {"vmaf": Infinity}}]}'),
+            pytest.param('{"frames": [{"metrics": {"vmaf": -Infinity}}]}'),
+            pytest.param('{"frames": [{"metrics": {"vmaf": "N/A"}}]}'),
+            pytest.param('{"frames": [{"metrics": {"vmaf": null}}]}'),
+            pytest.param('{"frames": []}'),
+        ],
+    )
+    async def test_a_garbage_log_is_a_measurement_failure(self, tmp_path, payload):
+        with patch("asyncio.create_subprocess_exec", side_effect=_exec_writing_log(payload)):
+            with pytest.raises(VmafError) as exc_info:
+                await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+        # Plain VmafError, never VmafUnavailableError: that one means "this
+        # worker has no libvmaf" and skips the gate loudly, which is exactly
+        # the wrong answer for a gauge that ran and returned garbage.
+        assert not isinstance(exc_info.value, VmafUnavailableError)
+
+    async def test_a_real_log_still_measures(self, tmp_path):
+        """Control: the same path with a valid log pools as it always did."""
+        payload = json.dumps({"frames": [{"metrics": {"vmaf": v}} for v in [98.0] * 19 + [90.0]]})
+        with patch("asyncio.create_subprocess_exec", side_effect=_exec_writing_log(payload)):
+            score = await measure_vmaf(tmp_path / "a.mkv", tmp_path / "b.mkv")
+        assert score.mean == pytest.approx(97.6)
+        assert score.perc5 == 90.0
+        assert score.min == 90.0
