@@ -54,6 +54,10 @@ On restore, copy `redis-dump.rdb` back into the Redis container before restartin
 
 ## Restore procedure
 
+If you run the pre-built image stack, add `-f docker-compose.prod.yml` to every
+`docker compose` command below, so the scheduler comes back on the image you
+pinned rather than a local build.
+
 ### Restore PostgreSQL dump
 
 Load the dump into a fresh database, then promote it. Importing over the
