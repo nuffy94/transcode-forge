@@ -565,6 +565,19 @@ class TestSystemInfoEndpoint:
         assert "disk" in data
         assert "percent" in data["disk"]
 
+    async def test_system_info_masks_only_real_credentials(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A password in the authority is hidden; an "@" inside a SQLite
+        path is not a credential and the URL is reported as it is."""
+        monkeypatch.setenv("TF_DB_URL", "postgresql://tf:secret@db:5432/forge")
+        masked = (await client.get("/api/system/info")).json()["database"]
+        assert masked == "postgresql://***@db:5432/forge"
+
+        monkeypatch.setenv("TF_DB_URL", "sqlite:////srv/qa@node/demo.db")
+        plain = (await client.get("/api/system/info")).json()["database"]
+        assert plain == "sqlite:////srv/qa@node/demo.db"
+
     async def test_system_info_uptime_format(self, client: AsyncClient):
         response = await client.get("/api/system/info")
         data = response.json()

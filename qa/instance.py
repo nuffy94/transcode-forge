@@ -21,8 +21,8 @@ ambient can move the database out from under it. Readiness is not "something
 answered on the port": the responder has to log in as the admin this boot
 minted and name that database. Shutdown asks the same question before it
 signals anything, so a pid the OS may have handed to another program is
-never signalled, and the record is removed only once the instance has
-stopped answering as itself.
+never signalled, and the record is removed only once the port it held is
+empty.
 
 A future ``pg`` mode (same app pointed at a Postgres URL) hooks in here when
 S6b lands — not built yet.
@@ -126,6 +126,23 @@ def instance_paths(run_dir: Path, port: int) -> tuple[Path, Path, Path]:
     return inst / "demo.db", inst / "server.log", inst / "uvicorn.pid"
 
 
+def _write_record(pidfile: Path, pid: int, database: str) -> None:
+    """Record the instance: its pid on the first line (it stays a pidfile),
+    the identity it proved at boot on the second. The identity is recorded
+    rather than recomputed at stop time, because the L3 sweep rotates whole
+    run directories: the instance keeps serving the database it opened,
+    whatever its record's path has become since."""
+    pidfile.write_text(f"{pid}\n{database}\n", encoding="utf-8")
+
+
+def _read_record(pidfile: Path, db: Path) -> tuple[int, str]:
+    """The recorded pid and identity. A record with no identity line predates
+    this format; fall back to the path this run dir implies."""
+    lines = pidfile.read_text(encoding="utf-8").splitlines()
+    identity = lines[1].strip() if len(lines) > 1 and lines[1].strip() else database_url(db)
+    return int(lines[0].strip()), identity
+
+
 def _spawn(port: int, db: Path, logf: IO[str], *, detached: bool) -> subprocess.Popen[bytes]:
     flags: dict[str, object] = {}
     if detached:
@@ -198,11 +215,24 @@ def _await_ready(proc: subprocess.Popen[bytes], base_url: str, database: str) ->
     raise InstanceNotReadyError()
 
 
-def _await_gone(base_url: str, database: str, seconds: float) -> bool:
-    """True once the instance has stopped answering on its port as itself."""
+def _port_is_open(port: int) -> bool:
+    """Is anything accepting connections on the port?
+
+    Kept apart from the identity probe on purpose: a probe can fail to get
+    an answer for reasons that are not "nothing is there" (a timeout, the
+    login throttle), and treating those as an empty port would orphan a
+    running instance.
+    """
+    with socket.socket() as s:
+        s.settimeout(_PROBE_TIMEOUT)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _await_gone(port: int, seconds: float) -> bool:
+    """True once nothing is listening on the port any more."""
     deadline = time.monotonic() + seconds
     while True:
-        if _reported_database(base_url) != database:
+        if not _port_is_open(port):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -283,7 +313,7 @@ def start_detached(run_dir: Path, port: int) -> int:
         )
         return 1
 
-    pidfile.write_text(str(proc.pid), encoding="utf-8")
+    _write_record(pidfile, proc.pid, database_url(db))
     print(f"READY pid={proc.pid} base={base}")
     return 0
 
@@ -307,20 +337,29 @@ def stop_detached(run_dir: Path, port: int) -> int:
 
     Prints ``STOPPED pid=<pid> port=<port>`` once the instance is actually
     gone. The recorded pid is signalled only after the instance on that port
-    proves it is ours (it serves our disposable database), so a record left
-    behind by a dead instance can never take an unrelated program down with
-    it. A stop that could not stop anything keeps its record and returns 1.
+    proves it is the one in the record (it serves the database that instance
+    opened), so a record left behind by a dead instance can never take an
+    unrelated program down with it. Three outcomes, kept apart: the port is
+    empty and the stale record goes; the instance is ours and is stopped;
+    or something is there that we cannot claim, which is signalled to nobody,
+    keeps its record and returns 1.
     """
     db, _, pidfile = instance_paths(run_dir, port)
     if not pidfile.exists():
         print(f"no pidfile for port {port} — nothing to stop")
         return 0
 
-    pid = int(pidfile.read_text(encoding="utf-8").strip())
+    pid, database = _read_record(pidfile, db)
     base = f"http://127.0.0.1:{port}"
-    database = database_url(db)
 
     if _reported_database(base) != database:
+        if _port_is_open(port):
+            print(
+                f"port {port} is in use by something that is not the instance in"
+                f" {pidfile}: nothing signalled, record kept",
+                file=sys.stderr,
+            )
+            return 1
         pidfile.unlink(missing_ok=True)
         print(f"instance for port {port} is already gone, removed its stale record")
         return 0
@@ -331,9 +370,9 @@ def stop_detached(run_dir: Path, port: int) -> int:
         print(f"cannot stop pid {pid} on port {port}: {e}", file=sys.stderr)
         return 1
 
-    if not _await_gone(base, database, _STOP_GRACE_SECONDS):
+    if not _await_gone(port, _STOP_GRACE_SECONDS):
         _escalate(pid)
-        if not _await_gone(base, database, _STOP_KILL_SECONDS):
+        if not _await_gone(port, _STOP_KILL_SECONDS):
             print(
                 f"pid {pid} is still serving port {port} after being told to stop"
                 f". Record kept at {pidfile}",

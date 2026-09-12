@@ -21,6 +21,7 @@ from unittest import mock
 import pytest
 
 from qa.instance import (
+    database_url,
     demo_env,
     instance_paths,
     pick_free_port,
@@ -95,7 +96,9 @@ def test_detached_round_trip(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         assert start_rc == 0, f"start failed: {started!r}"
         ready = re.fullmatch(r"READY pid=(\d+) base=(http://127\.0\.0\.1:\d+)\n", started)
         assert ready, f"READY contract broken: {started!r}"
-        assert pidfile.read_text(encoding="utf-8") == ready.group(1)
+        record = pidfile.read_text(encoding="utf-8").splitlines()
+        assert record[0] == ready.group(1)  # still a pidfile on its first line
+        assert record[1] == database_url(instance_paths(tmp_path, port)[0])
         with urllib.request.urlopen(f"{ready.group(2)}/api/health/live", timeout=5) as r:
             assert r.status == 200
     finally:
@@ -163,9 +166,9 @@ def test_stop_never_signals_a_pid_it_cannot_prove_is_its_own(
     """Q03: a record left by a dead instance names a pid the OS may since
     have handed to something else, here the test runner itself."""
     port = pick_free_port()  # nothing is listening on it
-    _, _, pidfile = instance_paths(tmp_path, port)
+    db, _, pidfile = instance_paths(tmp_path, port)
     pidfile.parent.mkdir(parents=True)
-    pidfile.write_text(str(os.getpid()), encoding="utf-8")
+    pidfile.write_text(f"{os.getpid()}\n{database_url(db)}\n", encoding="utf-8")
 
     signalled: list[int] = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append(pid))
@@ -177,6 +180,38 @@ def test_stop_never_signals_a_pid_it_cannot_prove_is_its_own(
     assert rc == 0
     assert "STOPPED" not in out
     assert not pidfile.exists()
+
+
+@pytest.mark.qa
+def test_stop_leaves_alone_a_port_it_cannot_claim(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Q03: a probe that cannot prove ownership is not proof of a dead
+    instance. Something is on the port, so nothing is signalled and the
+    record stays for the operator."""
+    port = pick_free_port()
+    db, _, pidfile = instance_paths(tmp_path, port)
+    pidfile.parent.mkdir(parents=True)
+    pidfile.write_text(f"{os.getpid()}\n{database_url(db)}\n", encoding="utf-8")
+
+    signalled: list[int] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append(pid))
+
+    stranger = HTTPServer(("127.0.0.1", port), _Impostor)
+    serving = threading.Thread(target=stranger.serve_forever, daemon=True)
+    serving.start()
+    try:
+        rc = stop_detached(tmp_path, port)
+        out = capsys.readouterr()
+    finally:
+        stranger.shutdown()
+        stranger.server_close()
+        serving.join(timeout=10)
+
+    assert signalled == [], "signalled a process it does not own"
+    assert rc == 1
+    assert "STOPPED" not in out.out
+    assert pidfile.exists()
 
 
 @pytest.mark.qa
