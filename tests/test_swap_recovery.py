@@ -6,20 +6,22 @@ restores originals, clears stale locks, respects fresh locks from other
 workers on shared storage, and never clobbers a finished transcode.
 """
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from transcode_forge.worker import pipeline
+from transcode_forge.worker.storage import ownership
 from transcode_forge.worker.storage.filesystem import (
     LOCK_TOUCH_INTERVAL,
     RECOVERY_STALE_LOCK_SECONDS,
-    LockHeartbeatGuard,
     _touch_lock,
     lock_holder,
     recover_orphaned_backups,
     recover_source_path,
 )
+from transcode_forge.worker.storage.ownership import SourceOwnership
 
 WORKER = "worker-self"
 OTHER = "worker-other"
@@ -210,11 +212,11 @@ class TestStaleWindow:
     def test_stale_window_is_derived_from_the_touch_interval(self):
         """The window must absorb missed touches (a busy NFS mount, a
         failed os.replace) without declaring a running pipeline dead, and
-        the pipeline must heartbeat on the SAME cadence the recovery scans
-        measure against. One source of truth, checked here so nobody can
-        tune them apart."""
+        the owned transaction must heartbeat on the SAME cadence the
+        recovery scans measure against. One source of truth, checked here
+        so nobody can tune them apart."""
         assert RECOVERY_STALE_LOCK_SECONDS == 3 * LOCK_TOUCH_INTERVAL
-        assert pipeline.LOCK_TOUCH_INTERVAL == LOCK_TOUCH_INTERVAL
+        assert ownership.LOCK_TOUCH_INTERVAL == LOCK_TOUCH_INTERVAL
         # find_stale_locks reports against the same window.
         import inspect
 
@@ -258,63 +260,80 @@ class TestTouchLock:
         assert bak.exists() and lock.exists() and not original.exists()
 
 
-class TestLockHeartbeatGuard:
-    """Cancelling a task awaiting asyncio.to_thread does NOT wait for the
-    OS thread — without the guard, an in-flight touch completing after
-    UNLOCK resurrects the deleted lock with a fresh timestamp, and other
-    workers decline the path as 'active' for hours (review HIGH-1)."""
+class TestOwnedLockToken:
+    """What replaced LockHeartbeatGuard.
 
-    def test_touch_after_stop_is_a_noop(self, tmp_path: Path):
-        guard = LockHeartbeatGuard()
-        lock = tmp_path / "movie.mkv.tf_lock"
-        guard.stop()
-        guard.touch(lock, job_id="j1", worker_id=WORKER)
-        assert not lock.exists(), "a touch after stop() must never recreate the lock"
+    The guard existed because cancelling a task awaiting asyncio.to_thread
+    does NOT wait for the OS thread, so an in-flight touch could complete
+    after UNLOCK and resurrect the deleted lock with a fresh timestamp
+    (other workers then decline the path as 'active' for the whole stale
+    window). The owned transaction covers that twice over: each touch is a
+    settled unit, so the release waits for one already in flight, and
+    every lock write checks the lock still carries this job's token, so a
+    late write has nothing to resurrect.
+    """
 
-    def test_stop_waits_for_inflight_touch(self, tmp_path: Path, monkeypatch):
-        """stop() must block until a touch that already entered the guarded
-        region finishes — that ordering is what lets the caller delete the
-        lock afterwards without a resurrection window."""
+    async def test_the_heartbeat_never_stamps_a_lock_that_is_not_ours(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A recovery scan elsewhere can revoke a lock it judges stale and
+        a successor can take the path. Stamping it with our identity would
+        make the successor's lock look like ours, and deleting it at
+        release would drop the successor's exclusion."""
+        monkeypatch.setattr(ownership, "LOCK_TOUCH_INTERVAL", 0.02)
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(ORIGINAL_BYTES)
+
+        own = SourceOwnership(source, job_id="job-1", worker_id=WORKER)
+        async with own:
+            successor = json.dumps(
+                {
+                    "job_id": "job-2",
+                    "worker_id": OTHER,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+            own.lock_path.write_text(successor)
+            await asyncio.sleep(0.1)
+            assert own.lock_path.read_text() == successor, "the heartbeat stamped a foreign lock"
+
+        assert own.lock_path.exists(), "the release deleted a successor's lock"
+        assert own.lock_path.read_text() == successor
+
+    async def test_the_release_waits_for_an_in_flight_touch(self, tmp_path: Path, monkeypatch):
+        """The ordering the guard's mutex used to buy: a touch that has
+        already started finishes before the lock is deleted, so nothing
+        can write the file after the unlink."""
         import threading
-        import time
 
-        import transcode_forge.worker.storage.filesystem as fs
-
-        lock = tmp_path / "movie.mkv.tf_lock"
+        monkeypatch.setattr(ownership, "LOCK_TOUCH_INTERVAL", 0.01)
         started = threading.Event()
         release = threading.Event()
-        real_touch = fs._touch_lock
+        real_touch = ownership._touch_lock
 
         def blocking_touch(lock_path, *, job_id, worker_id):
             started.set()
-            assert release.wait(timeout=5), "test deadlock"
+            assert release.wait(timeout=10), "test deadlock"
             real_touch(lock_path, job_id=job_id, worker_id=worker_id)
 
-        monkeypatch.setattr(fs, "_touch_lock", blocking_touch)
+        monkeypatch.setattr(ownership, "_touch_lock", blocking_touch)
 
-        guard = LockHeartbeatGuard()
-        toucher = threading.Thread(
-            target=guard.touch, args=(lock,), kwargs={"job_id": "j1", "worker_id": WORKER}
-        )
-        toucher.start()
-        assert started.wait(timeout=5)
+        source = tmp_path / "movie.mkv"
+        source.write_bytes(ORIGINAL_BYTES)
+        own = SourceOwnership(source, job_id="job-1", worker_id=WORKER)
+        await own.__aenter__()
 
-        stopper = threading.Thread(target=guard.stop)
-        stopper.start()
-        time.sleep(0.05)
-        assert stopper.is_alive(), "stop() must block while a touch is in flight"
+        assert await asyncio.to_thread(started.wait, 10), "the heartbeat never touched"
+        exiting = asyncio.ensure_future(own.__aexit__(None, None, None))
+        await asyncio.sleep(0.1)
+        try:
+            assert not exiting.done(), "the release did not wait for the in-flight touch"
+        finally:
+            release.set()
+        await exiting
 
-        release.set()
-        stopper.join(timeout=5)
-        toucher.join(timeout=5)
-        assert not stopper.is_alive()
-
-        # The in-flight touch completed BEFORE stop returned — so a delete
-        # performed after stop() can never be undone by it.
-        assert lock.exists()
-        lock.unlink()
-        guard.touch(lock, job_id="j1", worker_id=WORKER)
-        assert not lock.exists()
+        assert not own.lock_path.exists(), "a late touch resurrected the released lock"
+        assert not any(p.name.endswith(".new") for p in tmp_path.iterdir())
 
 
 class TestRecoverSourcePath:
