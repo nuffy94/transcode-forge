@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from transcode_forge.scanner.probe import StreamInfo
 from transcode_forge.worker.proc import managed_subprocess
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,168 @@ class EncodeResult:
     error_message: str | None = None
 
 
+# ── The stream plan ────────────────────────────────────────────────────
+#
+# The command builder decides what the encode carries; the muxer decides
+# what it accepts; before the plan, nothing compared the two, so a source
+# stream neither side wanted disappeared and the job still read COMPLETE.
+# The plan is that comparison made possible: it names every source stream
+# either as carried (with the output ordinal it lands on) or as a
+# deliberate omission with a reason. run_pipeline holds it against its own
+# probe of the source and then against the finished output.
+
+DROP_DATA_STREAM = "data stream, not carried into the output"
+DROP_UNKNOWN_STREAM = "stream of unknown type"
+DROP_UNMUXABLE_SUBTITLE = "subtitle with no identifiable codec"
+
+# Types the mapping carries. Anything else is a named omission.
+_CARRIED_TYPES = frozenset({"video", "audio", "subtitle", "attachment"})
+
+
+@dataclass(frozen=True)
+class PlannedStream:
+    """A source stream the encode carries, and where it lands.
+
+    `codec_name` is what the finished output must report for this stream:
+    the target codec for the one being re-encoded, the source codec for
+    every stream that is copied.
+    """
+
+    source_index: int
+    ordinal: int
+    codec_type: str
+    codec_name: str
+    language: str
+    attached_pic: bool
+    forced: bool
+
+
+@dataclass(frozen=True)
+class DroppedStream:
+    """A source stream the encode deliberately leaves out, and why."""
+
+    source_index: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class StreamPlan:
+    """What the encode command promises to do with every source stream."""
+
+    kept: tuple[PlannedStream, ...]
+    dropped: tuple[DroppedStream, ...]
+
+    @property
+    def accounted_indexes(self) -> tuple[int, ...]:
+        """Every source index the plan speaks for, carried or dropped."""
+        return tuple(p.source_index for p in self.kept) + tuple(
+            d.source_index for d in self.dropped
+        )
+
+
+def primary_video_index(inventory: Sequence[StreamInfo]) -> int | None:
+    """The source index of the stream the encode re-encodes: the first
+    video stream that is not an attached picture.
+
+    One home for that rule. The plan, the command it builds and the CRF
+    search all read it here, so they cannot disagree about which stream
+    the job is actually about. None when the file has no real video
+    stream, which the encode itself then fails on.
+    """
+    return next(
+        (s.index for s in inventory if s.codec_type == "video" and not s.attached_pic), None
+    )
+
+
+def plan_streams(
+    inventory: Sequence[StreamInfo],
+    *,
+    target_codec: str,
+    drop_sub_streams: Sequence[int] = (),
+) -> StreamPlan:
+    """Declare what the encode does with every stream of this source.
+
+    The primary video stream (the first one that is not an attached
+    picture) goes to output position 0 and is the one re-encoded; every
+    other stream follows in source order and is copied. Putting the
+    primary first is what makes `:v:0` name it, so a file whose first
+    video stream is cover art gets its real video encoded rather than its
+    thumbnail.
+
+    Only three kinds of stream are left out, and each is named with a
+    reason: data streams (matroska's support for them is spotty and
+    carrying them would reintroduce the exotic-stream failure class this
+    mapping exists to end), streams of a type ffmpeg cannot identify, and
+    subtitles with no identifiable codec, which matroska refuses to copy
+    and which used to fail the whole encode.
+
+    Anything this plan does not speak for is a stream the encode would
+    lose without saying so. It is not this function's job to notice that;
+    the pipeline compares the plan with its own probe of the source.
+
+    Args:
+        inventory: The source's streams, in index order.
+        target_codec: The codec the primary video stream is re-encoded to.
+        drop_sub_streams: Per-type subtitle indexes with no identifiable
+            codec (see unmuxable_subtitle_indexes).
+    """
+    subtitles = [s for s in inventory if s.codec_type == "subtitle"]
+    unmuxable = {subtitles[n].index for n in drop_sub_streams if 0 <= n < len(subtitles)}
+
+    def omission(stream: StreamInfo) -> str | None:
+        if stream.index in unmuxable:
+            return DROP_UNMUXABLE_SUBTITLE
+        if stream.codec_type == "data":
+            return DROP_DATA_STREAM
+        if stream.codec_type not in _CARRIED_TYPES:
+            return DROP_UNKNOWN_STREAM
+        return None
+
+    primary_index = primary_video_index(inventory)
+    primary = next((s for s in inventory if s.index == primary_index), None)
+
+    carried: list[StreamInfo] = []
+    if primary is not None:
+        carried.append(primary)
+    carried += [s for s in inventory if s.index != primary_index and omission(s) is None]
+
+    kept = tuple(
+        PlannedStream(
+            source_index=s.index,
+            ordinal=ordinal,
+            codec_type=s.codec_type,
+            codec_name=target_codec if s.index == primary_index else s.codec_name,
+            language=s.language,
+            attached_pic=s.attached_pic,
+            forced=s.forced,
+        )
+        for ordinal, s in enumerate(carried)
+    )
+
+    dropped = tuple(
+        DroppedStream(s.index, reason)
+        for s in inventory
+        if s.index != primary_index and (reason := omission(s)) is not None
+    )
+    return StreamPlan(kept=kept, dropped=dropped)
+
+
+def _map_args(plan: StreamPlan | None) -> list[str]:
+    """The `-map` arguments, in output order.
+
+    With a plan every carried stream is named by its absolute source
+    index, so which stream gets re-encoded is decided here rather than by
+    ffmpeg's input ordering. Without one, the historical selector mapping
+    stands; only the CRF search's sample encodes take that path.
+    """
+    if plan is None:
+        return list(_SELECTOR_MAPS)
+    args: list[str] = []
+    for planned in sorted(plan.kept, key=lambda p: p.ordinal):
+        args += ["-map", f"0:{planned.source_index}"]
+    return args
+
+
 # ── Quality mapping ────────────────────────────────────────────────────
 #
 # `quality` everywhere in this project is on the x265-CRF reference scale
@@ -118,31 +281,50 @@ def map_quality(codec: str, backend: str, quality: int) -> int:
 
 
 def _scale_args(target_height: int | None) -> list[str]:
-    """`-vf scale=-2:H` when the job carries a downscale: height fixed,
-    width auto and always even, aspect preserved. Software scale feeds all
-    three backends — frames pass through system memory in every builder
-    here (hardware vpp_qsv/scale_cuda is a later optimization, not v1)."""
+    """`-filter:v:0 scale=-2:H` when the job carries a downscale: height
+    fixed, width auto and always even, aspect preserved. Software scale
+    feeds all three backends — frames pass through system memory in every
+    builder here (hardware vpp_qsv/scale_cuda is a later optimization, not
+    v1).
+
+    The `:v:0` scope is not decoration. An unscoped `-vf` reaches copied
+    streams too and ffmpeg refuses the whole encode with "Filtergraph
+    'scale=-2:240' was specified, but codec copy was selected" (measured
+    2026-09-12).
+    """
     if target_height is None:
         return []
-    return ["-vf", f"scale=-2:{target_height}"]
+    return ["-filter:v:0", f"scale=-2:{target_height}"]
 
 
-# Shared tail: FIRST real video stream only (0:V:0 — capital V excludes
-# attached cover art, which `-map 0` used to feed to the video encoder,
-# killing the whole encode on the JPEG's dimensions; observed fleet-wide
-# 2026-07-20), all audio/subtitle/attachment streams, unknown-TYPE
-# streams dropped instead of fatal. Data-type (d) streams are dropped
-# DELIBERATELY: mkv's data-stream muxing support is spotty and carrying
-# them would reintroduce the exotic-stream failure class this mapping
-# exists to end (review of #88 — the original file keeps everything).
-# Copy audio/subs. Newline-terminated progress on stderr (default
-# rolling stats use \r which readline() never returns until the process
-# exits).
+# Copy everything, then let the builder's own `-c:v:0 <encoder>` override
+# that for the primary video stream: ffmpeg lets the LAST matching option
+# win, so this has to come first. Without it every stream the plan carries
+# beside the primary (a second angle, cover art, the audio) would be
+# re-encoded by the muxer's default encoder instead of copied.
+_COPY_EVERYTHING = ["-c", "copy"]
+
+# Shared tail. `-ignore_unknown` still guards the sample path, which maps
+# by selector rather than by plan; a plan never names an unknown stream in
+# the first place. Newline-terminated progress on stderr (default rolling
+# stats use \r which readline() never returns until the process exits).
 _COMMON_TAIL = [
-    "-c:a",
-    "copy",
-    "-c:s",
-    "copy",
+    "-ignore_unknown",
+    "-progress",
+    "pipe:2",
+    "-nostats",
+    "-y",
+]
+
+# What the command maps when it is built without a plan: the FIRST real
+# video stream (0:V:0, capital V excludes attached cover art, which
+# `-map 0` used to feed to the video encoder, killing the whole encode on
+# the JPEG's dimensions, observed fleet-wide 2026-07-20), then all audio,
+# subtitle and attachment streams. Only the CRF search's sample encodes
+# take this path, and its samples are single video streams by
+# construction (`-an -sn`). Everything that replaces a customer file goes
+# through a plan.
+_SELECTOR_MAPS = [
     "-map",
     "0:V:0",
     "-map",
@@ -151,11 +333,6 @@ _COMMON_TAIL = [
     "0:s?",
     "-map",
     "0:t?",
-    "-ignore_unknown",
-    "-progress",
-    "pipe:2",
-    "-nostats",
-    "-y",
 ]
 
 
@@ -169,20 +346,21 @@ def build_hevc_cpu_command(
     """Software x265. Preset slow: this is a replace-the-original archival
     encode — quality-per-byte beats throughput. 10-bit output kills banding
     even from 8-bit sources. Anime gets aq-mode=3 (mandatory for banding)."""
-    x265_params = ["-x265-params", "aq-mode=3"] if content == "anime" else []
+    x265_params = ["-x265-params:v:0", "aq-mode=3"] if content == "anime" else []
     return [
         "ffmpeg",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "libx265",
-        "-crf",
+        "-crf:v:0",
         str(map_quality("hevc", "cpu", quality)),
-        "-preset",
+        "-preset:v:0",
         "slow",
         *x265_params,
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
@@ -209,18 +387,19 @@ def build_hevc_qsv_command(
         "/dev/dri/renderD128",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "hevc_qsv",
-        "-global_quality",
+        "-global_quality:v:0",
         str(map_quality("hevc", "qsv", quality)),
-        "-preset",
+        "-preset:v:0",
         "fast",
-        "-look_ahead",
+        "-look_ahead:v:0",
         "1",
-        "-low_power",
+        "-low_power:v:0",
         "0",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "p010le",
         *_COMMON_TAIL,
         output_path,
@@ -242,20 +421,21 @@ def build_hevc_nvenc_command(
         "cuda",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "hevc_nvenc",
-        "-cq",
+        "-cq:v:0",
         str(map_quality("hevc", "nvenc", quality)),
-        "-preset",
+        "-preset:v:0",
         "p7",
-        "-tune",
+        "-tune:v:0",
         "hq",
-        "-rc",
+        "-rc:v:0",
         "vbr",
-        "-b:v",
+        "-b:v:0",
         "0",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "p010le",
         *_COMMON_TAIL,
         output_path,
@@ -275,16 +455,17 @@ def build_av1_cpu_command(
         "ffmpeg",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "libsvtav1",
-        "-crf",
+        "-crf:v:0",
         str(map_quality("av1", "cpu", quality)),
-        "-preset",
+        "-preset:v:0",
         "6",
-        "-svtav1-params",
+        "-svtav1-params:v:0",
         "tune=0:scm=0",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
@@ -305,22 +486,23 @@ def build_av1_nvenc_command(
         "cuda",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "av1_nvenc",
-        "-cq",
+        "-cq:v:0",
         str(map_quality("av1", "nvenc", quality)),
-        "-preset",
+        "-preset:v:0",
         "p7",
-        "-tune",
+        "-tune:v:0",
         "hq",
-        "-rc",
+        "-rc:v:0",
         "vbr",
-        "-b:v",
+        "-b:v:0",
         "0",
-        "-multipass",
+        "-multipass:v:0",
         "fullres",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "p010le",
         *_COMMON_TAIL,
         output_path,
@@ -344,14 +526,15 @@ def build_av1_qsv_command(
         "/dev/dri/renderD128",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "av1_qsv",
-        "-global_quality",
+        "-global_quality:v:0",
         str(map_quality("av1", "qsv", quality)),
-        "-preset",
+        "-preset:v:0",
         "veryslow",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "p010le",
         *_COMMON_TAIL,
         output_path,
@@ -373,12 +556,13 @@ def build_hevc_quadra_command(
         "ffmpeg",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "h265_ni_quadra_enc",
-        "-xcoder-params",
+        "-xcoder-params:v:0",
         f"RcEnable=0:crf={map_quality('hevc', 'quadra', quality)}",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
@@ -399,12 +583,13 @@ def build_av1_quadra_command(
         "ffmpeg",
         "-i",
         input_path,
-        "-c:v",
+        *_COPY_EVERYTHING,
+        "-c:v:0",
         "av1_ni_quadra_enc",
-        "-xcoder-params",
+        "-xcoder-params:v:0",
         f"RcEnable=0:crf={map_quality('av1', 'quadra', quality)}",
         *_scale_args(target_height),
-        "-pix_fmt",
+        "-pix_fmt:v:0",
         "yuv420p10le",
         *_COMMON_TAIL,
         output_path,
@@ -434,7 +619,7 @@ def build_encode_command(
     *,
     content: str | None = None,
     target_height: int | None = None,
-    drop_sub_streams: Sequence[int] = (),
+    plan: StreamPlan | None = None,
 ) -> list[str]:
     """Build the ffmpeg command for the given (codec, backend) pair.
 
@@ -445,8 +630,10 @@ def build_encode_command(
         content: Optional content hint ('anime' enables x265 aq-mode=3).
         target_height: Downscale height (`scale=-2:H`); None = keep source
             resolution (pre-feature identical).
-        drop_sub_streams: Per-type subtitle indexes to exclude via
-            negative mapping (see unmuxable_subtitle_indexes).
+        plan: What to do with every source stream (see plan_streams).
+            Required of anything that replaces a customer's file; None
+            falls back to the selector mapping, which only the CRF
+            search's single-video samples use.
     """
     builder = ENCODER_BUILDERS.get((codec, backend))
     if builder is None:
@@ -455,13 +642,10 @@ def build_encode_command(
             f" Valid: {sorted(ENCODER_BUILDERS.keys())}"
         )
     cmd = builder(input_path, output_path, quality, content, target_height)
-    if drop_sub_streams:
-        # Negative maps must follow the inclusive maps — insert just
-        # before the shared tail's -progress marker.
-        i = cmd.index("-progress")
-        for n in drop_sub_streams:
-            cmd[i:i] = ["-map", f"-0:s:{n}"]
-            i += 2
+    # The maps sit just before the tail's -progress marker, after the
+    # codec options they belong with.
+    i = cmd.index("-progress")
+    cmd[i:i] = _map_args(plan)
     return cmd
 
 

@@ -89,7 +89,14 @@ LOCK → TRANSCODE → VERIFY → COMPARE → SWAP → CONFIRM → CLEANUP → U
 VERIFY does an ffprobe AND a real decode of frames at three offsets — files
 ffprobe accepts but that won't decode are caught here, and any decoder or
 demuxer complaint fails the step (ffmpeg exits 0 after recoverable errors,
-so the exit code alone is not a verdict). COMPARE checks size
+so the exit code alone is not a verdict). COMPARE checks the stream
+inventory first: the encoder declares a plan (`plan_streams`) naming
+which source stream lands on which output position and which are left
+out on purpose, `run_pipeline` holds it against its own
+`stream_inventory` probe of the source so every source index is
+accounted for exactly once, and the finished output has to match the
+plan as an ordered sequence, or `StreamLossError` ends the job SKIPPED
+with the original kept. COMPARE then checks size
 (larger than source → `SizeRegressionError`) and, when the job carries a
 target VMAF, the quality gate: full-file VMAF (resolution-matched model,
 worst-scenes perc5 pooling, `worker/vmaf.py`) must clear the **absolute

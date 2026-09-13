@@ -29,6 +29,8 @@
                 <span class="forge-pill forge-pill--failed">Size regression</span>
                 {% elif f.skip_reason == 'below_vmaf_floor' %}
                 <span class="forge-pill forge-pill--failed" title="The encode's measured VMAF fell below the quality floor. The original was kept.">Below VMAF floor</span>
+                {% elif f.skip_reason == 'stream_loss' %}
+                <span class="forge-pill forge-pill--failed" title="The encode would not have carried every stream in the file. The original was kept.">Stream loss</span>
                 {% elif f.skip_reason == 'too_small' %}
                 <span class="forge-pill forge-pill--caution">Too small</span>
                 {% elif f.skip_reason == 'manual_skip' %}

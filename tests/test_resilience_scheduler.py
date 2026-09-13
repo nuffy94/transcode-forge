@@ -178,6 +178,37 @@ async def test_duplicate_skipped_records_single_skip(client: AsyncClient, app):
     assert job.status == JobStatus.SKIPPED
 
 
+async def test_stream_loss_skip_reason_is_accepted(client: AsyncClient, app):
+    """A worker that refuses to replace a file because the encode would
+    lose a stream must be able to say so. An unrecognized reason is a 422,
+    and the worker's outbox DISCARDS a 422 entry, so the job would sit
+    ACTIVE until orphan requeue and repeat forever. Scheduler ships first.
+    """
+    from transcode_forge.repos import skipped as skip_repo
+
+    db = app.state.db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        job_id, headers = await _claimed_job(client, app, c, "stream-loss")
+        body = {
+            "reason": "stream_loss",
+            "error_message": "[COMPARE] the output is missing #4 video png",
+            "backend_used": "cpu",
+            "resolved_crf": 21,
+        }
+        r = await c.post(f"/api/worker/job/{job_id}/skipped", json=body, headers=headers)
+        assert r.status_code == 204, r.text
+
+    files, total = await skip_repo.list_skipped(db, reason="stream_loss")
+    assert total == 1
+    assert files[0].file_path.endswith("stream-loss.mkv")
+    job = await job_repo.get_job(db, job_id)
+    assert job.status == JobStatus.SKIPPED
+    # The dropped-stream list rides on the job row; skipped_files has no
+    # message column, so this is the only place it is readable.
+    assert "#4 video png" in (job.error_message or "")
+
+
 async def test_duplicate_failed_is_noop(client: AsyncClient, app):
     db = app.state.db
     transport = ASGITransport(app=app)

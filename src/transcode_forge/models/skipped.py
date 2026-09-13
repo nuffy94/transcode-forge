@@ -14,6 +14,7 @@ class SkipReason(StrEnum):
     TOO_SMALL = "too_small"
     MANUAL_SKIP = "manual_skip"
     BELOW_VMAF_FLOOR = "below_vmaf_floor"
+    STREAM_LOSS = "stream_loss"
 
 
 class SkippedFile(BaseModel):

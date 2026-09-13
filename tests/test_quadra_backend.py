@@ -37,7 +37,7 @@ from transcode_forge.worker.hardware import (
 def test_builder_resolves_ni_quadra_encoder(codec, expected_encoder):
     """D6: build_encode_command(codec, 'quadra', ...) emits the ni encoder."""
     cmd = build_encode_command(codec, "quadra", "in.mkv", "out.mkv", quality=20)
-    assert cmd[cmd.index("-c:v") + 1] == expected_encoder
+    assert cmd[cmd.index("-c:v:0") + 1] == expected_encoder
 
 
 @pytest.mark.parametrize("codec", ["hevc", "av1"])
@@ -53,7 +53,7 @@ def test_quadra_crf_mode_disables_default_rc(codec):
     """D4: RcEnable=0 must ride with crf= — without it the encoder's
     default rate controller runs and the crf value is silently ignored."""
     cmd = build_encode_command(codec, "quadra", "in.mkv", "out.mkv", quality=20)
-    params = cmd[cmd.index("-xcoder-params") + 1]
+    params = cmd[cmd.index("-xcoder-params:v:0") + 1]
     assert "RcEnable=0" in params.split(":")
 
 
@@ -68,7 +68,7 @@ def test_quadra_downscale_passes_through():
 
 def _crf_of(cmd: list[str]) -> int:
     """Extract the crf value from the -xcoder-params bag."""
-    params = cmd[cmd.index("-xcoder-params") + 1]
+    params = cmd[cmd.index("-xcoder-params:v:0") + 1]
     for part in params.split(":"):
         if part.startswith("crf="):
             return int(part.removeprefix("crf="))

@@ -274,11 +274,18 @@ class FailedRequest(BaseModel):
 
 
 class SkippedRequest(BaseModel):
-    """A skip outcome the worker decided (VMAF gate / size regression) —
-    the original file was kept; this is not a retryable failure."""
+    """A skip outcome the worker decided (VMAF gate / size regression /
+    stream loss). The original file was kept; this is not a retryable
+    failure.
+
+    A worker reporting a reason this scheduler does not know gets a 422,
+    and the worker's outbox discards a 422 entry, so the job strands until
+    orphan requeue and repeats. Any new reason lands here first, and the
+    scheduler is upgraded before the workers that send it.
+    """
 
     claim_token: str | None = _CLAIM_TOKEN_FIELD
-    reason: str = Field(pattern=r"^(below_vmaf_floor|size_regression)$")
+    reason: str = Field(pattern=r"^(below_vmaf_floor|size_regression|stream_loss)$")
     error_message: str = ""
     achieved_vmaf: float | None = Field(default=None, ge=0.0, le=100.0)
     # Skip diagnostics (None for pre-decoupling workers): gate-skips are

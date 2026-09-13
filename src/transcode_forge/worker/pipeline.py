@@ -5,7 +5,10 @@ Steps:
 2. TRANSCODE — ffmpeg → .tf_tmp file (optionally preceded by a
                target-VMAF CRF search on short samples)
 3. VERIFY    — ffprobe output: duration match, codec correct, file > 0
-4. COMPARE   — output_size < source_size (skip if bigger) AND, when a
+4. COMPARE   — the output carries exactly the streams the encode plan
+               promised, in the planned order (StreamLossError → SKIPPED,
+               original kept) AND output_size < source_size (skip if
+               bigger) AND, when a
                target VMAF is set, the quality gate: full-file VMAF with
                the resolution-matched model must clear the absolute safety
                floors (mean ≥ vmaf_safety_mean AND worst-scenes perc5 ≥
@@ -35,16 +38,21 @@ that local path is passed here.
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from transcode_forge.models.job import JobPhase
-from transcode_forge.scanner.probe import ProbeError, ffprobe
+from transcode_forge.scanner.probe import ProbeError, StreamInfo, ffprobe, stream_inventory
 from transcode_forge.worker.encoder import (
+    PlannedStream,
+    StreamPlan,
     build_encode_command,
     map_quality,
+    plan_streams,
+    primary_video_index,
     run_encode,
     unmuxable_subtitle_indexes,
 )
@@ -148,6 +156,168 @@ class VmafGateError(PipelineError):
         )
 
 
+class StreamLossError(PipelineError):
+    """Raised when the encode would not carry every stream of the source.
+
+    The outcome is SKIP (keep the original, never replace) for the same
+    reason as SizeRegressionError: the encode is a valid file we refuse to
+    keep, not a broken one, and a retry reproduces it forever. Carries the
+    names of the streams that would go, so the skip explains itself on the
+    job row.
+    """
+
+    def __init__(
+        self,
+        step: str,
+        detail: str,
+        missing: Sequence[str],
+        *,
+        resolved_crf: int | None = None,
+        backend: str | None = None,
+    ):
+        self.missing = tuple(missing)
+        self.resolved_crf = resolved_crf
+        self.backend = backend
+        super().__init__(step, f"{detail}: {'; '.join(missing)}. Keeping the original.")
+
+
+def _describe(stream: StreamInfo) -> str:
+    """How a source stream is named in a skip message."""
+    language = f" [{stream.language}]" if stream.language else ""
+    picture = " (attached picture)" if stream.attached_pic else ""
+    return f"#{stream.index} {stream.codec_type} {stream.codec_name}{language}{picture}"
+
+
+def _describe_planned(planned: PlannedStream) -> str:
+    """How a planned output stream is named in a skip message."""
+    language = f" [{planned.language}]" if planned.language else ""
+    picture = " (attached picture)" if planned.attached_pic else ""
+    return (
+        f"#{planned.source_index} {planned.codec_type} {planned.codec_name}"
+        f"{language}{picture} at output position {planned.ordinal}"
+    )
+
+
+def _inventory_key(
+    codec_type: str, codec_name: str, language: str, attached_pic: bool, forced: bool
+) -> tuple[str, str, str, bool, bool]:
+    """The smallest description that tells real loss from a muxer rewrite.
+
+    Position carries the ordinal (these keys are compared as an ordered
+    sequence), so two tracks alike on every attribute still cannot stand
+    in for each other. Title and the default disposition are out on
+    purpose: a copy through matroska rewrites both.
+    """
+    return (codec_type, codec_name, language, attached_pic, forced)
+
+
+def _covers_in_order(
+    promised: Sequence[tuple[str, str, str, bool, bool]],
+    produced: Sequence[tuple[str, str, str, bool, bool]],
+) -> bool:
+    """True when every promised key appears in produced, in that order."""
+    remaining = iter(produced)
+    return all(any(candidate == key for candidate in remaining) for key in promised)
+
+
+def _check_plan_covers_source(
+    inventory: Sequence[StreamInfo],
+    plan: StreamPlan,
+    *,
+    resolved_crf: int | None,
+    backend: str | None,
+) -> None:
+    """Every source stream must be either carried or named as dropped.
+
+    This runs before ffmpeg does: a plan that cannot account for the whole
+    source is a lossy encode we already know about, so there is no reason
+    to spend the encode first.
+    """
+    accounted = Counter(plan.accounted_indexes)
+    missing = [_describe(s) for s in inventory if accounted[s.index] == 0]
+    if missing:
+        raise StreamLossError(
+            "TRANSCODE",
+            "the encode would leave source streams behind",
+            missing,
+            resolved_crf=resolved_crf,
+            backend=backend,
+        )
+    source_indexes = {s.index for s in inventory}
+    confused = sorted(i for i, n in accounted.items() if n > 1 or i not in source_indexes)
+    if confused:
+        raise PipelineError(
+            "TRANSCODE",
+            f"Stream plan is malformed: source indexes {confused} are counted"
+            " twice or do not exist. Refusing to encode against it.",
+        )
+
+
+async def _verify_stream_inventory(
+    output_path: Path,
+    plan: StreamPlan,
+    *,
+    resolved_crf: int | None,
+    backend: str | None,
+) -> None:
+    """The output must be exactly the streams the plan promised, in order."""
+    try:
+        actual = await stream_inventory(output_path)
+    except ProbeError as e:
+        raise PipelineError(
+            "COMPARE", f"Could not list the output's streams, so it cannot be trusted: {e}"
+        ) from e
+
+    promised = tuple(
+        _inventory_key(p.codec_type, p.codec_name, p.language, p.attached_pic, p.forced)
+        for p in sorted(plan.kept, key=lambda p: p.ordinal)
+    )
+    produced = tuple(
+        _inventory_key(s.codec_type, s.codec_name, s.language, s.attached_pic, s.forced)
+        for s in actual
+    )
+    # Every planned stream has to be there, in the planned order. A stream
+    # the muxer added on its own is not a loss: an mp4 with chapters comes
+    # back with a fresh chapter track written from the chapter metadata
+    # (measured 2026-09-12), and refusing that encode would skip every
+    # chapter-bearing file in a library.
+    if _covers_in_order(promised, produced):
+        if len(produced) > len(promised):
+            logger.info(
+                "[COMPARE] Output carries %d stream(s) the plan did not name; the muxer added them",
+                len(produced) - len(promised),
+            )
+        return
+
+    # Which planned streams are simply not there (a multiset difference, so
+    # one of two identical tracks going missing is one report, not two).
+    remaining = Counter(produced)
+    lost: list[str] = []
+    for planned in sorted(plan.kept, key=lambda p: p.ordinal):
+        key = _inventory_key(
+            planned.codec_type,
+            planned.codec_name,
+            planned.language,
+            planned.attached_pic,
+            planned.forced,
+        )
+        if remaining[key] > 0:
+            remaining[key] -= 1
+        else:
+            lost.append(_describe_planned(planned))
+    if not lost:
+        lost = [
+            f"the output holds all {len(promised)} planned streams but not in the planned order"
+        ]
+    raise StreamLossError(
+        "COMPARE",
+        "the output does not carry every planned stream",
+        lost,
+        resolved_crf=resolved_crf,
+        backend=backend,
+    )
+
+
 async def run_pipeline(
     *,
     source_path: str,
@@ -206,6 +376,8 @@ async def run_pipeline(
         PipelineError: If any step fails (original file is always safe).
         SizeRegressionError: If output is larger than source (skip outcome).
         VmafGateError: If measured VMAF is below the floor (skip outcome).
+        StreamLossError: If the encode would not carry every source stream
+            (skip outcome).
     """
     src = Path(source_path)
     src_stat = await asyncio.to_thread(src.stat)
@@ -270,6 +442,20 @@ async def run_pipeline(
         tmp_path = own.tmp_path
         logger.info("[LOCK] Acquired: %s", own.lock_path)
 
+        # The source's streams, probed here and nowhere else. This is the
+        # reference the encode plan is held against, and it also names the
+        # one video stream that is going to be re-encoded, so the CRF
+        # search samples that stream and not whichever one ffmpeg's
+        # default selection would have preferred.
+        try:
+            source_streams = await stream_inventory(src)
+        except ProbeError as e:
+            raise PipelineError(
+                "TRANSCODE",
+                f"Could not list the source's streams, so nothing can promise to keep them: {e}",
+            ) from e
+        primary_index = primary_video_index(source_streams)
+
         # Optional pre-step: target-VMAF quality search on short samples.
         # Any failure here falls back to the fixed preset — the full-file
         # gate below still has the final word on quality.
@@ -310,6 +496,7 @@ async def run_pipeline(
                     duration=source_duration,
                     height=source_height,
                     target_height=target_height,
+                    primary_index=primary_index,
                     on_probe=_on_probe if phase_progress_callback is not None else None,
                 )
                 if search is not None:
@@ -339,15 +526,21 @@ async def run_pipeline(
                 "no identifiable codec; matroska cannot copy them",
                 drop_subs,
             )
+        # The plan is the contract: which source stream lands on which
+        # output position, and which are left out on purpose. Its reference
+        # is the inventory probed above, never the builder's account of
+        # itself.
+        plan = plan_streams(source_streams, target_codec=codec, drop_sub_streams=drop_subs)
+        _check_plan_covers_source(source_streams, plan, resolved_crf=resolved_crf, backend=backend)
         cmd = build_encode_command(
             codec,
             backend,
             str(src),
             str(tmp_path),
             quality,
-            drop_sub_streams=drop_subs,
             content=content,
             target_height=target_height,
+            plan=plan,
         )
         result = await run_encode(
             cmd,
@@ -365,7 +558,12 @@ async def run_pipeline(
         )
         logger.info("[VERIFY] Output verified: codec=%s, duration OK", codec)
 
-        # Step 4: COMPARE — size first, then the quality gate.
+        # Step 4: COMPARE — the stream inventory first (a file that lost a
+        # track is not a candidate at any size or score), then size, then
+        # the quality gate.
+        await _verify_stream_inventory(tmp_path, plan, resolved_crf=resolved_crf, backend=backend)
+        logger.info("[COMPARE] Output carries all %d planned streams", len(plan.kept))
+
         output_size = (await asyncio.to_thread(tmp_path.stat)).st_size
         if output_size >= source_size:
             raise SizeRegressionError(
@@ -528,6 +726,13 @@ async def _decode_check(path: Path, duration: float) -> None:
     exit OR any stderr fails VERIFY (ledger R-005). Damage the decoder
     never notices (a clean decode of a garbage picture) is the VMAF
     gate's job, not this check's.
+
+    The `-map 0:v:0` is what makes this check read the stream that was
+    re-encoded. Outputs carry copied video streams now, and ffmpeg's
+    default selection prefers the default disposition and then the larger
+    frame, so without the map a copied second angle gets decoded instead
+    and damage in the primary reaches SWAP unseen (measured 2026-09-12).
+    The plan puts the primary at v:0 for exactly this reason.
     """
     if duration < DECODE_SAMPLE_SECONDS * 1.5:
         # File too short to bother sampling — decode the whole thing once.
@@ -548,6 +753,8 @@ async def _decode_check(path: Path, duration: float) -> None:
             str(path),
             "-t",
             f"{sample:.2f}",
+            "-map",
+            "0:v:0",
             "-an",
             "-sn",
             "-f",
