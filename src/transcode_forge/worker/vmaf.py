@@ -77,11 +77,25 @@ class VmafUnavailableError(VmafError):
 
 @dataclass(frozen=True)
 class VmafScore:
-    """Pooled VMAF metrics for one comparison."""
+    """Pooled VMAF metrics for one comparison. Every field is finite.
+
+    libvmaf can write NaN or Infinity into its JSON log and Python's json
+    parser accepts both literals. Every check the gate makes is a "below
+    the floor" comparison, and those are False for NaN and for +inf, so a
+    nonfinite score used to pass the gate and let the encode replace the
+    original. Refusing the value here means no caller has to remember
+    that: the gate, the CRF search and the job report all take their
+    numbers from this type.
+    """
 
     mean: float
     perc5: float
     min: float
+
+    def __post_init__(self) -> None:
+        for name, value in (("mean", self.mean), ("perc5", self.perc5), ("min", self.min)):
+            if not math.isfinite(value):
+                raise VmafError(f"VMAF {name} is not a finite number: {value!r}")
 
 
 @dataclass(frozen=True)
@@ -332,7 +346,10 @@ async def measure_vmaf(
         try:
             data = json.loads(log_path.read_text(encoding="utf-8"))
             scores = [float(frame["metrics"]["vmaf"]) for frame in data["frames"]]
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            # ValueError covers json.JSONDecodeError and a score field that
+            # is not a number at all ("N/A", ""). A score we cannot read is
+            # a measurement failure, never a pass.
             raise VmafError(f"Could not parse VMAF log: {exc}") from exc
 
     score = _pool(scores)
