@@ -17,8 +17,7 @@ import json
 import logging
 import os
 import stat
-import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -169,8 +168,8 @@ class FilesystemBackend:
     async def cleanup(self, job: Any) -> None:
         """Clean up temporary resources after a job.
 
-        For filesystem backend, the pipeline's finally block already
-        deletes .tf_lock and .tf_tmp files, so this is a no-op.
+        For filesystem backend, the pipeline's owned transaction already
+        deletes .tf_tmp and .tf_lock at its exit, so this is a no-op.
 
         Args:
             job: Job dict (unused).
@@ -213,6 +212,24 @@ def _acquire_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
         ) from None
 
 
+def _lock_matches(lock_path: Path, *, job_id: str, worker_id: str) -> bool:
+    """True when the lock on disk still carries this job and worker.
+
+    Having acquired a lock once is not the same as still holding it: a
+    recovery scan elsewhere can revoke a lock it judges stale, and a
+    successor can then take the path. Every write to a lock we believe is
+    ours reads it first and acts only on a match, so a successor's lock is
+    never stamped with our identity and never deleted by us.
+    """
+    try:
+        content = json.loads(lock_path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(content, dict):
+        return False
+    return content.get("job_id") == job_id and content.get("worker_id") == worker_id
+
+
 def _touch_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
     """Atomically refresh the lock's timestamp (the lock heartbeat).
 
@@ -242,37 +259,6 @@ def _touch_lock(lock_path: Path, *, job_id: str, worker_id: str) -> None:
         raise
 
 
-class LockHeartbeatGuard:
-    """Serializes lock touches against the final unlock.
-
-    Cancelling a task awaiting ``asyncio.to_thread`` does NOT wait for the
-    underlying OS thread — an in-flight ``_touch_lock`` can complete AFTER
-    the pipeline's finally block deleted the lock, resurrecting it with a
-    fresh timestamp (other workers then treat the path as "active" for
-    the whole stale window). The guard makes that impossible at the thread level: ``stop()``
-    takes the same mutex as every touch, so it returns only once any
-    in-flight touch has finished, and every later touch no-ops.
-    """
-
-    def __init__(self) -> None:
-        self._mutex = threading.Lock()
-        self._stopped = False
-
-    def touch(self, lock_path: Path, *, job_id: str, worker_id: str) -> None:
-        """Refresh the lock unless the guard has been stopped."""
-        with self._mutex:
-            if self._stopped:
-                return
-            _touch_lock(lock_path, job_id=job_id, worker_id=worker_id)
-
-    def stop(self) -> None:
-        """Block until any in-flight touch finishes; all later touches no-op.
-
-        Call (via a thread) BEFORE deleting the lock file."""
-        with self._mutex:
-            self._stopped = True
-
-
 def pipeline_artifacts(src: Path) -> tuple[Path, Path, Path]:
     """(lock, tmp, bak) sidecar paths for a source file — the single
     source of truth for the pipeline's artifact naming
@@ -283,10 +269,18 @@ def pipeline_artifacts(src: Path) -> tuple[Path, Path, Path]:
     return lock, tmp, bak
 
 
-def _atomic_swap(original: Path, tmp: Path, bak: Path) -> None:
+def _atomic_swap(
+    original: Path, tmp: Path, bak: Path, *, on_mutating: Callable[[], None] | None = None
+) -> None:
     """Rename original → bak, then tmp → original.
 
     If the second rename fails, restore bak → original.
+
+    ``on_mutating`` fires inside this thread immediately before the first
+    rename and after the pre-existing-backup refusal, so an owning
+    transaction learns the source path is mid-mutation even when the
+    caller was cancelled during the rename, and never treats a refusal it
+    made before touching anything as a mutation to roll back.
     """
     from transcode_forge.worker.pipeline import PipelineError
 
@@ -299,6 +293,9 @@ def _atomic_swap(original: Path, tmp: Path, bak: Path) -> None:
             f"Pre-existing backup at {bak} — refusing to overwrite it. "
             "Verify the media file plays, then delete the backup manually.",
         )
+
+    if on_mutating is not None:
+        on_mutating()
 
     try:
         original.rename(bak)
@@ -323,14 +320,22 @@ def _atomic_swap(original: Path, tmp: Path, bak: Path) -> None:
         raise PipelineError("SWAP", f"Failed to rename tmp to original: {e}") from e
 
 
-def _rollback_swap(original: Path, bak: Path) -> None:
-    """Restore backup to original position after a failed confirmation."""
+def _rollback_swap(original: Path, bak: Path) -> bool:
+    """Restore backup to original position after a failed confirmation.
+
+    Returns True when the original is in place (restored, or there was no
+    backup to restore) and False when the restore itself failed. A caller
+    that released ownership on a False would hand out a path in an
+    unknown state, so the outcome has to be visible rather than logged
+    and swallowed.
+    """
     if not bak.exists():
-        return
+        return True
     try:
         # Path.replace() is atomic on most filesystems — no TOCTOU race
         bak.replace(original)
         logger.info("[ROLLBACK] Backup restored to original")
+        return True
     except OSError as e:
         logger.critical(
             "[ROLLBACK] MANUAL INTERVENTION REQUIRED: backup=%s, original=%s, error=%s",
@@ -338,6 +343,7 @@ def _rollback_swap(original: Path, bak: Path) -> None:
             original,
             e,
         )
+        return False
 
 
 def _preserve_metadata(path: Path, src_stat: os.stat_result) -> None:
