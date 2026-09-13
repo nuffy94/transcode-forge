@@ -1,6 +1,7 @@
 """Job repository — CRUD operations for transcode jobs."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import aiosqlite
 
@@ -182,6 +183,7 @@ _VALID_JOB_COLUMNS = frozenset(
         "backend_used",
         "status",
         "worker_id",
+        "claim_token",
         "progress",
         "phase",
         "phase_pct",
@@ -221,18 +223,39 @@ async def update_job(db: DBConnection, job_id: str, **fields: object) -> Job | N
     return await get_job(db, job_id)
 
 
+def _attempt_fence(claim_token: str | None) -> tuple[str, list[object]]:
+    """The `AND claim_token = ?` half of an attempt-scoped statement.
+
+    Built in Python rather than as `(? IS NULL OR claim_token = ?)` for
+    two reasons: a caller with no token is a worker that predates the
+    column and must keep the old worker-id-only rule, and asyncpg needs a
+    CAST on any bound parameter compared with IS NULL. No clause, no cast.
+    """
+    if claim_token is None:
+        return "", []
+    return " AND claim_token = ?", [claim_token]
+
+
 async def finalize_job(
-    db: DBConnection, job_id: str, worker_id: str, status: JobStatus, **fields: object
+    db: DBConnection,
+    job_id: str,
+    worker_id: str,
+    status: JobStatus,
+    *,
+    claim_token: str | None = None,
+    **fields: object,
 ) -> bool:
     """Atomically transition an owned job to a terminal status.
 
     The single conditional UPDATE is the fence a check-then-act guard
     cannot be (worker-resilience spec D3): it succeeds only while the job
-    is still non-terminal AND still owned by the reporting worker, so of
-    two concurrent terminal reports exactly one wins — and a report can
-    never stomp a job the reconciliation sweep requeued (worker_id NULL)
-    or another worker re-claimed mid-request. Returns False when the
-    transition lost; the caller re-reads and answers 204/409/403.
+    is still non-terminal AND still owned by the reporting worker AND
+    still running the attempt the report names, so of two concurrent
+    terminal reports exactly one wins — and a report can never stomp a
+    job the reconciliation sweep requeued (worker_id NULL), another
+    worker re-claimed mid-request, or the SAME worker re-claimed as a new
+    attempt (R-020). Returns False when the transition lost; the caller
+    re-reads and answers 204/409/403.
     """
     invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
     if invalid_cols:
@@ -242,11 +265,52 @@ async def finalize_job(
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = [v.value if isinstance(v, JobStatus) else v for v in fields.values()]
     placeholders_terminal = ",".join("?" * len(TERMINAL_JOB_STATUSES))
+    fence, fence_params = _attempt_fence(claim_token)
     cur = await db.execute(
         f"UPDATE jobs SET status = ?, {set_clause}"
         " WHERE id = ? AND worker_id = ?"
+        f"{fence}"
         f" AND status NOT IN ({placeholders_terminal})",
-        [status.value, *values, job_id, worker_id, *TERMINAL_JOB_STATUSES],
+        [status.value, *values, job_id, worker_id, *fence_params, *TERMINAL_JOB_STATUSES],
+    )
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def report_progress(
+    db: DBConnection,
+    job_id: str,
+    worker_id: str,
+    *,
+    claim_token: str | None = None,
+    **fields: object,
+) -> bool:
+    """Write progress for an attempt, in one conditional statement.
+
+    The same fence as finalize_job, for the non-terminal half of the
+    protocol. Progress used to be a check-then-act pair (verify the
+    owner, then UPDATE by id alone), so a release landing between the two
+    wrote a previous attempt's progress and phase onto the new owner's
+    job — and, worse, kept bumping updated_at, which is the column both
+    reconciliation sweeps time their cutoff against. Returns False when
+    the row is no longer running this attempt; the caller answers 403 and
+    publishes nothing.
+    """
+    invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
+    if invalid_cols:
+        raise ValueError(f"Invalid job column names: {invalid_cols}")
+
+    fields["updated_at"] = datetime.now(UTC).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = [v.value if isinstance(v, JobStatus) else v for v in fields.values()]
+    placeholders_active = ",".join("?" * len(ACTIVE_JOB_STATUSES))
+    fence, fence_params = _attempt_fence(claim_token)
+    cur = await db.execute(
+        f"UPDATE jobs SET {set_clause}"
+        " WHERE id = ? AND worker_id = ?"
+        f"{fence}"
+        f" AND status IN ({placeholders_active})",
+        [*values, job_id, worker_id, *fence_params, *ACTIVE_JOB_STATUSES],
     )
     await db.commit()
     return bool(cur.rowcount)
@@ -325,8 +389,8 @@ async def requeue_orphan_active_jobs(
     placeholders_active = ",".join("?" * len(active))
     placeholders_alive = ",".join("?" * len(alive))
     sql = (
-        "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, phase = NULL, updated_at = ?"
+        "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
+        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})"
@@ -440,8 +504,8 @@ async def requeue_abandoned_active_jobs(
     placeholders_active = ",".join("?" * len(active))
     condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
     sql = (
-        "UPDATE jobs SET status = ?, worker_id = NULL, started_at = NULL,"
-        " progress = 0, phase = NULL, updated_at = ?"
+        "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
+        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})" + condition + " )"
@@ -488,15 +552,22 @@ async def claim_next_job(
     Downscale jobs (target_height set) follow the same rule keyed on
     supports_downscale: a worker that didn't advertise it would encode at
     source resolution, silently ignoring the request.
+
+    The same statement stamps the attempt's claim_token and takes the job
+    straight to TRANSCODING (R-020). Claiming into ASSIGNED and bumping
+    it afterwards was a second, unfenced write by job id alone: a cancel
+    or a release landing in that window was stomped back to TRANSCODING.
+    One statement has no window.
     """
     codecs = supported_codecs or ["hevc"]
     now = datetime.now(UTC).isoformat()
+    claim_token = str(uuid4())
     lock_clause = " FOR UPDATE SKIP LOCKED" if db.dialect == "postgres" else ""
     codec_placeholders = ",".join("?" * len(codecs))
     waiting_placeholders = ",".join("?" * len(WAITING_JOB_STATUSES))
     downscale_clause = "" if supports_downscale else " AND target_height IS NULL"
     sql = f"""UPDATE jobs
-        SET status = ?, worker_id = ?, started_at = ?, updated_at = ?
+        SET status = ?, worker_id = ?, claim_token = ?, started_at = ?, updated_at = ?
         WHERE id = (
             SELECT id FROM jobs
             WHERE status IN ({waiting_placeholders})
@@ -508,8 +579,9 @@ async def claim_next_job(
     async with db.execute(
         sql,
         (
-            JobStatus.ASSIGNED.value,
+            JobStatus.TRANSCODING.value,
             worker_id,
+            claim_token,
             now,
             now,
             *WAITING_JOB_STATUSES,

@@ -103,6 +103,12 @@ class Job(BaseModel):
     backend_used: str | None = None
     status: JobStatus = JobStatus.PENDING
     worker_id: str | None = None
+    # Identity of the attempt that owns the job (migration 0017): a fresh
+    # value on every claim, NULL on every release. Reports carry it so a
+    # previous attempt's report cannot land on the attempt that replaced
+    # it. Excluded from serialization — it is a capability, handed to the
+    # claiming worker alone on the claim response, never to the UI.
+    claim_token: str | None = Field(default=None, exclude=True)
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
     # Pipeline phase (JobPhase value) — NULL until a phase-aware worker
     # reports one; the dashboard falls back to the plain meter row.

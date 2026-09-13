@@ -61,6 +61,10 @@ async def _make_agent(
         capabilities=["cpu"],
         supported_codecs=["hevc"],
         supports_downscale=True,
+        # Like the real agent: this build stamps its claim token into
+        # every report, so the scheduler holds it to that (R-020) and
+        # the whole contract suite below runs under the fenced regime.
+        sends_claim_token=True,
         ffmpeg_version="7.1",
         max_concurrent=1,
     )
@@ -80,7 +84,19 @@ async def _queue_and_claim(client: AsyncClient, app, agent: HttpWorkerAgent, nam
     assert file_id_resp.status_code == 200
     job_dict = await agent._client.claim_job(worker_id=agent.worker_id)
     assert job_dict is not None
+    # What the job loop does with a claim response, minus the loop.
+    agent._claim_token = job_dict.get("_claim_token")
     return Job.model_validate(job_dict)
+
+
+def _journal(agent: HttpWorkerAgent, job_id: str, kind: str, payload: dict) -> None:
+    """Append to the outbox the way _deliver does, token and all.
+
+    Tests that hand-build a journal entry are standing in for a report
+    the agent already wrote, so they have to carry the same stamp: an
+    entry without one is a DIFFERENT case (a worker that never claimed
+    this attempt), and the scheduler rightly refuses it."""
+    agent.outbox.append(job_id, kind, {"claim_token": agent._claim_token, **payload})
 
 
 async def _file_id(db, path: str) -> str:
@@ -224,6 +240,23 @@ async def test_restart_drains_before_register_and_claim(client: AsyncClient, app
 # ── Contract 4 — duplicate delivery is settled by idempotent receipt ────────
 
 
+async def test_report_journal_carries_the_attempt_token(client: AsyncClient, app, tmp_path):
+    """The token is stamped on the way INTO the journal, so a redelivery
+    days later still names the attempt that earned it rather than
+    whichever one the worker happens to be running when it lands."""
+    agent, hostile = await _make_agent(client, app, tmp_path, "token-node")
+    job = await _queue_and_claim(client, app, agent, "token")
+    assert agent._claim_token, "the claim response must carry the attempt identity"
+    hostile.inject("complete", "500")
+
+    p1, p2, p3 = _pipeline_patches(agent)
+    with p1, p2, p3:
+        await agent._process_job(job)
+
+    entries = agent.outbox.entries()
+    assert entries and entries[0].payload["claim_token"] == agent._claim_token
+
+
 async def test_duplicate_delivery_settles_cleanly(client: AsyncClient, app, tmp_path):
     """A delivered-but-unacknowledged report is retried by design; the
     scheduler's idempotent receipt (PR A) answers 204 and the entry
@@ -237,7 +270,8 @@ async def test_duplicate_delivery_settles_cleanly(client: AsyncClient, app, tmp_
     assert (await job_repo.get_job(app.state.db, job.id)).status == JobStatus.COMPLETE
 
     # The ack was "lost": the same report is journaled and drained again.
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "complete",
         {"output_size": 5_000, "space_saved": 5_000, "source_size": 10_000},
@@ -255,7 +289,8 @@ async def test_ownership_moved_discards_with_warn(client: AsyncClient, app, tmp_
     the entry is discarded with a WARN, and the agent stays healthy."""
     agent, _hostile = await _make_agent(client, app, tmp_path, "moved-node")
     job = await _queue_and_claim(client, app, agent, "moved")
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "complete",
         {"output_size": 5_000, "space_saved": 5_000, "source_size": 10_000},
@@ -281,12 +316,14 @@ async def test_s3_complete_never_overtakes_register(client: AsyncClient, app, tm
     hostile.watch("complete")
     hostile.inject("register-derivative", "500", "500")
 
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "register_derivative",
         {"derivative_key": "k1_hevc.mkv", "output_size": 5_000},
     )
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "complete",
         {"output_size": 5_000, "space_saved": 0, "source_size": 10_000},
@@ -331,7 +368,7 @@ async def test_stale_entry_never_lands_on_reclaimed_job(client: AsyncClient, app
     agent, _hostile = await _make_agent(client, app, tmp_path, "fence-node")
     job = await _queue_and_claim(client, app, agent, "fence")
     # Stale attempt-1 outcome, delivery lost:
-    agent.outbox.append(job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
+    _journal(agent, job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
     # Operator retries the job — same id, ownership cleared:
     await job_repo.update_job(
         app.state.db, job.id, status=JobStatus.PENDING, worker_id=None, error_message=None
@@ -403,7 +440,8 @@ async def test_auth_refusal_keeps_the_entry_and_screams(client: AsyncClient, app
     (registration surfaces the same auth failure and exits loudly)."""
     agent, hostile = await _make_agent(client, app, tmp_path, "revoked-node")
     job = await _queue_and_claim(client, app, agent, "revoked")
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "complete",
         {"output_size": 5_000, "space_saved": 5_000, "source_size": 10_000},
@@ -560,7 +598,8 @@ async def test_poison_entry_parks_after_max_attempts(client: AsyncClient, app, t
 
     agent, hostile = await _make_agent(client, app, tmp_path, "poison-node")
     job = await _queue_and_claim(client, app, agent, "poison")
-    agent.outbox.append(
+    _journal(
+        agent,
         job.id,
         "skipped",
         {"reason": "size_regression", "error_message": "output larger than source"},

@@ -42,15 +42,16 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
     await db.execute(
         """INSERT INTO workers (
             id, name, host, capabilities, supported_codecs, supports_downscale,
-            ffmpeg_version, max_concurrent, status, current_job_id,
-            last_heartbeat, registered_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sends_claim_token, ffmpeg_version, max_concurrent, status,
+            current_job_id, last_heartbeat, registered_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             host = excluded.host,
             capabilities = excluded.capabilities,
             supported_codecs = excluded.supported_codecs,
             supports_downscale = excluded.supports_downscale,
+            sends_claim_token = excluded.sends_claim_token,
             ffmpeg_version = excluded.ffmpeg_version,
             max_concurrent = excluded.max_concurrent,
             status = excluded.status,
@@ -65,6 +66,7 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
             caps_json,
             codecs_json,
             int(worker.supports_downscale),
+            int(worker.sends_claim_token),
             worker.ffmpeg_version,
             worker.max_concurrent,
             worker.status.value,
