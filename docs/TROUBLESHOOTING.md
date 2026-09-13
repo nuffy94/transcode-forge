@@ -93,7 +93,7 @@ Worker <id> came online — released <N> orphan job(s) back to the queue
     -b "session=<your-session-cookie>"
   ```
 - A job genuinely stuck *in-progress* (status transcoding/assigned) is released
-  by restarting its worker — see above; you don't re-queue it by hand.
+  by restarting its worker (see above); you don't re-queue it by hand.
 
 **Check for more details**
 - Dashboard → History to see error messages from failed jobs.
@@ -112,12 +112,12 @@ QSV or NVENC initialization failed; the worker fell back to software x265.
 
 Look for these patterns in worker logs:
 
-**QSV failed** — a line like:
+**QSV failed**: a line like:
 ```
 Failed to set value 'qsv=hw' for option 'init_hw_device' ...
 ```
 
-**NVENC failed** — a line like:
+**NVENC failed**: a line like:
 ```
 NVENC not available: ...
 ```
@@ -218,7 +218,7 @@ If the forced encoder fails to initialize, the worker will still fall back to CP
    docker compose restart scheduler
    ```
 
-6. Go back to the dashboard — the issue should clear within a few seconds.
+6. Go back to the dashboard. The issue should clear within a few seconds.
 
 ## Lost admin password
 
@@ -227,7 +227,7 @@ If the forced encoder fails to initialize, the worker will still fall back to CP
 
 ### Fix
 
-Reset it from the server with the admin CLI — no SQL, no restart, and your
+Reset it from the server with the admin CLI: no SQL, no restart, and your
 catalog/jobs/workers are untouched (only the login changes):
 
 ```bash
@@ -241,7 +241,7 @@ docker compose exec -T scheduler python -m transcode_forge.admin reset-password 
 Then log in with the new password. The command resets the admin if one exists,
 or creates it if not (so it also covers a headless first-run). This is the same
 server-side recovery model as Nextcloud's `occ user:resetpassword` or Django's
-`changepassword` — shell access to the host is the trust boundary.
+`changepassword`. Shell access to the host is the trust boundary.
 
 ## Lost worker token
 
@@ -298,7 +298,7 @@ If `TF_AUTH_SECRET` is set, sessions and worker tokens survive restarts.
 
 ### Schema migrations
 
-When the scheduler starts, it automatically applies any pending database migrations. This is idempotent — if a migration has already been applied, it's skipped. Safe to restart; the database will not be corrupted.
+When the scheduler starts, it automatically applies any pending database migrations. This is idempotent: if a migration has already been applied, it's skipped. Safe to restart; the database will not be corrupted.
 
 ## FFmpeg or ffprobe missing
 
@@ -381,16 +381,36 @@ curl http://localhost:8000/api/health/ready
 
 **Postgres won't start**
 - Check disk space: `docker compose exec postgres df /var/lib/postgresql/data`
-- Corrupted data directory: back up and delete the volume:
+- Corrupted data directory: a server that will not start cannot be restored
+  into, so give it an empty data directory first, then restore your dump into
+  the cluster it initializes. Keep the damaged directory: it is the only copy
+  of anything the backup is missing.
   ```bash
-  docker compose down -v
-  docker compose up -d
-  # Data is lost; re-scan and re-queue jobs.
+  # 1. Keep the damaged directory on the host. Skip if you don't want it.
+  docker compose stop postgres
+  docker cp "$(docker compose ps -aq postgres)":/var/lib/postgresql/data ./pgdata-damaged
+
+  # 2. Empty the Postgres data directory and nothing else.
+  docker compose run --rm --no-deps --entrypoint sh postgres \
+    -c 'find /var/lib/postgresql/data -mindepth 1 -delete'
+
+  # 3. Start Postgres alone. It initializes a new empty cluster.
+  docker compose up -d postgres
   ```
+  Now restore your last good dump, see [BACKUP.md](./BACKUP.md#restore-postgresql-dump). It runs unchanged: the new cluster's `transcode_forge` is empty, and the restore renames it aside.
+- No usable backup: the empty cluster is what you have. Start the rest of the stack, re-create the admin from `TF_ADMIN_PASSWORD`, re-issue every worker token, and re-scan and re-queue your libraries. Settings and job history are gone.
 
 **Redis won't start**
 - Check logs: `docker compose logs redis`
-- If data is corrupted: `docker compose down -v && docker compose up -d`
+- Corrupted data: Redis relays live progress to the browser and holds nothing else. Jobs, catalog, accounts and settings all live in Postgres, so dropping the snapshot costs you nothing.
+  ```bash
+  docker compose stop redis
+  docker compose run --rm --no-deps --entrypoint sh redis \
+    -c 'rm -f /data/dump.rdb /data/appendonly.aof'
+  docker compose up -d redis
+  ```
+
+Both resets name one service and one path on purpose. A project-wide volume wipe is never the right repair here: it removes every named volume in the project, so fixing Redis would take the Postgres database with it.
 
 ---
 
