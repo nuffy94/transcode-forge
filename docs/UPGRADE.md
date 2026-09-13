@@ -4,8 +4,8 @@ Upgrading is safe: migrations run automatically on scheduler boot, and released 
 
 ## Before you upgrade
 
-1. **Back up your database** — see [BACKUP.md](./BACKUP.md).
-2. **Check the release notes** — any breaking changes or new environment variables.
+1. **Back up your database**: see [BACKUP.md](./BACKUP.md).
+2. **Check the release notes**: any breaking changes or new environment variables.
 
 ## Upgrade steps
 
@@ -67,16 +67,26 @@ The web UI should load at http://localhost:8000 (or your configured port).
 
 ## Rollback (if something goes wrong)
 
-If the upgrade introduces a critical bug:
+If the upgrade introduces a critical bug, put the old code back before the old
+database, and start the stack once at the end. The other order boots the new
+scheduler against the restored database and applies the new migrations to it a
+second time.
 
-1. **Restore the database** — see [BACKUP.md](./BACKUP.md).
-2. **Pin the previous version** — edit `.env` and set `TF_VERSION=0.5.0` (replace with the version you were running).
-3. **Pull and restart**:
+1. **Stop the scheduler**:
 
 ```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml stop scheduler
 ```
+
+2. **Pin the previous version**: edit `.env` and set `TF_VERSION=0.5.0` (replace with the version you were running).
+
+3. **Pull the pinned image**:
+
+```bash
+docker compose -f docker-compose.prod.yml pull scheduler
+```
+
+4. **Restore the database**: follow [BACKUP.md](./BACKUP.md#restore-postgresql-dump). Its last step starts the scheduler, which now comes up on the pinned image. That is the only start in this procedure.
 
 Migrations are recorded in the `schema_migrations` table and never re-run, so the database remains valid.
 
