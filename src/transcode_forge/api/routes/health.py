@@ -76,6 +76,22 @@ async def preflight_status(
     return {"ok": not has_critical, "issues": issues}
 
 
+def _display_database(url: str) -> str:
+    """Hide database credentials without inventing a scheme.
+
+    Only the authority section of a URL can carry credentials, so a SQLite
+    path that happens to contain an "@" is shown as it is rather than
+    relabelled as a Postgres URL.
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    authority, slash, tail = rest.partition("/")
+    if "@" not in authority:
+        return url
+    return f"{scheme}{sep}***@{authority.split('@', 1)[1]}{slash}{tail}"
+
+
 @router.get("/system/info")
 async def system_info() -> dict[str, Any]:
     """Return system version, uptime, database info, and disk usage."""
@@ -83,11 +99,7 @@ async def system_info() -> dict[str, Any]:
 
     settings = get_settings()
 
-    # Database URL (mask password)
-    db_display = settings.db_url
-    if "@" in db_display:
-        _prefix, suffix = db_display.split("@", 1)
-        db_display = f"postgresql://***@{suffix}"
+    db_display = _display_database(settings.db_url)
 
     # Uptime from process start
     elapsed = time.monotonic() - _process_start
