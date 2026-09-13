@@ -4,6 +4,68 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-09-13
+
+Seven fixes from the 2026-09-12 Codex reviews. Upgrade the scheduler first,
+then the workers one at a time: an old scheduler answers 422 to the new
+`stream_loss` skip reason and the worker outbox discards a 422 entry, and the
+claim token only protects a job once both ends of it are upgraded. Migration
+0017 adds `jobs.claim_token`.
+
+### Fixed
+- **A report names the attempt it belongs to.** Job ids and worker ids are
+  reused across attempts, so a terminal report parked in a worker's outbox
+  during attempt 1 could finalize attempt 2, a progress report from a
+  released attempt could reset the clock both reconciliation sweeps read, and
+  the derivative shortcut wrote a terminal status by job id alone. Every
+  claim now stamps a fresh `claim_token` in the same statement that takes
+  the job to TRANSCODING, and every attempt-scoped write is one conditional
+  statement carrying it. A worker that has not been upgraded keeps reporting
+  as before; one that advertises the capability and reports without a token
+  is refused. (R-020, R-012, #127)
+- **The lock is a transaction you hold, not a file anyone can delete.** A
+  worker that lost the lock race removed the winner's lock and in-progress
+  temp output; a cancel between the swap's two renames released ownership
+  with the file half moved; and the exit deleted a successor's temp output
+  before releasing the lock. LOCK through UNLOCK is now one owned
+  transaction: only the run that created the lock can remove it, only while
+  the lock still carries that run's name, and a run that has started moving
+  the file finishes the move before it lets go. `LockHeartbeatGuard` is gone.
+  (#128)
+- **The transcode carries every stream, or the original stays.** The shared
+  map skipped secondary video streams and mp4 attached-picture cover art, and
+  nothing counted streams, so a job could drop content and report COMPLETE.
+  The encoder now declares which source stream lands where, `run_pipeline`
+  probes the source and the finished output against that plan, and a missing
+  stream ends the job SKIPPED with reason `stream_loss` and the original
+  untouched. Cover art and second video streams are copied through. The CRF
+  search now samples the stream the encoder will re-encode. (#129)
+- **A VMAF score that is not a number is a failed measurement, not a pass.**
+  libvmaf can write `NaN` or `Infinity` into its log, both floor comparisons
+  are False for either, so a garbage measurement passed the gate and the
+  encode replaced the original. `VmafScore` refuses a nonfinite field at
+  construction; the job ends FAILED and retryable, original kept. (#124)
+- **Windows bootstrap writes a required admin password.** `bootstrap.ps1`
+  wrote a `.env` without `TF_ADMIN_PASSWORD`, so every Windows install since
+  R-040 booted a dead container. It now resolves and validates the password
+  (8 to 72 bytes, Unicode code points, Compose-safe quoting) before anything
+  is written. Three em dash characters that broke parsing under Windows
+  PowerShell 5.1 are gone. README and GETTING-STARTED describe the real
+  login flow. (Q19, #125)
+- **The QA target owns its identity end to end.** A sweep launched from a
+  configured shell could migrate the real database through an inherited
+  `TF_DB_PATH`, readiness accepted any 200 on the port, and shutdown signalled
+  a bare pid. The QA instance now boots on a stated environment, proves the
+  responder is its own admin on its own database, and signals only a pid it
+  can prove is its own. (Q01 to Q03, #126)
+- **Recovery procedures cannot destroy what they restore.** The Redis repair
+  wiped the Postgres volume too, the SQLite backup copied a WAL database and
+  lost committed rows, the Postgres restore reported success after doing
+  nothing, the conflict fallback could overwrite the backup, and rollback
+  started new code before pinning the old tag. Each procedure is now the form
+  that cannot reach what it must not touch, guarded by
+  `tests/test_recovery_docs.py`. (#123)
+
 ## [0.14.0] - 2026-09-11
 
 ### Security
