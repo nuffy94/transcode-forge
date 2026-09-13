@@ -3,7 +3,8 @@
 Each sweep agent gets its OWN fresh instance (own port, own temp sqlite),
 so scenarios can't contaminate each other and verifiers reproduce findings
 on clean state. The instance is detached — this command returns once the
-app answers its health check, and `--stop` kills it by pidfile.
+instance it started proves it is the one answering on the port, and
+`--stop` stops that instance, never a pid it cannot prove is still its own.
 
     uv run python qa/launch_demo.py --start --port 18811 --run-dir qa/runs/latest
     uv run python qa/launch_demo.py --stop  --port 18811 --run-dir qa/runs/latest
