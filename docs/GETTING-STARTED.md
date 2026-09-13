@@ -41,9 +41,9 @@ docker compose -f docker-compose.prod.yml up -d
 
 This pulls the pre-built image instead of building locally.
 
-## 2. First-run setup
+## 2. Log in
 
-The first time you open http://localhost:8000, you'll land on a setup screen. Pick a strong admin password — this is the only login on the system. Click through and you're in.
+bootstrap.sh already generated your admin password into `.env`, alongside the other secrets, and the scheduler created the account from it on first boot. Read it with `grep TF_ADMIN_PASSWORD .env`, then open http://localhost:8000 and log in as `admin` with that value. This is the only login on the system.
 
 ## 3. Add a library and scan
 
