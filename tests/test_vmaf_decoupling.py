@@ -21,11 +21,12 @@ from tests.helpers import make_probe, register_worker
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.worker.pipeline import (
+    PipelineError,
     SizeRegressionError,
     VmafGateError,
     run_pipeline,
 )
-from transcode_forge.worker.vmaf import QualitySearchResult, VmafScore
+from transcode_forge.worker.vmaf import QualitySearchResult, VmafScore, _pool
 
 
 def _mock_encode(output_bytes: int):
@@ -147,6 +148,29 @@ class TestFloorsOnlyGate:
                 await _run(source, target_vmaf=97.0)
 
         assert exc_info.value.perc5_floor == 86.0
+
+    async def test_a_nonfinite_measurement_never_swaps(self, tmp_path):
+        """Codex full review 2026-09-12, finding F2. A NaN frame score in
+        the libvmaf log pooled into a NaN mean and perc5, and both floor
+        checks are "below the floor" comparisons, which are False for NaN.
+        The gate passed and the encode replaced the original. Pooling now
+        refuses the value, so COMPARE gets a measurement failure and the
+        original stays where it is."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        async def garbage(*args, **kwargs):
+            # Exactly what a NaN log pools to inside the real measure_vmaf.
+            return _pool([float("nan")] * 10)
+
+        with _pipeline_patches() as stack:
+            stack.enter_context(
+                patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=garbage)
+            )
+            with pytest.raises(PipelineError):
+                await _run(source, target_vmaf=97.0)
+
+        assert source.read_bytes() == b"x" * 10000  # original kept, no swap
 
     async def test_null_target_means_no_measurement_no_gate(self, tmp_path):
         """target_vmaf=None stays byte-identical to the pre-gate path —
@@ -301,6 +325,31 @@ class TestMeasurementLoopPersistence:
         assert row.predicted_vmaf_mean == 97.1
         assert row.resolved_crf == 18
         assert row.backend_used == "cpu"
+
+    def test_report_models_refuse_nonfinite_scores(self):
+        """The other half of finding F2: the four score columns. A worker
+        can no longer produce a nonfinite score, and the report models
+        refuse one regardless. The existing 0-100 bounds do that work,
+        because every comparison against a bound is False for NaN and for
+        either infinity, so nothing nonfinite reaches the columns."""
+        from pydantic import ValidationError
+
+        from transcode_forge.api.routes.worker_api import CompleteRequest, SkippedRequest
+
+        fields = (
+            "achieved_vmaf",
+            "achieved_vmaf_perc5",
+            "predicted_vmaf_mean",
+            "predicted_vmaf_perc5",
+        )
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            for field in fields:
+                with pytest.raises(ValidationError):
+                    CompleteRequest(
+                        output_size=4000, space_saved=6000, source_size=10000, **{field: bad}
+                    )
+                with pytest.raises(ValidationError):
+                    SkippedRequest(reason="below_vmaf_floor", **{field: bad})
 
     async def test_pre_decoupling_worker_payloads_still_accepted(self, client: AsyncClient, app):
         """A lagging v0.9.x worker sends none of the new fields — both

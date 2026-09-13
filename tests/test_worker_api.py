@@ -1,5 +1,6 @@
 """End-to-end tests for the HTTP worker API + token issuance."""
 
+import pytest
 from httpx import AsyncClient
 
 from tests.helpers import register_worker
@@ -763,11 +764,13 @@ class TestWorkerCrashRecovery:
         async with RawClient(transport=transport, base_url="http://test") as c:
             headers, worker_id = await _register_worker(client, c, "crashy")
 
-            # Claim at the repo level so the job stays ASSIGNED — the HTTP
-            # claim endpoint immediately bumps to TRANSCODING.
+            # Nothing claims into ASSIGNED any more (R-020 folded the bump
+            # into the claim), but the status is still in the active set,
+            # so the release must still cover a row that carries it: demo
+            # data and any pre-upgrade row can.
             claimed = await job_repo.claim_next_job(app.state.db, worker_id, ["hevc"])
             assert claimed is not None and claimed.id == job.id
-            assert claimed.status == JobStatus.ASSIGNED
+            await job_repo.update_job(app.state.db, job.id, status=JobStatus.ASSIGNED)
 
             # Worker "crashes" and comes back: re-register with the same token.
             rereg = await c.post(
@@ -782,6 +785,7 @@ class TestWorkerCrashRecovery:
         assert requeued is not None
         assert requeued.status == JobStatus.QUEUED
         assert requeued.worker_id is None
+        assert requeued.claim_token is None
         assert requeued.started_at is None
         assert requeued.progress == 0.0
 
@@ -820,6 +824,9 @@ class TestWorkerCrashRecovery:
         assert requeued is not None
         assert requeued.status == JobStatus.QUEUED
         assert requeued.worker_id is None
+        # The attempt's identity goes with its owner, or the next claim
+        # would inherit a token a parked report could still match.
+        assert requeued.claim_token is None
         assert requeued.started_at is None
         assert requeued.progress == 0.0
 
@@ -1236,3 +1243,293 @@ class TestPhaseProgressDetail:
                 headers=headers,
             )
             assert r.status_code == 422
+
+
+class TestAttemptIdentity:
+    """R-020 + R-012: a report is judged by the ATTEMPT it names, not by
+    the worker that sends it.
+
+    Job ids and worker ids are both reused across attempts, so a report
+    parked in a worker's outbox during attempt 1 could finalize attempt 2
+    of the same job on the same worker. Every claim now stamps a fresh
+    claim_token, every release clears it, and every attempt-scoped
+    mutation carries it inside the one conditional statement that writes
+    the row.
+    """
+
+    @staticmethod
+    async def _seed_queued_media(app, job) -> str:
+        """Catalog the job's source file and point it at the job, the way
+        queueing does, so a stale report's catalog side effect is visible."""
+        from tests.helpers import seed_media_file
+
+        file_id = await seed_media_file(app.state.db, job.source_path)
+        await app.state.db.execute(
+            "UPDATE media_files SET transcode_status = 'queued', job_id = ? WHERE id = ?",
+            (job.id, file_id),
+        )
+        await app.state.db.commit()
+        return file_id
+
+    @staticmethod
+    async def _media_status(app, file_id: str) -> str:
+        async with app.state.db.execute(
+            "SELECT transcode_status FROM media_files WHERE id = ?", (file_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return str(row["transcode_status"])
+
+    @staticmethod
+    async def _seed_derivative(app, key: str) -> None:
+        from tests.helpers import seed_library
+        from transcode_forge.repos import derivatives as deriv_repo
+
+        await seed_library(app.state.db, "movies")
+        await deriv_repo.create_derivative(
+            app.state.db,
+            library_id="movies",
+            source_key="/m/attempt.mkv",
+            source_path="/m/attempt.mkv",
+            source_resolution="1920x1080",
+            source_audio_codec="aac",
+            target_resolution="1920x1080",
+            target_audio_codec="copy",
+            target_codec="hevc",
+            backend="cpu",
+            crf=21,
+            preset="medium",
+            derivative_key=key,
+            output_size=123,
+        )
+
+    @pytest.mark.parametrize("mutation", ["failed", "progress", "check-derivative"])
+    async def test_stale_attempt_cannot_mutate_a_reclaimed_job(
+        self, client: AsyncClient, app, monkeypatch, mutation: str
+    ):
+        """The discriminating case: the stale request passes authorization,
+        THEN the job is released and re-claimed by the same worker, and only
+        then does the mutation run. A precheck-only fix accepts this request;
+        a fence inside the statement refuses it."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.api.routes import worker_api
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        deriv_key = "sha256:attempt-identity"
+        job = await _seed_pending_job(app, "/m/attempt.mkv")
+        file_id = await self._seed_queued_media(app, job)
+        if mutation == "check-derivative":
+            await self._seed_derivative(app, deriv_key)
+
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(
+                client, c, "attempt-w", sends_claim_token=True
+            )
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            token1 = claim.json()["job"]["_claim_token"]
+            assert token1, "a claim must issue an attempt identity"
+
+            state: dict[str, dict] = {}
+            original = worker_api._require_owned_job
+
+            async def release_then_reclaim(db, job_id, token_row):
+                owned = await original(db, job_id, token_row)
+                if "attempt2" not in state:
+                    state["attempt2"] = {}
+                    rereg = await c.post(
+                        "/api/worker/register",
+                        json={"name": "attempt-w", "host": "h", "capabilities": ["cpu"]},
+                        headers=headers,
+                    )
+                    assert rereg.status_code == 200
+                    again = await c.post(
+                        "/api/worker/claim-job",
+                        json={"worker_id": worker_id},
+                        headers=headers,
+                    )
+                    state["attempt2"] = again.json()["job"]
+                return owned
+
+            monkeypatch.setattr(worker_api, "_require_owned_job", release_then_reclaim)
+
+            bodies = {
+                "failed": {"error_message": "boom", "retry_count": 1},
+                "progress": {"progress": 0.9, "speed": 1.5},
+                "check-derivative": {"job_id": job.id, "derivative_key": deriv_key},
+            }
+            publishes = app.state.redis.publish.call_count
+            resp = await c.post(
+                f"/api/worker/job/{job.id}/{mutation}",
+                json={**bodies[mutation], "claim_token": token1},
+                headers=headers,
+            )
+
+        attempt2 = state["attempt2"]
+        assert attempt2["_claim_token"] and attempt2["_claim_token"] != token1
+        assert resp.status_code == 403
+
+        after = await job_repo.get_job(app.state.db, job.id)
+        assert after is not None
+        assert after.status == JobStatus.TRANSCODING
+        assert after.worker_id == worker_id
+        assert after.claim_token == attempt2["_claim_token"]
+        assert after.progress == 0.0
+        # The stale request left no mark at all, updated_at included: that
+        # column is the clock both reconciliation sweeps time against.
+        assert after.model_dump(mode="json")["updated_at"] == attempt2["updated_at"]
+        assert await self._media_status(app, file_id) == "queued"
+        assert app.state.redis.publish.call_count == publishes
+
+    async def test_current_attempt_completes_and_a_duplicate_settles(
+        self, client: AsyncClient, app
+    ):
+        """Keeps working: the live attempt's own report wins, and an
+        at-least-once redelivery of it is still a no-op 204."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app, "/m/attempt-ok.mkv")
+        file_id = await self._seed_queued_media(app, job)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(
+                client, c, "attempt-ok", sends_claim_token=True
+            )
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            token = claim.json()["job"]["_claim_token"]
+            payload = {
+                "output_size": 400,
+                "space_saved": 600,
+                "source_size": 1000,
+                "claim_token": token,
+            }
+            first = await c.post(
+                f"/api/worker/job/{job.id}/complete", json=payload, headers=headers
+            )
+            assert first.status_code == 204
+            duplicate = await c.post(
+                f"/api/worker/job/{job.id}/complete", json=payload, headers=headers
+            )
+            assert duplicate.status_code == 204
+
+        done = await job_repo.get_job(app.state.db, job.id)
+        assert done is not None
+        assert done.status == JobStatus.COMPLETE
+        assert done.space_saved == 600
+        assert await self._media_status(app, file_id) == "complete"
+
+    async def test_duplicate_of_the_recorded_outcome_settles_despite_a_stale_token(
+        self, client: AsyncClient, app
+    ):
+        """The duplicate check runs BEFORE the token check. A parked report
+        whose original request already committed still settles 204, even
+        though the attempt that wrote the outcome is not the one it names."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app, "/m/attempt-dup.mkv")
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(
+                client, c, "attempt-dup", sends_claim_token=True
+            )
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            token1 = claim.json()["job"]["_claim_token"]
+
+            # Registration releases the job; the same worker re-claims it.
+            await c.post(
+                "/api/worker/register",
+                json={"name": "attempt-dup", "host": "h", "capabilities": ["cpu"]},
+                headers=headers,
+            )
+            again = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            token2 = again.json()["job"]["_claim_token"]
+            assert token2 != token1
+
+            payload = {"output_size": 400, "space_saved": 600, "source_size": 1000}
+            won = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={**payload, "claim_token": token2},
+                headers=headers,
+            )
+            assert won.status_code == 204
+            parked = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={**payload, "claim_token": token1},
+                headers=headers,
+            )
+            assert parked.status_code == 204
+
+        done = await job_repo.get_job(app.state.db, job.id)
+        assert done is not None and done.status == JobStatus.COMPLETE
+
+    async def test_worker_that_advertised_the_token_may_not_omit_it(self, client: AsyncClient, app):
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app, "/m/attempt-missing.mkv")
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(
+                client, c, "attempt-missing", sends_claim_token=True
+            )
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            resp = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "boom"},
+                headers=headers,
+            )
+            assert resp.status_code == 403
+
+        row = await job_repo.get_job(app.state.db, job.id)
+        assert row is not None and row.status == JobStatus.TRANSCODING
+
+    async def test_worker_predating_the_token_still_reports(self, client: AsyncClient, app):
+        """Rolling update: a worker that never advertised the capability is
+        judged by worker id alone, exactly as before."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app, "/m/attempt-legacy.mkv")
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "attempt-legacy")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            progress = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.5},
+                headers=headers,
+            )
+            assert progress.status_code == 204
+            done = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 1, "space_saved": 1, "source_size": 2},
+                headers=headers,
+            )
+            assert done.status_code == 204
+
+        row = await job_repo.get_job(app.state.db, job.id)
+        assert row is not None and row.status == JobStatus.COMPLETE

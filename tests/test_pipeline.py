@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -458,7 +458,7 @@ class TestRunPipeline:
             patch("transcode_forge.worker.pipeline.ffprobe", return_value=mock_probe),
             patch("transcode_forge.worker.pipeline._decode_check"),
             patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
-            patch("transcode_forge.worker.pipeline.LOCK_TOUCH_INTERVAL", 0.02),
+            patch("transcode_forge.worker.storage.ownership.LOCK_TOUCH_INTERVAL", 0.02),
         ):
             await run_pipeline(
                 source_path=str(source),
@@ -572,6 +572,200 @@ class TestRunPipeline:
                 job_id="test-job",
                 worker_id="test-worker",
             )
+
+
+class TestOwnedTransaction:
+    """LOCK through UNLOCK is one owned transaction.
+
+    The right to delete the lock and the temporary output belongs only to
+    the invocation that acquired them, and a mutation that has started
+    settles before ownership is released. Every assertion here is on the
+    final state of the files, not on a return value.
+    """
+
+    @staticmethod
+    def _probe() -> ProbeResult:
+        return ProbeResult(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5_000_000,
+            duration=3600.0,
+            file_size=5000,
+        )
+
+    @staticmethod
+    def _encode_to(size: int):
+        async def mock_run_encode(cmd, total_duration, progress_callback=None):
+            from transcode_forge.worker.encoder import EncodeResult
+
+            output = Path(cmd[-1])
+            output.write_bytes(b"y" * size)
+            return EncodeResult(
+                success=True, output_path=str(output), output_size=size, returncode=0
+            )
+
+        return mock_run_encode
+
+    async def test_cancelled_swap_holds_ownership_until_the_transaction_settles(
+        self, tmp_path, monkeypatch
+    ):
+        """A cancel delivered while the swap thread is between its two
+        renames must not end the pipeline. asyncio.to_thread cancellation
+        does not wait for the OS thread, so releasing the lock there hands
+        a half-swapped path to the next claimer. The transaction keeps the
+        lock and the temp output until the mutation has settled and the
+        original is back."""
+        import asyncio
+        import threading
+
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+        lock = tmp_path / "test.mkv.tf_lock"
+        tmp = tmp_path / "test.tf_tmp.mkv"
+        bak = tmp_path / "test.tf_bak.mkv"
+
+        entered = threading.Event()
+        release = threading.Event()
+        real_rename = Path.rename
+
+        def paused_rename(self, target):
+            result = real_rename(self, target)
+            if Path(target).name.endswith(".tf_bak.mkv"):
+                # Between original -> .tf_bak and .tf_tmp -> original.
+                entered.set()
+                release.wait(timeout=10)
+            return result
+
+        monkeypatch.setattr(Path, "rename", paused_rename)
+
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode_to(5000)),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+        ):
+            task = asyncio.ensure_future(
+                run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+            )
+            try:
+                assert await asyncio.to_thread(entered.wait, 10), "the swap never started"
+                task.cancel()
+                await asyncio.sleep(0.1)
+                assert not task.done(), "the pipeline returned while the swap thread ran"
+                assert lock.exists(), "ownership was released under a live swap thread"
+                assert tmp.exists(), "the temp output was deleted under a live swap thread"
+            finally:
+                release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        # Final state: the original is back and nothing is left behind.
+        assert source.read_bytes() == b"x" * 10000
+        assert not bak.exists()
+        assert not tmp.exists()
+        assert not lock.exists()
+
+    async def test_losing_the_lock_race_leaves_the_owners_artifacts_intact(self, tmp_path):
+        """The loser of the LOCK race owns nothing on this path. Deleting
+        the winner's lock drops the exclusion for every other worker, and
+        deleting the winner's .tf_tmp throws away an encode in flight."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        lock = tmp_path / "test.mkv.tf_lock"
+        lock.write_text(
+            json.dumps(
+                {
+                    "job_id": "winner-job",
+                    "worker_id": "other-worker",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+        )
+        tmp = tmp_path / "test.tf_tmp.mkv"
+        tmp.write_bytes(b"the winner's encode in flight")
+        lock_bytes = lock.read_bytes()
+
+        with pytest.raises(PipelineError) as caught:
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="test-job",
+                worker_id="test-worker",
+            )
+
+        assert caught.value.step == "LOCK"
+        assert lock.read_bytes() == lock_bytes, "the loser removed the winner's lock"
+        assert tmp.read_bytes() == b"the winner's encode in flight", (
+            "the loser removed the winner's temp output"
+        )
+        assert source.read_bytes() == b"x" * 10000
+
+    async def test_the_exit_deletes_the_temp_output_before_it_releases_the_lock(
+        self, tmp_path, monkeypatch
+    ):
+        """Order matters at the exit. A lock released first lets a
+        successor acquire the path and start its own temp output, which
+        this invocation's temp delete then removes."""
+        source = tmp_path / "test.mkv"
+        source.write_bytes(b"x" * 5000)
+        lock = tmp_path / "test.mkv.tf_lock"
+        tmp = tmp_path / "test.tf_tmp.mkv"
+        successor_bytes = b"the successor's encode in flight"
+
+        real_unlink = Path.unlink
+
+        def successor_claims_the_freed_path(self, missing_ok=False):
+            real_unlink(self, missing_ok=missing_ok)
+            if self.name.endswith(".tf_lock"):
+                # The instant the exclusion drops, the next worker takes it.
+                lock.write_text(
+                    json.dumps(
+                        {
+                            "job_id": "next-job",
+                            "worker_id": "next-worker",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
+                )
+                tmp.write_bytes(successor_bytes)
+
+        monkeypatch.setattr(Path, "unlink", successor_claims_the_freed_path)
+
+        # A size regression ends the run with the temp output still on disk.
+        with (
+            patch("transcode_forge.worker.pipeline.run_encode", side_effect=self._encode_to(10000)),
+            patch("transcode_forge.worker.pipeline.ffprobe", return_value=self._probe()),
+            patch("transcode_forge.worker.pipeline._decode_check"),
+            patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+        ):
+            with pytest.raises(SizeRegressionError):
+                await run_pipeline(
+                    source_path=str(source),
+                    codec="hevc",
+                    backend="cpu",
+                    quality=21,
+                    source_duration=3600.0,
+                    job_id="test-job",
+                    worker_id="test-worker",
+                )
+
+        assert tmp.exists(), "the successor's temp output was deleted after the lock dropped"
+        assert tmp.read_bytes() == successor_bytes
+        assert json.loads(lock.read_text())["worker_id"] == "next-worker"
+        assert source.read_bytes() == b"x" * 5000
 
 
 class TestVerifyOutputDeepCheck:

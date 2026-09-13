@@ -57,17 +57,8 @@ from transcode_forge.worker.encoder import (
     unmuxable_subtitle_indexes,
 )
 from transcode_forge.worker.proc import managed_subprocess
-from transcode_forge.worker.storage.filesystem import (
-    LOCK_TOUCH_INTERVAL,
-    RECOVERY_STALE_LOCK_SECONDS,
-    LockHeartbeatGuard,
-    _acquire_lock,
-    _atomic_swap,
-    _preserve_metadata,
-    _rollback_swap,
-    _safe_delete,
-    pipeline_artifacts,
-)
+from transcode_forge.worker.storage.filesystem import RECOVERY_STALE_LOCK_SECONDS
+from transcode_forge.worker.storage.ownership import SourceOwnership
 from transcode_forge.worker.vmaf import (
     VmafError,
     VmafUnavailableError,
@@ -389,10 +380,6 @@ async def run_pipeline(
             (skip outcome).
     """
     src = Path(source_path)
-    # Sidecar naming keeps the original extension so ffmpeg recognizes the
-    # container format (movie.tf_tmp.mkv, not movie.mkv.tf_tmp).
-    lock_path, tmp_path, bak_path = pipeline_artifacts(src)
-
     src_stat = await asyncio.to_thread(src.stat)
     source_size = src_stat.st_size
 
@@ -443,18 +430,17 @@ async def run_pipeline(
 
     predicted_vmaf_mean: float | None = None
     predicted_vmaf_perc5: float | None = None
-    lock_heartbeat: asyncio.Task[None] | None = None
-    heartbeat_guard = LockHeartbeatGuard()
 
-    try:
-        # Step 1: LOCK
-        await asyncio.to_thread(_acquire_lock, lock_path, job_id=job_id, worker_id=worker_id)
-        logger.info("[LOCK] Acquired: %s", lock_path)
-        # Heartbeat the lock for the whole pipeline (encode + VMAF + swap)
-        # so "stale" means dead to the recovery scans, not merely old.
-        lock_heartbeat = asyncio.create_task(
-            _lock_heartbeat(lock_path, job_id=job_id, worker_id=worker_id, guard=heartbeat_guard)
-        )
+    # Step 1: LOCK. The acquisition IS the transaction: the body below runs
+    # only for the invocation that won the exclusive create, and the right
+    # to delete the lock, the temp output or the backup exists only inside
+    # it. Losing raises here, before the body, so a loser has nothing to
+    # clean up and cannot touch the winner's artifacts.
+    async with SourceOwnership(src, job_id=job_id, worker_id=worker_id) as own:
+        # Sidecar naming keeps the original extension so ffmpeg recognizes
+        # the container format (movie.tf_tmp.mkv, not movie.mkv.tf_tmp).
+        tmp_path = own.tmp_path
+        logger.info("[LOCK] Acquired: %s", own.lock_path)
 
         # The source's streams, probed here and nowhere else. This is the
         # reference the encode plan is held against, and it also names the
@@ -638,30 +624,30 @@ async def run_pipeline(
                     vmaf_safety_perc5,
                 )
 
-        # Step 5: SWAP
+        # Step 5: SWAP. Settled: a cancel delivered while the renames run
+        # aborts after they finish, never in the middle of them.
         await _phase(JobPhase.SWAP)
-        await asyncio.to_thread(_atomic_swap, src, tmp_path, bak_path)
+        await own.swap()
         logger.info("[SWAP] Original → .tf_bak, tmp → original")
 
-        # Step 6: CONFIRM
+        # Step 6: CONFIRM. Cancellable (three decode samples), because any
+        # unsuccessful exit from here, a raise or a cancel, rolls the swap
+        # back at the transaction's exit before the lock is released.
         try:
             await _verify_output(
                 src, source_duration, expected_codec=codec, expected_height=target_height
             )
             logger.info("[CONFIRM] Final file verified")
         except (PipelineError, ProbeError) as e:
-            # Rollback: restore backup
             logger.error("[CONFIRM] Failed, rolling back: %s", e)
-            await asyncio.to_thread(_rollback_swap, src, bak_path)
             raise PipelineError("CONFIRM", f"Post-swap verification failed: {e}") from e
 
-        # Restore the original's owner/group/mode/mtime — the worker
-        # writes as its own user (often root in a container), but the
-        # file is supposed to look like the one the media server wrote.
-        await asyncio.to_thread(_preserve_metadata, src, src_stat)
-
-        # Step 7: CLEANUP
-        await asyncio.to_thread(_safe_delete, bak_path)
+        # Step 7: CLEANUP, with the original's owner/group/mode/mtime put
+        # back first. The worker writes as its own user (often root in a
+        # container), but the file is supposed to look like the one the
+        # media server wrote. Settled, and it closes the transaction: past
+        # here there is nothing to roll back.
+        await own.confirm(src_stat)
         logger.info("[CLEANUP] Backup deleted")
 
         return {
@@ -675,42 +661,6 @@ async def run_pipeline(
             "predicted_vmaf_mean": predicted_vmaf_mean,
             "predicted_vmaf_perc5": predicted_vmaf_perc5,
         }
-
-    finally:
-        # Stop the heartbeat BEFORE deleting the lock — an in-flight touch
-        # would resurrect the file right after the unlink. Cancelling the
-        # task is NOT enough: asyncio.to_thread cancellation doesn't wait
-        # for the OS thread, so the guard's mutex is what actually
-        # serializes a detached touch against the delete below.
-        if lock_heartbeat is not None:
-            lock_heartbeat.cancel()
-            try:
-                await lock_heartbeat
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.exception("Lock heartbeat task died unexpectedly")
-        await asyncio.to_thread(heartbeat_guard.stop)
-        # Step 8: UNLOCK (always runs)
-        await asyncio.to_thread(_safe_delete, lock_path)
-        # Clean up tmp if it still exists (failed encode or gate skip)
-        await asyncio.to_thread(_safe_delete, tmp_path)
-        logger.info("[UNLOCK] Lock released")
-
-
-async def _lock_heartbeat(
-    lock_path: Path, *, job_id: str, worker_id: str, guard: LockHeartbeatGuard
-) -> None:
-    """Refresh the lock's timestamp every LOCK_TOUCH_INTERVAL seconds until
-    cancelled. A failed touch is logged, never fatal — the pipeline owns
-    the lock either way; the heartbeat only keeps its liveness visible.
-    Touches go through the guard so one can never outlive UNLOCK."""
-    while True:
-        await asyncio.sleep(LOCK_TOUCH_INTERVAL)
-        try:
-            await asyncio.to_thread(guard.touch, lock_path, job_id=job_id, worker_id=worker_id)
-        except OSError as e:
-            logger.warning("Could not refresh lock %s: %s", lock_path, e)
 
 
 async def _verify_output(

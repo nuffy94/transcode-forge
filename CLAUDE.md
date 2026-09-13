@@ -73,7 +73,10 @@ pinned Tailwind v4 standalone CLI (no Node). Edit the source
 
 Workers are HTTP-only: `TF_SERVER_URL` + `TF_WORKER_TOKEN` are required (the
 worker exits with an error if either is missing). The old DB-direct worker was
-removed — workers never hold DB or Redis credentials.
+removed — workers never hold DB or Redis credentials. `TF_WORKER_TOKEN` is
+the worker's long-lived credential; the per-job `claim_token` in the Data
+flow section below is a different thing entirely, issued fresh on every
+claim and never configured.
 
 ### The 8-step "never lose a file" pipeline
 
@@ -124,6 +127,25 @@ Scanner (ffprobe) → media_files (catalog)
 
 The scanner never creates jobs — it builds a browseable catalog. Users
 select files and queue them via the UI.
+
+A claim is one statement: it takes the job straight to TRANSCODING,
+stamps `jobs.claim_token` with a fresh value, and hands that value to
+the claiming worker as `_claim_token` on the claim response. The token
+is the identity of that *attempt* — job ids and worker ids are both
+reused across attempts, so neither can tell the scheduler which
+execution a report speaks for. The worker stamps it into every report
+(progress, complete, skipped, failed, the derivative shortcut) and into
+the outbox entry, so a report parked from attempt 1 cannot land on
+attempt 2. Each of those mutations is a single conditional UPDATE
+carrying the token, and every release (registration, retry, the orphan
+and abandoned sweeps) clears it along with `worker_id` —
+`tests/test_claim_token_invariant.py` fails on any release that does
+not. A duplicate of an outcome already recorded still settles 204
+before the token is looked at. Workers advertise `sends_claim_token` at
+registration exactly like `supported_codecs`: one that advertised it and
+then reports without a token is refused 403, one that predates it is
+judged by worker id alone, so a rolling update keeps working. Upgrade
+the scheduler first, then the workers.
 
 Every scan, manual or scheduled, starts through `scanner/runner.py`
 `start_scan()`: a scan is an asyncio task and a library has at most one

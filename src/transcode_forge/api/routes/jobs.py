@@ -91,6 +91,10 @@ async def retry_job(
         job_id,
         status=JobStatus.PENDING,
         worker_id=None,
+        # Retry reuses the job id, so the previous attempt's identity has
+        # to go with its owner or a report still in flight from it would
+        # match the next claim (R-020).
+        claim_token=None,
         progress=0,
         error_message=None,
         retry_count=job.retry_count + 1,

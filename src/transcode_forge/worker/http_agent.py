@@ -115,6 +115,11 @@ class HttpWorkerAgent:
         self._pipeline_task: asyncio.Task[dict[str, Any]] | None = None
         self.worker_id: str | None = None
         self._current_job_id: str | None = None
+        # Identity of the attempt this worker is running (R-020), issued
+        # by the scheduler on the claim. Stamped into every report so a
+        # report parked from a previous attempt cannot land on the one
+        # that replaced it. One job loop, so one token at a time.
+        self._claim_token: str | None = None
         self._current_progress: float = 0.0
         self.capabilities: HardwareCapabilities | None = None
         self._client: WorkerHttpClient = WorkerHttpClient(server_url, token)
@@ -341,12 +346,15 @@ class HttpWorkerAgent:
             # claim payload, or unexpected bug may exit this loop. A worker
             # process exits on SIGTERM/SIGINT and nothing else (spec D2).
             try:
-                # Outbox fence: drain undelivered reports BEFORE claiming
-                # any new work. Finished work's report outranks new work —
-                # and a pending entry for a retried job id must resolve
-                # before that job could ever be re-claimed here (a stale
-                # attempt-1 report landing on attempt-2 is the
-                # successful-job-marked-failed lie).
+                # Delivery priority: drain undelivered reports BEFORE
+                # claiming any new work, because finished work's report
+                # outranks new work. This used to carry the correctness
+                # load too (a stale attempt-1 report landing on attempt-2
+                # is the successful-job-marked-failed lie), and it could
+                # not hold it: the poison-park escape hatch below opens
+                # the fence on purpose so unrelated jobs stay claimable.
+                # The claim token carries that load now, at the scheduler,
+                # where every path into the job row passes it.
                 if await self._drain_outbox() is not DrainResult.EMPTY:
                     await asyncio.sleep(self._claim_backoff.next_delay())
                     continue
@@ -356,6 +364,7 @@ class HttpWorkerAgent:
                     await asyncio.sleep(2)
                     continue
                 job = Job.model_validate(job_dict)
+                self._claim_token = job_dict.get("_claim_token")
                 # Claim-time extras (library backend, media type, VMAF floors)
                 # ride on private attrs outside the validated model.
                 for extra in ("_backend_type", "_s3_bucket", "_s3_prefix", "_media_type"):
@@ -523,7 +532,11 @@ class HttpWorkerAgent:
             self._current_progress = progress
             try:
                 await self._client.progress(
-                    job_id=job.id, progress=progress, speed=speed, phase=self._current_phase
+                    job_id=job.id,
+                    progress=progress,
+                    speed=speed,
+                    phase=self._current_phase,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Progress update failed", exc_info=True)
@@ -535,7 +548,11 @@ class HttpWorkerAgent:
             self._current_phase = phase
             try:
                 await self._client.progress(
-                    job_id=job.id, progress=self._current_progress, speed=None, phase=phase
+                    job_id=job.id,
+                    progress=self._current_progress,
+                    speed=None,
+                    phase=phase,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Phase update failed", exc_info=True)
@@ -551,6 +568,7 @@ class HttpWorkerAgent:
                     phase=self._current_phase,
                     phase_pct=pct,
                     phase_detail=detail,
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Phase-progress update failed", exc_info=True)
@@ -804,6 +822,7 @@ class HttpWorkerAgent:
                     speed=None,
                     phase=JobPhase.WAIT,
                     phase_detail=f"{owner[:8]} {age}s",
+                    claim_token=self._claim_token,
                 )
             except (httpx.HTTPError, OSError):
                 logger.debug("Lock-wait progress update failed", exc_info=True)
@@ -835,6 +854,10 @@ class HttpWorkerAgent:
                     # VERIFY height pin, gauge-at-target) — advertise it so the
                     # scheduler's claim filter hands us downscale jobs.
                     supports_downscale=True,
+                    # This build stamps its claim token into every report,
+                    # so the scheduler may hold us to it and refuse any
+                    # report that arrives without one (R-020).
+                    sends_claim_token=True,
                     ffmpeg_version=self.capabilities.ffmpeg_version,
                     max_concurrent=self.settings.worker_max_concurrent,
                 )
@@ -914,6 +937,11 @@ class HttpWorkerAgent:
         FAILED report on a successful, already-swapped encode — that
         whole class dies at this seam.
         """
+        # Stamp the attempt this report speaks for, once, on the way into
+        # the journal — so the token survives a restart in the outbox file
+        # and every redelivery still names the attempt that earned it, not
+        # whichever one the worker happens to be running when it lands.
+        payload = {"claim_token": self._claim_token, **payload}
         try:
             self.outbox.append(job_id, kind, payload)
         except OSError:
@@ -1014,7 +1042,11 @@ class HttpWorkerAgent:
             # and retry every cooldown tick. If the parked report is a
             # terminal outcome the scheduler later re-assigns, its
             # eventual delivery resolves via the idempotent-receipt
-            # endpoints (duplicate → 204, conflict → 409 discard).
+            # endpoints (duplicate → 204, conflict → 409 discard) and,
+            # since it carries the claim token of the attempt that wrote
+            # it, a 403 rather than a hit on whatever attempt is running
+            # by then. That last part is what makes this safe rather than
+            # merely tidy.
             logger.warning(
                 "Outbox: %d poison entr%s parked (≥%d failed attempts) — "
                 "retrying every %ds without blocking claims; the scheduler "
@@ -1090,7 +1122,9 @@ class HttpWorkerAgent:
 
         try:
             result = await self._client.check_derivative(
-                job_id=job.id, derivative_key=derivative_key
+                job_id=job.id,
+                derivative_key=derivative_key,
+                claim_token=self._claim_token,
             )
             if result.get("found"):
                 return result
