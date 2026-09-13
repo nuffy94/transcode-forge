@@ -14,19 +14,30 @@ Instances own themselves from boot: ``demo_env()`` passes
 ``TF_ADMIN_PASSWORD``, so the app mints the admin at startup (R-040) and no
 surface carries its own auth bootstrap.
 
+An instance is identified by the disposable database it was given, and that
+one identity gates every step. ``demo_env()`` states every TF_* setting the
+child runs on and drops the application namespace it inherited, so nothing
+ambient can move the database out from under it. Readiness is not "something
+answered on the port": the responder has to log in as the admin this boot
+minted and name that database. Shutdown asks the same question before it
+signals anything, so a pid the OS may have handed to another program is
+never signalled, and the record is removed only once the port it held is
+empty.
+
 A future ``pg`` mode (same app pointed at a Postgres URL) hooks in here when
 S6b lands — not built yet.
 """
 
 from __future__ import annotations
 
+import http.cookiejar
+import json
 import os
 import signal
 import socket
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -40,6 +51,20 @@ AUTH_SECRET = "qa-sweep-fixed-secret"
 QA_ADMIN_PASSWORD = "qa-sweep-password-123"
 _READY_ATTEMPTS = 60
 _READY_INTERVAL = 0.5
+_PROBE_TIMEOUT = 1.0
+
+# How long a stop waits for the instance to let go of its port, before and
+# after escalating.
+_STOP_GRACE_SECONDS = 8.0
+_STOP_KILL_SECONDS = 4.0
+_STOP_POLL_INTERVAL = 0.25
+
+# The application's own configuration namespace. None of it is inherited:
+# an ambient TF_DB_PATH is promoted over TF_DB_URL by Settings, so a sweep
+# launched from a configured service shell would migrate and mutate that
+# database instead of its disposable one. AWS_* goes too, since the S3
+# backend reads those directly, outside the TF_ prefix.
+_APP_ENV_PREFIXES = ("TF_", "AWS_")
 
 
 class InstanceExitedError(RuntimeError):
@@ -63,12 +88,31 @@ def pick_free_port() -> int:
         return port
 
 
+def database_url(db: Path) -> str:
+    """The database URL an instance holding ``db`` reports as its own."""
+    return f"sqlite:///{db.resolve().as_posix()}"
+
+
+def _inherited_os_env() -> dict[str, str]:
+    """The launching environment minus the application's own namespace.
+
+    Settings match environment names case-insensitively, so the test is on
+    the upper-cased key: a stray ``tf_db_path`` counts too.
+    """
+    return {k: v for k, v in os.environ.items() if not k.upper().startswith(_APP_ENV_PREFIXES)}
+
+
 def demo_env(db: Path) -> dict[str, str]:
-    """The canonical demo-static environment for a QA instance."""
+    """The canonical demo-static environment for a QA instance.
+
+    OS and runtime variables are inherited; every application setting the
+    instance runs on is stated here, so nothing the launching shell already
+    configures can change which database the sweep opens.
+    """
     return {
-        **os.environ,
+        **_inherited_os_env(),
         "TF_DEMO_STATIC": "true",
-        "TF_DB_URL": f"sqlite:///{db.resolve().as_posix()}",
+        "TF_DB_URL": database_url(db),
         "TF_AUTH_SECRET": AUTH_SECRET,
         "TF_ADMIN_PASSWORD": QA_ADMIN_PASSWORD,
         "TF_LOG_LEVEL": "warning",
@@ -80,6 +124,23 @@ def instance_paths(run_dir: Path, port: int) -> tuple[Path, Path, Path]:
     (db, log, pidfile) — throwaway by design."""
     inst = run_dir / "instances" / str(port)
     return inst / "demo.db", inst / "server.log", inst / "uvicorn.pid"
+
+
+def _write_record(pidfile: Path, pid: int, database: str) -> None:
+    """Record the instance: its pid on the first line (it stays a pidfile),
+    the identity it proved at boot on the second. The identity is recorded
+    rather than recomputed at stop time, because the L3 sweep rotates whole
+    run directories: the instance keeps serving the database it opened,
+    whatever its record's path has become since."""
+    pidfile.write_text(f"{pid}\n{database}\n", encoding="utf-8")
+
+
+def _read_record(pidfile: Path, db: Path) -> tuple[int, str]:
+    """The recorded pid and identity. A record with no identity line predates
+    this format; fall back to the path this run dir implies."""
+    lines = pidfile.read_text(encoding="utf-8").splitlines()
+    identity = lines[1].strip() if len(lines) > 1 and lines[1].strip() else database_url(db)
+    return int(lines[0].strip()), identity
 
 
 def _spawn(port: int, db: Path, logf: IO[str], *, detached: bool) -> subprocess.Popen[bytes]:
@@ -112,17 +173,70 @@ def _spawn(port: int, db: Path, logf: IO[str], *, detached: bool) -> subprocess.
     )
 
 
-def _await_ready(proc: subprocess.Popen[bytes], base_url: str) -> None:
+def _reported_database(base_url: str) -> str | None:
+    """Ask whatever is on ``base_url`` which database it is serving.
+
+    ``/api/system/info`` is behind the admin session, so a bare 200 cannot
+    answer this: the responder has to be a Transcode Forge instance that
+    minted the admin from the environment we handed our own child, and it
+    has to name the database we allocated. Returns None when nothing usable
+    answers: a stranger on the port, a half-booted app, or no listener.
+    """
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    login = urllib.request.Request(
+        f"{base_url}/api/auth/login",
+        data=json.dumps({"password": QA_ADMIN_PASSWORD}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with opener.open(login, timeout=_PROBE_TIMEOUT):
+            pass
+        with opener.open(f"{base_url}/api/system/info", timeout=_PROBE_TIMEOUT) as r:
+            payload = json.load(r)
+    except (OSError, ValueError):  # URLError/HTTPError are OSError; bad JSON is ValueError
+        return None
+    if not isinstance(payload, dict):
+        return None
+    database = payload.get("database")
+    return database if isinstance(database, str) else None
+
+
+def _await_ready(proc: subprocess.Popen[bytes], base_url: str, database: str) -> None:
+    """Wait until the child we spawned is the thing answering on the port."""
     for _ in range(_READY_ATTEMPTS):
         if proc.poll() is not None:
             raise InstanceExitedError(proc.returncode)
-        try:
-            with urllib.request.urlopen(f"{base_url}/api/health/live", timeout=1) as r:
-                if r.status == 200:
-                    return
-        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
-            time.sleep(_READY_INTERVAL)
+        if _reported_database(base_url) == database:
+            return
+        time.sleep(_READY_INTERVAL)
     raise InstanceNotReadyError()
+
+
+def _port_is_open(port: int) -> bool:
+    """Is anything accepting connections on the port?
+
+    Kept apart from the identity probe on purpose: a probe can fail to get
+    an answer for reasons that are not "nothing is there" (a timeout, the
+    login throttle), and treating those as an empty port would orphan a
+    running instance.
+    """
+    with socket.socket() as s:
+        s.settimeout(_PROBE_TIMEOUT)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _await_gone(port: int, seconds: float) -> bool:
+    """True once nothing is listening on the port any more."""
+    deadline = time.monotonic() + seconds
+    while True:
+        if not _port_is_open(port):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_STOP_POLL_INTERVAL)
 
 
 def _log_tail(log_path: Path) -> str:
@@ -148,14 +262,15 @@ def launch(instance_dir: Path, port: int) -> Iterator[str]:
     proc = _spawn(port, db, logf, detached=False)
     try:
         try:
-            _await_ready(proc, base_url)
+            _await_ready(proc, base_url, database_url(db))
         except InstanceExitedError as e:
             raise RuntimeError(
                 f"QA server exited early (code {e.returncode}):\n{_log_tail(log_path)}"
             ) from e
         except InstanceNotReadyError:
             raise RuntimeError(
-                f"QA demo server failed to become ready:\n{_log_tail(log_path)}"
+                f"nothing on port {port} proved it is the QA instance we started:"
+                f"\n{_log_tail(log_path)}"
             ) from None
 
         yield base_url
@@ -186,31 +301,85 @@ def start_detached(run_dir: Path, port: int) -> int:
 
     base = f"http://127.0.0.1:{port}"
     try:
-        _await_ready(proc, base)
+        _await_ready(proc, base, database_url(db))
     except InstanceExitedError:
         print(f"instance exited early (code {proc.returncode}) — see {log_path}", file=sys.stderr)
         return 1
     except InstanceNotReadyError:
         proc.terminate()
-        print(f"instance never became ready — see {log_path}", file=sys.stderr)
+        print(
+            f"nothing on port {port} proved it is the instance we started. See {log_path}",
+            file=sys.stderr,
+        )
         return 1
 
-    pidfile.write_text(str(proc.pid), encoding="utf-8")
+    _write_record(pidfile, proc.pid, database_url(db))
     print(f"READY pid={proc.pid} base={base}")
     return 0
 
 
+def _escalate(pid: int) -> None:
+    """Ask harder, where the platform has a harder way to ask. Windows
+    ``os.kill`` already terminates outright, so SIGTERM was the hard ask
+    there. Whether it worked is decided by the caller's next wait, not by
+    this call."""
+    harder = getattr(signal, "SIGKILL", None)
+    if harder is None:
+        return
+    try:
+        os.kill(pid, harder)
+    except OSError as e:
+        print(f"escalating on pid {pid}: {e}", file=sys.stderr)
+
+
 def stop_detached(run_dir: Path, port: int) -> int:
-    """Stop a pidfile-managed instance; prints ``STOPPED pid=<pid> port=<port>``."""
-    _, _, pidfile = instance_paths(run_dir, port)
+    """Stop the instance started for this run dir and port.
+
+    Prints ``STOPPED pid=<pid> port=<port>`` once the instance is actually
+    gone. The recorded pid is signalled only after the instance on that port
+    proves it is the one in the record (it serves the database that instance
+    opened), so a record left behind by a dead instance can never take an
+    unrelated program down with it. Three outcomes, kept apart: the port is
+    empty and the stale record goes; the instance is ours and is stopped;
+    or something is there that we cannot claim, which is signalled to nobody,
+    keeps its record and returns 1.
+    """
+    db, _, pidfile = instance_paths(run_dir, port)
     if not pidfile.exists():
         print(f"no pidfile for port {port} — nothing to stop")
         return 0
-    pid = int(pidfile.read_text(encoding="utf-8").strip())
+
+    pid, database = _read_record(pidfile, db)
+    base = f"http://127.0.0.1:{port}"
+
+    if _reported_database(base) != database:
+        if _port_is_open(port):
+            print(
+                f"port {port} is in use by something that is not the instance in"
+                f" {pidfile}: nothing signalled, record kept",
+                file=sys.stderr,
+            )
+            return 1
+        pidfile.unlink(missing_ok=True)
+        print(f"instance for port {port} is already gone, removed its stale record")
+        return 0
+
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as e:
-        print(f"kill pid {pid}: {e} (already gone?)")
+        print(f"cannot stop pid {pid} on port {port}: {e}", file=sys.stderr)
+        return 1
+
+    if not _await_gone(port, _STOP_GRACE_SECONDS):
+        _escalate(pid)
+        if not _await_gone(port, _STOP_KILL_SECONDS):
+            print(
+                f"pid {pid} is still serving port {port} after being told to stop"
+                f". Record kept at {pidfile}",
+                file=sys.stderr,
+            )
+            return 1
+
     pidfile.unlink(missing_ok=True)
     print(f"STOPPED pid={pid} port={port}")
     return 0
