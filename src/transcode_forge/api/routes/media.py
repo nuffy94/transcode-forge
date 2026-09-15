@@ -106,7 +106,7 @@ class QueueRequest(BaseModel):
 # downscale, 'complete' blocks too; WITH one it's the whole point — an
 # already-HEVC/AV1 file (which the scanner catalogs as complete/skipped)
 # is exactly what the same-codec shrink exists for.
-_IN_FLIGHT = ("queued", "transcoding")
+_IN_FLIGHT = media_repo.IN_FLIGHT_STATUSES
 
 
 def _downscale_codec(source_codec: str, explicit: str | None, h264_default: str) -> str | None:

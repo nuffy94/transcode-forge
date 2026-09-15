@@ -170,10 +170,11 @@ async def cancel_all_pending(
 @router.post("/jobs/clear-completed")
 async def clear_completed(response: Response, db: DBConnection = Depends(get_db)) -> dict[str, Any]:
     """Remove completed jobs from history."""
-    cur = await db.execute("DELETE FROM jobs WHERE status IN ('complete', 'cancelled')")
-    await db.commit()
+    removed, released = await job_repo.delete_jobs(
+        db, (JobStatus.COMPLETE.value, JobStatus.CANCELLED.value)
+    )
     _toast(response, "Completed jobs cleared")
-    return {"removed": cur.rowcount}
+    return {"removed": removed, "released": released}
 
 
 @router.delete("/jobs/reset")
@@ -187,6 +188,5 @@ async def reset_all_jobs(
             status_code=400,
             detail="Must pass ?confirm=yes-delete-all to confirm destructive operation",
         )
-    cur = await db.execute("DELETE FROM jobs")
-    await db.commit()
-    return {"removed": cur.rowcount}
+    removed, released = await job_repo.delete_jobs(db)
+    return {"removed": removed, "released": released}
