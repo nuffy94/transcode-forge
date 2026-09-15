@@ -6,6 +6,7 @@ Users select files from the catalog and queue them via the UI.
 
 import asyncio
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,14 +67,52 @@ def _list_video_files(root: Path) -> list[Path]:
     instead of the real file. Skip pipeline artifacts: .tf_bak/.tf_tmp
     siblings carry media extensions and would become phantom (queueable!)
     catalog rows during any scan that races a transcode or follows a crash.
+
+    A directory the walk cannot read fails the walk instead of being
+    skipped (rglob swallows those errors): the prune at the end of a
+    scan treats the listing as the whole library, and a listing with a
+    hole in it is not that.
     """
-    files = [
-        f
-        for f in root.rglob("*")
-        if f.is_file() and not f.is_symlink() and is_video_file(f) and not is_pipeline_artifact(f)
-    ]
+
+    def _raise(err: OSError) -> None:
+        raise err
+
+    files: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=_raise, followlinks=True):
+        for name in filenames:
+            f = Path(dirpath) / name
+            if (
+                f.is_file()
+                and not f.is_symlink()
+                and is_video_file(f)
+                and not is_pipeline_artifact(f)
+            ):
+                files.append(f)
     files.sort()
     return files
+
+
+async def _prune_absent(db: DBConnection, library_id: str, walked: list[Path]) -> int:
+    """Delete this library's rows whose file is gone; return how many.
+
+    A row is gone when the walk did not see its path AND a fresh stat still
+    finds nothing there. The second look matters: a file inside its own
+    SWAP (original renamed to .tf_bak, new file renamed into place) is
+    absent for one moment, and a walk can land in it. The walk is the
+    candidate list, the stat is the verdict. The deletes are one
+    transaction, so a failure part way leaves every row in place.
+    """
+    known = await media_repo.paths_for_library(db, library_id)
+    present = {str(p) for p in walked}
+    candidates = [path for path in known if path not in present]
+    gone = await asyncio.to_thread(
+        lambda: [path for path in candidates if not os.path.exists(path)]
+    )
+    if not gone:
+        return 0
+    async with db.transaction() as tx:
+        await media_repo.delete_by_ids(tx, [known[path] for path in gone])
+    return len(gone)
 
 
 async def scan_library(
@@ -220,9 +259,7 @@ async def scan_library(
         # walk saw only part of the tree, and an empty walk is more likely
         # an unmounted share than an empty library, so neither prunes.
         if max_files == 0 and files_found > 0:
-            files_removed = await media_repo.delete_absent(
-                db, library_id=library_id, present_paths={str(p) for p in video_files}
-            )
+            files_removed = await _prune_absent(db, library_id, video_files)
 
     except asyncio.CancelledError:
         # Shutdown cancels live scans (runner.cancel_all): the row must not

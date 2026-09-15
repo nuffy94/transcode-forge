@@ -486,7 +486,7 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def slow_rglob(self, pattern):
+        def slow_walk(top, **kwargs):
             time.sleep(0.5)
             return iter(())
 
@@ -502,7 +502,7 @@ class TestWalkOffTheLoop:
 
         tick = asyncio.create_task(ticker())
         try:
-            with patch.object(Path, "rglob", slow_rglob):
+            with patch("os.walk", slow_walk):
                 await scan_library(
                     library_id="lib",
                     library_name="movies",
@@ -528,11 +528,11 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def slow_rglob(self, pattern):
+        def slow_walk(top, **kwargs):
             time.sleep(0.3)
             return iter(())
 
-        with patch.object(Path, "rglob", slow_rglob):
+        with patch("os.walk", slow_walk):
             task = asyncio.create_task(
                 scan_library(
                     library_id="lib",
@@ -565,11 +565,11 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def wedged_rglob(self, pattern):
+        def wedged_walk(top, **kwargs):
             time.sleep(0.3)
             return iter(())
 
-        with patch.object(Path, "rglob", wedged_rglob):
+        with patch("os.walk", wedged_walk):
             with pytest.raises(TimeoutError):
                 await scan_library(
                     library_id="lib",
@@ -718,3 +718,108 @@ class TestScanPrunesVanishedRows:
         scans, _ = await scan_repo.list_scans(db)
         assert scans[0].status == ScanStatus.FAILED
         assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_unreadable_subtree_fails_the_scan_and_keeps_rows(self, db, tmp_path):
+        """Codex 2026-09-15: rglob swallows traversal errors, so a subtree
+        that stopped being readable looked like a subtree that vanished and
+        its rows were pruned. An incomplete walk is not the truth; it fails."""
+        import os
+
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        (lib / "locked").mkdir(parents=True)
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "locked" / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        real_scandir = os.scandir
+
+        def scandir_denying_locked(path=".", *args, **kwargs):
+            if os.fspath(path).endswith("locked"):
+                raise PermissionError(13, "Permission denied", os.fspath(path))
+            return real_scandir(path, *args, **kwargs)
+
+        with (
+            patch("os.scandir", scandir_denying_locked),
+            patch(
+                "transcode_forge.scanner.scanner.ffprobe",
+                new=AsyncMock(side_effect=_fake_probe),
+            ),
+            pytest.raises(PermissionError),
+        ):
+            await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(lib),
+                media_type="movies",
+                db=db,
+            )
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_file_missing_from_the_walk_but_on_disk_is_kept(self, db, tmp_path):
+        """Codex 2026-09-15: a walk that lands inside a file's SWAP (original
+        renamed to .tf_bak, new file not yet renamed into place) does not see
+        the original. The row must survive: the walk nominates, a fresh stat
+        decides."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        stale_walk = [(lib / "a.mkv").resolve()]
+        with patch("transcode_forge.scanner.scanner._list_video_files", return_value=stale_walk):
+            await self._scan(db, lib_id, lib)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_prune_is_all_or_nothing(self, db, tmp_path, monkeypatch):
+        """Codex 2026-09-15: chunked deletes outside a transaction left the
+        first chunk committed when a later one failed. Now none land."""
+        from transcode_forge import db as db_mod
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import media as media_repo
+        from transcode_forge.repos import scans as scan_repo
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        for name in ("a", "b", "c", "keep"):
+            (lib / f"{name}.mkv").write_bytes(b"x" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        for name in ("a", "b", "c"):
+            (lib / f"{name}.mkv").unlink()
+
+        monkeypatch.setattr(media_repo, "_DELETE_CHUNK", 1)
+        deletes = 0
+
+        def failing_execute(real):
+            def execute(self, sql, params=()):
+                nonlocal deletes
+                if sql.startswith("DELETE FROM media_files"):
+                    deletes += 1
+                    if deletes == 2:
+                        raise RuntimeError("connection dropped mid-prune")
+                return real(self, sql, params)
+
+            return execute
+
+        for cls in (db_mod._SqliteTransaction, db_mod._PgTransaction):
+            monkeypatch.setattr(cls, "execute", failing_execute(cls.execute))
+
+        with pytest.raises(RuntimeError):
+            await self._scan(db, lib_id, lib)
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert deletes == 2
+        assert len(await self._paths(db, lib_id)) == 4
