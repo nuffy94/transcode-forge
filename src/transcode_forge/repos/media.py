@@ -18,6 +18,10 @@ _VALID_TRANSCODE_STATUSES = frozenset(
     }
 )
 
+# A row in one of these claims a live job: the queue refuses it, the
+# drawer hides its Queue button, and deleting the job has to let it go.
+IN_FLIGHT_STATUSES = ("queued", "transcoding")
+
 
 async def upsert_media_file(
     db: DBConnection,

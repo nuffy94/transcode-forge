@@ -282,3 +282,75 @@ class TestSchedulerActionsSyncMedia:
         for fid in (file_a, file_b):
             row = await _media_row(app, fid)
             assert row["transcode_status"] == "needs_transcode"
+
+
+class TestDeletingJobsReleasesMedia:
+    """R-004: a deleted job must not leave its catalog row claiming it.
+
+    media_files.job_id has no foreign key, so before job_repo.delete_jobs
+    owned the delete, Reset all left rows reading 'queued' against a job
+    that was gone, and the queue refused them forever.
+    """
+
+    async def test_reset_all_releases_queued_rows_for_requeue(self, client: AsyncClient, app):
+        file_id, _job = await _seed_catalog_job(app)
+
+        r = await client.delete("/api/jobs/reset?confirm=yes-delete-all")
+        assert r.status_code == 200
+        assert r.json() == {"removed": 1, "released": 1}
+
+        row = await _media_row(app, file_id)
+        assert row["transcode_status"] == "needs_transcode"
+        assert row["job_id"] is None
+
+        r = await client.post("/api/media/queue", json={"file_ids": [file_id]})
+        assert r.status_code == 200
+        assert r.json()["queued"] == 1
+
+    async def test_clear_completed_keeps_complete_but_drops_the_job_link(
+        self, client: AsyncClient, app
+    ):
+        from transcode_forge.models.job import JobStatus
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import media as media_repo
+
+        file_id, job = await _seed_catalog_job(app)
+        await job_repo.update_job(app.state.db, job.id, status=JobStatus.COMPLETE)
+        await media_repo.update_status_by_job(app.state.db, job.id, transcode_status="complete")
+
+        r = await client.post("/api/jobs/clear-completed")
+        assert r.status_code == 200
+        assert r.json() == {"removed": 1, "released": 1}
+
+        row = await _media_row(app, file_id)
+        assert row["transcode_status"] == "complete"
+        assert row["job_id"] is None
+
+    async def test_clear_completed_leaves_waiting_jobs_and_their_rows(
+        self, client: AsyncClient, app
+    ):
+        file_id, job = await _seed_catalog_job(app)
+
+        r = await client.post("/api/jobs/clear-completed")
+        assert r.status_code == 200
+        assert r.json() == {"removed": 0, "released": 0}
+
+        row = await _media_row(app, file_id)
+        assert row["transcode_status"] == "queued"
+        assert row["job_id"] == job.id
+
+    async def test_delete_jobs_spans_statement_chunks(self, app):
+        """More jobs than one statement carries: every one goes, every row is freed."""
+        from transcode_forge.repos import jobs as job_repo
+        from transcode_forge.repos import media as media_repo
+
+        n = 1203  # not a multiple of the chunk size
+        file_ids = [(await _seed_catalog_job(app, f"/m/bulk-{i}.mkv"))[0] for i in range(n)]
+
+        removed, released = await job_repo.delete_jobs(app.state.db)
+        assert (removed, released) == (n, n)
+
+        rows = await media_repo.get_by_ids(app.state.db, file_ids)
+        assert len(rows) == n
+        assert {r["job_id"] for r in rows} == {None}
+        assert {r["transcode_status"] for r in rows} == {"needs_transcode"}

@@ -1,6 +1,8 @@
 """Job repository — CRUD operations for transcode jobs."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from itertools import batched
 from uuid import uuid4
 
 import aiosqlite
@@ -14,9 +16,14 @@ from transcode_forge.models.job import (
     JobStatus,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
+from transcode_forge.repos.media import IN_FLIGHT_STATUSES
 
 # Valid job statuses for filtering (whitelist validation)
 _VALID_JOB_STATUSES = frozenset(status.value for status in JobStatus)
+
+# Ids per statement when deleting jobs: well under the bound-parameter
+# ceilings (SQLite 32766, asyncpg 32767) with room for the other params.
+_DELETE_CHUNK = 500
 
 # Whitelist of sortable columns -> SQL column. Maps the UI's sort key to a real
 # column so user input can never reach the ORDER BY clause directly. Duration is
@@ -616,3 +623,56 @@ async def active_paths(db: DBConnection, paths: list[str]) -> set[str]:
         [*paths, *terminal],
     ) as cur:
         return {row["source_path"] for row in await cur.fetchall()}
+
+
+async def delete_jobs(db: DBConnection, statuses: Sequence[str] | None = None) -> tuple[int, int]:
+    """Delete jobs, releasing the catalog rows that point at them first.
+
+    The only door out of the jobs table. media_files.job_id carries no
+    foreign key, so a bare DELETE leaves rows claiming a job that no
+    longer exists, and one still reading 'queued' can never be queued
+    again (R-004). In one transaction every row whose job is about to go
+    loses its job_id; a row still queued or transcoding drops back to
+    needs_transcode, while a settled outcome (complete, skipped, the
+    needs_transcode a failure leaves) is kept. ``statuses`` restricts the
+    delete; None deletes every job. Returns (removed, released).
+
+    The set of jobs is chosen once and locked (Postgres runs READ
+    COMMITTED, so two statements each re-reading ``WHERE status IN``
+    could disagree: a retry landing between them would release a job's
+    row and then leave the job alive without its link, and a queue
+    landing between them would delete a job whose row was never
+    released). Locking the jobs before touching media_files also follows
+    the order worker finalization uses (job first, then its row), so
+    the two cannot deadlock.
+    """
+    if statuses is not None and not statuses:
+        return 0, 0
+    where = ""
+    params: tuple[str, ...] = ()
+    if statuses is not None:
+        where = f" WHERE status IN ({','.join('?' * len(statuses))})"
+        params = tuple(statuses)
+    in_flight = ",".join("?" * len(IN_FLIGHT_STATUSES))
+    now = datetime.now(UTC).isoformat()
+    removed = released = 0
+    async with db.transaction() as tx:
+        lock = " FOR UPDATE" if tx.dialect == "postgres" else ""
+        async with tx.execute(f"SELECT id FROM jobs{where}{lock}", params) as cur:
+            job_ids = [row["id"] for row in await cur.fetchall()]
+        for chunk in batched(job_ids, _DELETE_CHUNK):
+            ids = ",".join("?" * len(chunk))
+            cur = await tx.execute(
+                "UPDATE media_files SET job_id = NULL,"
+                f" transcode_status = CASE WHEN transcode_status IN ({in_flight})"
+                " THEN 'needs_transcode' ELSE transcode_status END,"
+                f" skip_reason = CASE WHEN transcode_status IN ({in_flight})"
+                " THEN NULL ELSE skip_reason END,"
+                " updated_at = ?"
+                f" WHERE job_id IN ({ids})",
+                (*IN_FLIGHT_STATUSES, *IN_FLIGHT_STATUSES, now, *chunk),
+            )
+            released += cur.rowcount
+            cur = await tx.execute(f"DELETE FROM jobs WHERE id IN ({ids})", chunk)
+            removed += cur.rowcount
+    return removed, released
