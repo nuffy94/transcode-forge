@@ -51,7 +51,10 @@ CI (`.github/workflows/tests.yml`) runs five jobs on every push and PR:
   stale relative to its source.
 - `image-build` — the production Dockerfile must build (its baked-in
   encoder + VMAF smoke runs at PR time; publishing stays in
-  `publish.yml`).
+  `publish.yml`), and `scripts/check_image_lock.py` run inside the
+  result must find every installed distribution pinned in `uv.lock` at
+  the same version. The image installs from the lock export, so the
+  suite tests what the fleet runs.
 
 A formatting drift, type error, dialect regression, or CSS drift will
 fail the build — always run `ruff format`, `mypy src/`, and rebuild the

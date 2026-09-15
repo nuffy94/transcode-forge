@@ -59,8 +59,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Install dependencies first so this layer caches between source-only changes.
-COPY pyproject.toml ./
-RUN uv pip install --system --no-cache -r pyproject.toml
+# The lock is what ships: export it (hashes included, so every wheel is
+# verified) and install exactly that, never a fresh resolve of pyproject.toml.
+# CI's image-build job runs scripts/check_image_lock.py inside the result.
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Copy source and install the project itself onto the system Python so
 # `transcode_forge.main:app` resolves without PYTHONPATH gymnastics.

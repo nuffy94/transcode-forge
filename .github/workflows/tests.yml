@@ -165,4 +165,14 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
+          load: true
+          tags: transcode-forge:ci
           cache-from: type=gha
+
+      - name: Installed packages match uv.lock
+        # The image installs from the lock export; this proves it. Every
+        # distribution in the built image must be pinned in uv.lock at the
+        # same version, so the suite tested what the fleet runs.
+        run: >-
+          docker run --rm -v "$PWD/scripts:/scripts:ro" transcode-forge:ci
+          python /scripts/check_image_lock.py
