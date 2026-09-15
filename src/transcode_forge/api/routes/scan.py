@@ -22,7 +22,7 @@ router = APIRouter(tags=["scans"])
 class ScanRequest(BaseModel):
     library: str | None = None  # None = scan all libraries
     limit: int = Field(
-        default=0, ge=0, le=1_000_000, description="Max files to queue (0 = unlimited)"
+        default=0, ge=0, le=1_000_000, description="Max files to probe (0 = whole library)"
     )
 
 

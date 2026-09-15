@@ -78,9 +78,10 @@ async function triggerScan() {
     const btn = document.getElementById('scan-btn');
     const status = document.getElementById('scan-status');
     const lib = document.getElementById('scan-library').value;
-    const limit = parseInt(document.getElementById('scan-limit').value, 10) || 0;
 
-    const body = { limit: limit };
+    // A scan is always the whole library: a capped walk is a partial
+    // catalog, and the end-of-scan prune refuses to act on one.
+    const body = {};
     if (lib) body.library = lib;
 
     btn.disabled = true;
