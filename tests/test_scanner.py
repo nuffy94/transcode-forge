@@ -486,7 +486,7 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def slow_rglob(self, pattern):
+        def slow_walk(top, **kwargs):
             time.sleep(0.5)
             return iter(())
 
@@ -502,7 +502,7 @@ class TestWalkOffTheLoop:
 
         tick = asyncio.create_task(ticker())
         try:
-            with patch.object(Path, "rglob", slow_rglob):
+            with patch("os.walk", slow_walk):
                 await scan_library(
                     library_id="lib",
                     library_name="movies",
@@ -528,11 +528,11 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def slow_rglob(self, pattern):
+        def slow_walk(top, **kwargs):
             time.sleep(0.3)
             return iter(())
 
-        with patch.object(Path, "rglob", slow_rglob):
+        with patch("os.walk", slow_walk):
             task = asyncio.create_task(
                 scan_library(
                     library_id="lib",
@@ -565,11 +565,11 @@ class TestWalkOffTheLoop:
         lib = tmp_path / "movies"
         lib.mkdir()
 
-        def wedged_rglob(self, pattern):
+        def wedged_walk(top, **kwargs):
             time.sleep(0.3)
             return iter(())
 
-        with patch.object(Path, "rglob", wedged_rglob):
+        with patch("os.walk", wedged_walk):
             with pytest.raises(TimeoutError):
                 await scan_library(
                     library_id="lib",
@@ -583,3 +583,316 @@ class TestWalkOffTheLoop:
         import asyncio
 
         await asyncio.sleep(0.3)  # let the walk thread finish before teardown
+
+
+class TestScanPrunesVanishedRows:
+    """A completed, uncapped walk is the truth for its library: rows whose
+    file the walk did not find are removed. Capped, empty and failed walks
+    never prune."""
+
+    async def _library(self, db, path, name="movies"):
+        from transcode_forge.repos import libraries as lib_repo
+
+        return await lib_repo.create_library(db, name=name, media_type="movies", path=str(path))
+
+    async def _scan(self, db, lib_id, path, **kwargs):
+        from transcode_forge.scanner.scanner import scan_library
+
+        with patch(
+            "transcode_forge.scanner.scanner.ffprobe",
+            new=AsyncMock(side_effect=_fake_probe),
+        ):
+            return await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(path),
+                media_type="movies",
+                db=db,
+                **kwargs,
+            )
+
+    async def _paths(self, db, lib_id):
+        async with db.execute(
+            "SELECT file_path FROM media_files WHERE library_id = ? ORDER BY file_path",
+            (lib_id,),
+        ) as cur:
+            return [row["file_path"] for row in await cur.fetchall()]
+
+    async def test_completed_scan_removes_rows_for_vanished_files(self, db, tmp_path):
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        (lib / "b.mkv").unlink()
+        scan = await self._scan(db, lib_id, lib)
+
+        stored = await scan_repo.get_scan(db, scan.id)
+        assert stored.status == ScanStatus.COMPLETE
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]
+
+    async def test_other_libraries_are_not_touched(self, db, tmp_path):
+        movies = tmp_path / "movies"
+        tv = tmp_path / "tv"
+        movies.mkdir()
+        tv.mkdir()
+        (movies / "a.mkv").write_bytes(b"a" * 10)
+        (tv / "show.mkv").write_bytes(b"s" * 10)
+        movies_id = await self._library(db, movies)
+        tv_id = await self._library(db, tv, name="tv")
+        await self._scan(db, movies_id, movies)
+        await self._scan(db, tv_id, tv)
+
+        (movies / "a.mkv").unlink()
+        (movies / "c.mkv").write_bytes(b"c" * 10)
+        await self._scan(db, movies_id, movies)
+
+        assert await self._paths(db, movies_id) == [str((movies / "c.mkv").resolve())]
+        assert await self._paths(db, tv_id) == [str((tv / "show.mkv").resolve())]
+
+    async def test_empty_walk_keeps_every_row(self, db, tmp_path):
+        """An empty tree is more likely an unmounted share than an empty
+        library; it must not wipe the catalog."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "a.mkv").unlink()
+        scan = await self._scan(db, lib_id, lib)
+
+        assert scan.files_found == 0
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]
+
+    async def test_capped_walk_keeps_every_row(self, db, tmp_path):
+        """max_files saw part of the tree; absence from a partial view proves nothing."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "b.mkv").unlink()
+        (lib / "c.mkv").write_bytes(b"c" * 10)
+        await self._scan(db, lib_id, lib, max_files=1)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_failed_scan_keeps_every_row(self, db, tmp_path):
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "b.mkv").unlink()
+        (lib / "c.mkv").write_bytes(b"c" * 10)
+        with (
+            patch(
+                "transcode_forge.scanner.scanner.ffprobe",
+                new=AsyncMock(side_effect=RuntimeError("probe host died")),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(lib),
+                media_type="movies",
+                db=db,
+            )
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_unreadable_subtree_fails_the_scan_and_keeps_rows(self, db, tmp_path):
+        """Codex 2026-09-15: rglob swallows traversal errors, so a subtree
+        that stopped being readable looked like a subtree that vanished and
+        its rows were pruned. An incomplete walk is not the truth; it fails."""
+        import os
+
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        (lib / "locked").mkdir(parents=True)
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "locked" / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        real_scandir = os.scandir
+
+        def scandir_denying_locked(path=".", *args, **kwargs):
+            if os.fspath(path).endswith("locked"):
+                raise PermissionError(13, "Permission denied", os.fspath(path))
+            return real_scandir(path, *args, **kwargs)
+
+        with (
+            patch("os.scandir", scandir_denying_locked),
+            patch(
+                "transcode_forge.scanner.scanner.ffprobe",
+                new=AsyncMock(side_effect=_fake_probe),
+            ),
+            pytest.raises(PermissionError),
+        ):
+            await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(lib),
+                media_type="movies",
+                db=db,
+            )
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_file_missing_from_the_walk_but_on_disk_is_kept(self, db, tmp_path):
+        """Codex 2026-09-15: a walk that lands inside a file's SWAP (original
+        renamed to .tf_bak, new file not yet renamed into place) does not see
+        the original. The row must survive: the walk nominates, a fresh stat
+        decides."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        stale_walk = [(lib / "a.mkv").resolve()]
+        with patch("transcode_forge.scanner.scanner._list_video_files", return_value=stale_walk):
+            await self._scan(db, lib_id, lib)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_prune_is_all_or_nothing(self, db, tmp_path, monkeypatch):
+        """Codex 2026-09-15: chunked deletes outside a transaction left the
+        first chunk committed when a later one failed. Now none land."""
+        from transcode_forge import db as db_mod
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import media as media_repo
+        from transcode_forge.repos import scans as scan_repo
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        for name in ("a", "b", "c", "keep"):
+            (lib / f"{name}.mkv").write_bytes(b"x" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        for name in ("a", "b", "c"):
+            (lib / f"{name}.mkv").unlink()
+
+        monkeypatch.setattr(media_repo, "_DELETE_CHUNK", 1)
+        deletes = 0
+
+        def failing_execute(real):
+            def execute(self, sql, params=()):
+                nonlocal deletes
+                if sql.startswith("DELETE FROM media_files"):
+                    deletes += 1
+                    if deletes == 2:
+                        raise RuntimeError("connection dropped mid-prune")
+                return real(self, sql, params)
+
+            return execute
+
+        for cls in (db_mod._SqliteTransaction, db_mod._PgTransaction):
+            monkeypatch.setattr(cls, "execute", failing_execute(cls.execute))
+
+        with pytest.raises(RuntimeError):
+            await self._scan(db, lib_id, lib)
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert deletes == 2
+        assert len(await self._paths(db, lib_id)) == 4
+
+    async def test_stat_error_keeps_the_row(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): os.path.exists answers False to a
+        permission error too, so a file the scanner could not stat looked
+        gone. Only "no such file" is gone; anything else keeps the row."""
+        import os
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        real_stat = os.stat
+
+        def stat_denying_b(path, *args, **kwargs):
+            if os.fspath(path).endswith("b.mkv"):
+                raise PermissionError(13, "Permission denied", os.fspath(path))
+            return real_stat(path, *args, **kwargs)
+
+        stale_walk = [(lib / "a.mkv").resolve()]
+        with (
+            patch("transcode_forge.scanner.scanner._list_video_files", return_value=stale_walk),
+            patch("os.stat", stat_denying_b),
+        ):
+            await self._scan(db, lib_id, lib)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_file_inside_its_swap_keeps_the_row(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): a worker paused between the swap's
+        two renames leaves the original absent for both the walk and the
+        prune-time stat. The .tf_bak sidecar is the proof the file is being
+        replaced, so the row stays."""
+        from transcode_forge.worker.storage.filesystem import pipeline_artifacts
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        _lock, _tmp, bak = pipeline_artifacts(lib / "b.mkv")
+        (lib / "b.mkv").rename(bak)  # first rename of the swap; the second never comes
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        bak.rename(lib / "b.mkv")  # the swap finishes; nothing to heal
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_directory_symlinks_are_not_followed(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): os.walk(followlinks=True) would
+        have cataloged files outside the library through a linked
+        directory. The walk stays inside the root."""
+        import os
+
+        lib = tmp_path / "movies"
+        outside = tmp_path / "outside"
+        lib.mkdir()
+        outside.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (outside / "x.mkv").write_bytes(b"x" * 10)
+        try:
+            os.symlink(outside, lib / "link", target_is_directory=True)
+        except OSError as e:  # no symlink privilege on this Windows account
+            pytest.skip(f"cannot create a directory symlink here: {e}")
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]

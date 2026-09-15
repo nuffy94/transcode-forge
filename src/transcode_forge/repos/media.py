@@ -137,6 +137,27 @@ async def ids_by_paths(db: DBConnection, paths: list[str]) -> dict[str, str]:
         return {row["file_path"]: row["id"] for row in await cur.fetchall()}
 
 
+_DELETE_CHUNK = 500  # well under SQLite's oldest 999-parameter ceiling
+
+
+async def paths_for_library(db: DBConnection, library_id: str) -> dict[str, str]:
+    """Map file_path -> media file id for every row of one library."""
+    async with db.execute(
+        "SELECT id, file_path FROM media_files WHERE library_id = ?", (library_id,)
+    ) as cur:
+        return {row["file_path"]: row["id"] for row in await cur.fetchall()}
+
+
+async def delete_by_ids(db: DBConnection, file_ids: list[str]) -> int:
+    """Delete these rows. Chunked for the placeholder ceiling; the caller
+    wraps the call in ``db.transaction()`` when it must be all or nothing."""
+    for start in range(0, len(file_ids), _DELETE_CHUNK):
+        chunk = file_ids[start : start + _DELETE_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        await db.execute(f"DELETE FROM media_files WHERE id IN ({placeholders})", chunk)
+    return len(file_ids)
+
+
 async def get_by_ids(db: DBConnection, file_ids: list[str]) -> list[dict[str, Any]]:
     """Fetch many media files in one query (order not preserved)."""
     if not file_ids:
