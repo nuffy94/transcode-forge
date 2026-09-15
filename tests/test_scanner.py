@@ -583,3 +583,138 @@ class TestWalkOffTheLoop:
         import asyncio
 
         await asyncio.sleep(0.3)  # let the walk thread finish before teardown
+
+
+class TestScanPrunesVanishedRows:
+    """A completed, uncapped walk is the truth for its library: rows whose
+    file the walk did not find are removed. Capped, empty and failed walks
+    never prune."""
+
+    async def _library(self, db, path, name="movies"):
+        from transcode_forge.repos import libraries as lib_repo
+
+        return await lib_repo.create_library(db, name=name, media_type="movies", path=str(path))
+
+    async def _scan(self, db, lib_id, path, **kwargs):
+        from transcode_forge.scanner.scanner import scan_library
+
+        with patch(
+            "transcode_forge.scanner.scanner.ffprobe",
+            new=AsyncMock(side_effect=_fake_probe),
+        ):
+            return await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(path),
+                media_type="movies",
+                db=db,
+                **kwargs,
+            )
+
+    async def _paths(self, db, lib_id):
+        async with db.execute(
+            "SELECT file_path FROM media_files WHERE library_id = ? ORDER BY file_path",
+            (lib_id,),
+        ) as cur:
+            return [row["file_path"] for row in await cur.fetchall()]
+
+    async def test_completed_scan_removes_rows_for_vanished_files(self, db, tmp_path):
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        (lib / "b.mkv").unlink()
+        scan = await self._scan(db, lib_id, lib)
+
+        stored = await scan_repo.get_scan(db, scan.id)
+        assert stored.status == ScanStatus.COMPLETE
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]
+
+    async def test_other_libraries_are_not_touched(self, db, tmp_path):
+        movies = tmp_path / "movies"
+        tv = tmp_path / "tv"
+        movies.mkdir()
+        tv.mkdir()
+        (movies / "a.mkv").write_bytes(b"a" * 10)
+        (tv / "show.mkv").write_bytes(b"s" * 10)
+        movies_id = await self._library(db, movies)
+        tv_id = await self._library(db, tv, name="tv")
+        await self._scan(db, movies_id, movies)
+        await self._scan(db, tv_id, tv)
+
+        (movies / "a.mkv").unlink()
+        (movies / "c.mkv").write_bytes(b"c" * 10)
+        await self._scan(db, movies_id, movies)
+
+        assert await self._paths(db, movies_id) == [str((movies / "c.mkv").resolve())]
+        assert await self._paths(db, tv_id) == [str((tv / "show.mkv").resolve())]
+
+    async def test_empty_walk_keeps_every_row(self, db, tmp_path):
+        """An empty tree is more likely an unmounted share than an empty
+        library; it must not wipe the catalog."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "a.mkv").unlink()
+        scan = await self._scan(db, lib_id, lib)
+
+        assert scan.files_found == 0
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]
+
+    async def test_capped_walk_keeps_every_row(self, db, tmp_path):
+        """max_files saw part of the tree; absence from a partial view proves nothing."""
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "b.mkv").unlink()
+        (lib / "c.mkv").write_bytes(b"c" * 10)
+        await self._scan(db, lib_id, lib, max_files=1)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_failed_scan_keeps_every_row(self, db, tmp_path):
+        from transcode_forge.models.scan import ScanStatus
+        from transcode_forge.repos import scans as scan_repo
+        from transcode_forge.scanner.scanner import scan_library
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        (lib / "b.mkv").unlink()
+        (lib / "c.mkv").write_bytes(b"c" * 10)
+        with (
+            patch(
+                "transcode_forge.scanner.scanner.ffprobe",
+                new=AsyncMock(side_effect=RuntimeError("probe host died")),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await scan_library(
+                library_id=lib_id,
+                library_name="movies",
+                library_path=str(lib),
+                media_type="movies",
+                db=db,
+            )
+
+        scans, _ = await scan_repo.list_scans(db)
+        assert scans[0].status == ScanStatus.FAILED
+        assert len(await self._paths(db, lib_id)) == 2

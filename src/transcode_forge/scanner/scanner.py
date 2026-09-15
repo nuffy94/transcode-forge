@@ -115,6 +115,7 @@ async def scan_library(
     files_new = 0
     files_updated = 0
     files_skipped = 0
+    files_removed = 0
 
     try:
         # The walk is seconds on local disk and can be a minute on a slow
@@ -213,6 +214,16 @@ async def scan_library(
                     files_skipped,
                 )
 
+        # A complete walk is the truth for this library: a row whose file
+        # the walk did not find points at nothing (a replaced release, a
+        # deleted show) and would be offered for queueing forever. A capped
+        # walk saw only part of the tree, and an empty walk is more likely
+        # an unmounted share than an empty library, so neither prunes.
+        if max_files == 0 and files_found > 0:
+            files_removed = await media_repo.delete_absent(
+                db, library_id=library_id, present_paths={str(p) for p in video_files}
+            )
+
     except asyncio.CancelledError:
         # Shutdown cancels live scans (runner.cancel_all): the row must not
         # stay 'running' forever, and the attempt counts as an attempt.
@@ -251,10 +262,11 @@ async def scan_library(
     )
 
     logger.info(
-        "Scan complete: found=%d new=%d updated=%d skipped=%d",
+        "Scan complete: found=%d new=%d updated=%d skipped=%d removed=%d",
         files_found,
         files_new,
         files_updated,
         files_skipped,
+        files_removed,
     )
     return scan

@@ -137,6 +137,30 @@ async def ids_by_paths(db: DBConnection, paths: list[str]) -> dict[str, str]:
         return {row["file_path"]: row["id"] for row in await cur.fetchall()}
 
 
+_DELETE_CHUNK = 500  # well under SQLite's oldest 999-parameter ceiling
+
+
+async def delete_absent(db: DBConnection, *, library_id: str, present_paths: set[str]) -> int:
+    """Remove this library's rows whose file_path is not in present_paths.
+
+    The scanner calls this once a complete, uncapped walk has finished, so
+    present_paths is the whole library as it exists on disk right now. A
+    row the walk did not find points at a file that is gone (a replaced
+    release, a deleted show) and would otherwise be offered for queueing
+    forever. Returns the number of rows removed.
+    """
+    async with db.execute(
+        "SELECT id, file_path FROM media_files WHERE library_id = ?", (library_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    gone = [row["id"] for row in rows if row["file_path"] not in present_paths]
+    for start in range(0, len(gone), _DELETE_CHUNK):
+        chunk = gone[start : start + _DELETE_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        await db.execute(f"DELETE FROM media_files WHERE id IN ({placeholders})", chunk)
+    return len(gone)
+
+
 async def get_by_ids(db: DBConnection, file_ids: list[str]) -> list[dict[str, Any]]:
     """Fetch many media files in one query (order not preserved)."""
     if not file_ids:
