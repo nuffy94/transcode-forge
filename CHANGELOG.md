@@ -4,6 +4,35 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-09-15
+
+Two fixes. Scheduler only: no migration, no worker protocol change. The
+image is now built from uv.lock, so this is the first release whose
+container runs exactly the library versions the suite tested.
+
+### Fixed
+- **The lock is what ships.** The Dockerfile resolved dependencies from
+  pyproject.toml on build day while CI, the LXC workers and every
+  developer ran uv.lock. The 0.15.0 image carried 25 runtime packages at
+  versions the suite never saw, among them Starlette 1.6.0 on a lock that
+  pinned 0.52.1 and redis 8.1 on a lock that pinned 5.3. The image now
+  installs the lock export with hashes, and the image-build CI job runs
+  `scripts/check_image_lock.py` inside the result: every installed
+  distribution must be pinned in uv.lock at that version, and everything
+  the lock requires must be present. The lock moved to the versions the
+  fleet was already running, with a `starlette>=1.3.1` floor so a re-lock
+  cannot fall below the StaticFiles UNC, Host header and form-limit
+  advisories. (R-010, #131)
+- **A completed scan removes rows for files that are gone.** Sonarr and
+  Radarr replace releases; the old path vanished and its catalog row
+  stayed forever, offered on the Movies and TV pages as needs_transcode.
+  On the home library that was 1204 of 13143 rows. A complete, uncapped
+  walk now nominates the rows it did not see, a fresh stat at prune time
+  decides, and a pipeline sidecar (`.tf_lock`, `.tf_bak`) vetoes, so a
+  file inside its own swap keeps its row. A walk that cannot read a
+  directory fails the scan instead of pruning from a hole; an empty walk
+  and a capped walk never prune. (#132)
+
 ## [0.15.0] - 2026-09-13
 
 Seven fixes from the 2026-09-12 Codex reviews. Upgrade the scheduler first,
