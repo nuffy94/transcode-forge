@@ -190,6 +190,16 @@ class TestPageRoutes:
         assert response.status_code == 200
         assert "Job queue" in response.text
 
+    async def test_queue_page_offers_no_scan_cap(self, client: AsyncClient):
+        """The scan box capped the walk at 10 files by default, a leftover
+        from when a scan also queued jobs. A capped walk is a partial catalog
+        and the end-of-scan prune refuses to act on one, so the page offers
+        only a whole-library scan."""
+        response = await client.get("/queue")
+        assert "scan-limit" not in response.text
+        assert "Maximum files to queue" not in response.text
+        assert 'id="scan-btn"' in response.text
+
     async def test_workers_page(self, client: AsyncClient):
         response = await client.get("/workers")
         assert response.status_code == 200

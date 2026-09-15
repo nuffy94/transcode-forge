@@ -354,7 +354,8 @@
   title: Scan-limit input's aria-label "Maximum files to queue" contradicts the panel's own "it never queues them" copy
   first_seen: 2026-07-14 / S9
   severity: low
-  status: unverified
+  status: codified
+  refs: {pr: 134, test: "tests/test_web.py::TestPageRoutes::test_queue_page_offers_no_scan_cap"}
   note: >-
     Sighted users see an unexplained bare "Max" placeholder; screen-reader
     users hear the opposite of the panel copy two lines below. Truth
