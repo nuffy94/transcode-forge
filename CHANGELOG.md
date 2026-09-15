@@ -4,6 +4,20 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-09-15
+
+One fix, scheduler only, no migration.
+
+### Fixed
+- **A scan is always the whole library.** The Queue page's scan box capped
+  the walk at 10 files by default, a leftover from the first commit when a
+  scan also queued jobs. The scanner has been catalog-only for a long time,
+  so the number only shortened the catalog, its label still read "Maximum
+  files to queue", and since 0.15.1 a capped walk also skips the
+  end-of-scan prune, so the default quietly turned that off. The box is
+  gone; the button scans the whole library. The API keeps `limit` for
+  tests and the demo seeder. (#134)
+
 ## [0.15.1] - 2026-09-15
 
 Two fixes. Scheduler only: no migration, no worker protocol change. The
