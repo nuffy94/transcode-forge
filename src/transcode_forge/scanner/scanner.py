@@ -21,6 +21,7 @@ from transcode_forge.scanner.probe import (
     is_pipeline_artifact,
     is_video_file,
 )
+from transcode_forge.worker.storage.filesystem import pipeline_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,12 @@ def parse_tv_info(filepath: Path) -> tuple[str | None, int | None, int | None]:
 def _list_video_files(root: Path) -> list[Path]:
     """Every video file under root, sorted, walked synchronously.
 
-    Skip symlinks: following them can catalog files outside the library
-    root, and the pipeline's lock/bak files would land at the link path
-    instead of the real file. Skip pipeline artifacts: .tf_bak/.tf_tmp
-    siblings carry media extensions and would become phantom (queueable!)
-    catalog rows during any scan that races a transcode or follows a crash.
+    Skip symlinks, file and directory alike: following them can catalog
+    files outside the library root, and the pipeline's lock/bak files
+    would land at the link path instead of the real file. Skip pipeline
+    artifacts: .tf_bak/.tf_tmp siblings carry media extensions and would
+    become phantom (queueable!) catalog rows during any scan that races a
+    transcode or follows a crash.
 
     A directory the walk cannot read fails the walk instead of being
     skipped (rglob swallows those errors): the prune at the end of a
@@ -78,7 +80,7 @@ def _list_video_files(root: Path) -> list[Path]:
         raise err
 
     files: list[Path] = []
-    for dirpath, _dirnames, filenames in os.walk(root, onerror=_raise, followlinks=True):
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=_raise, followlinks=False):
         for name in filenames:
             f = Path(dirpath) / name
             if (
@@ -92,22 +94,40 @@ def _list_video_files(root: Path) -> list[Path]:
     return files
 
 
+def _is_gone(path: str) -> bool:
+    """True only when the file is definitely not there and not mid-transcode.
+
+    A stat that fails for any reason other than "no such file" (permission,
+    I/O, a share answering late) says nothing about the file, so the row
+    stays. A pipeline sidecar says the file is being replaced: .tf_lock for
+    the whole job, .tf_bak for the moment of the swap, when the original is
+    absent between the swap's two renames. The row stays for that too.
+    """
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError:
+        return False
+    else:
+        return False
+    return not any(os.path.exists(artifact) for artifact in pipeline_artifacts(Path(path)))
+
+
 async def _prune_absent(db: DBConnection, library_id: str, walked: list[Path]) -> int:
     """Delete this library's rows whose file is gone; return how many.
 
-    A row is gone when the walk did not see its path AND a fresh stat still
-    finds nothing there. The second look matters: a file inside its own
-    SWAP (original renamed to .tf_bak, new file renamed into place) is
-    absent for one moment, and a walk can land in it. The walk is the
-    candidate list, the stat is the verdict. The deletes are one
-    transaction, so a failure part way leaves every row in place.
+    The walk nominates: a row whose path the walk did not see is a
+    candidate. A fresh look at prune time decides (``_is_gone``): a walk
+    can land inside a file's swap or miss a file it could not stat, so the
+    walk alone is never the verdict. The deletes run in one transaction;
+    every row in the list was judged on its own, so a partial delete is an
+    incomplete cleanup the next scan finishes, never wrong data.
     """
     known = await media_repo.paths_for_library(db, library_id)
     present = {str(p) for p in walked}
     candidates = [path for path in known if path not in present]
-    gone = await asyncio.to_thread(
-        lambda: [path for path in candidates if not os.path.exists(path)]
-    )
+    gone = await asyncio.to_thread(lambda: [path for path in candidates if _is_gone(path)])
     if not gone:
         return 0
     async with db.transaction() as tx:

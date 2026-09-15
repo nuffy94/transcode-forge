@@ -823,3 +823,76 @@ class TestScanPrunesVanishedRows:
         assert scans[0].status == ScanStatus.FAILED
         assert deletes == 2
         assert len(await self._paths(db, lib_id)) == 4
+
+    async def test_stat_error_keeps_the_row(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): os.path.exists answers False to a
+        permission error too, so a file the scanner could not stat looked
+        gone. Only "no such file" is gone; anything else keeps the row."""
+        import os
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        real_stat = os.stat
+
+        def stat_denying_b(path, *args, **kwargs):
+            if os.fspath(path).endswith("b.mkv"):
+                raise PermissionError(13, "Permission denied", os.fspath(path))
+            return real_stat(path, *args, **kwargs)
+
+        stale_walk = [(lib / "a.mkv").resolve()]
+        with (
+            patch("transcode_forge.scanner.scanner._list_video_files", return_value=stale_walk),
+            patch("os.stat", stat_denying_b),
+        ):
+            await self._scan(db, lib_id, lib)
+
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_file_inside_its_swap_keeps_the_row(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): a worker paused between the swap's
+        two renames leaves the original absent for both the walk and the
+        prune-time stat. The .tf_bak sidecar is the proof the file is being
+        replaced, so the row stays."""
+        from transcode_forge.worker.storage.filesystem import pipeline_artifacts
+
+        lib = tmp_path / "movies"
+        lib.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (lib / "b.mkv").write_bytes(b"b" * 10)
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        _lock, _tmp, bak = pipeline_artifacts(lib / "b.mkv")
+        (lib / "b.mkv").rename(bak)  # first rename of the swap; the second never comes
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+        bak.rename(lib / "b.mkv")  # the swap finishes; nothing to heal
+        await self._scan(db, lib_id, lib)
+        assert len(await self._paths(db, lib_id)) == 2
+
+    async def test_directory_symlinks_are_not_followed(self, db, tmp_path):
+        """Codex 2026-09-15 (second pass): os.walk(followlinks=True) would
+        have cataloged files outside the library through a linked
+        directory. The walk stays inside the root."""
+        import os
+
+        lib = tmp_path / "movies"
+        outside = tmp_path / "outside"
+        lib.mkdir()
+        outside.mkdir()
+        (lib / "a.mkv").write_bytes(b"a" * 10)
+        (outside / "x.mkv").write_bytes(b"x" * 10)
+        try:
+            os.symlink(outside, lib / "link", target_is_directory=True)
+        except OSError as e:  # no symlink privilege on this Windows account
+            pytest.skip(f"cannot create a directory symlink here: {e}")
+        lib_id = await self._library(db, lib)
+        await self._scan(db, lib_id, lib)
+
+        assert await self._paths(db, lib_id) == [str((lib / "a.mkv").resolve())]
