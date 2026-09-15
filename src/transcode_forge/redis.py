@@ -5,7 +5,7 @@ from redis.asyncio import Redis, from_url
 
 async def create_redis_pool(redis_url: str) -> Redis:
     """Create and verify an async Redis connection pool."""
-    pool: Redis = from_url(redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
+    pool: Redis = from_url(redis_url, decode_responses=True)
     await pool.ping()
     return pool
 
