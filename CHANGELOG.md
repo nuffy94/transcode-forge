@@ -4,6 +4,23 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2026-09-15
+
+One fix, scheduler only, no migration.
+
+### Fixed
+- **Deleting jobs releases their catalog rows.** Reset all jobs and
+  Clear completed deleted job rows and left the file catalog pointing at
+  them. A file queued at that moment read queued forever: the queue
+  refused it and the drawer hid its Queue button, until someone edited
+  the database by hand. One repo function is now the only way jobs leave
+  the table, and it frees the catalog rows in the same transaction (a
+  row still queued or transcoding goes back to needs_transcode, a
+  settled outcome is kept). The job ids are chosen and locked once so
+  the release and the delete cannot disagree under Postgres, and the
+  lock order matches worker finalization. Both responses report a
+  `released` count. Ledger R-004. (#136)
+
 ## [0.15.2] - 2026-09-15
 
 One fix, scheduler only, no migration.
