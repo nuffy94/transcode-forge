@@ -4,6 +4,35 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-09-16
+
+One change, scheduler only. Migration 0018 runs at boot. Workers need
+nothing: the claim payload gains one additive field. Do not rename a
+library until the scheduler runs this build.
+
+### Changed
+- **Library filters take the library id.** The `library` query
+  parameter on `/api/jobs`, `/api/skipped`, `/api/skipped/stats` and the
+  three HTML partials is now `library_id`, and `POST /api/scan` takes
+  `library_id`; the old `library` name selector on a scan request is
+  refused (422) rather than ignored, because ignoring it would scan every
+  library. The UI selects send ids. Stats `by_library` is keyed by
+  library id with a `name` label; rows whose library is gone are keyed
+  `name:<old name>`.
+
+### Fixed
+- **The library id is the key, the name is a label.** Jobs, scans and
+  skipped files matched their library by display name. Names are not
+  unique and a rename touched only the libraries row, so a renamed S3
+  library's queued jobs lost their bucket at claim time (the worker fell
+  back to filesystem) and two libraries sharing a name shared one scan
+  clock. Migration 0018 adds `library_id` to the three tables and
+  backfills it by name (first library created under a duplicate name
+  wins), then adopts pre-0008 rows that hold the id in the name column.
+  Every filter, the scheduled-scan clock, the claim's S3 routing and
+  register-derivative now match on the id. The name column stays as the
+  name at write time, for display. Full review F5. (#138)
+
 ## [0.15.3] - 2026-09-15
 
 One fix, scheduler only, no migration.
