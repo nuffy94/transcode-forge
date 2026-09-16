@@ -78,7 +78,9 @@ class Job(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     source_path: str
+    # The name at queue time, a label. library_id is the key (migration 0018).
     library: str
+    library_id: str | None = None
     source_codec: str
     source_resolution: str | None = None
     source_bitrate: int | None = None

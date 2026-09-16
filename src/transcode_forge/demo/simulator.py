@@ -223,7 +223,7 @@ async def simulate_scan(
     db: DBConnection,
 ) -> None:
     """Simulate a library scan by adding random media files."""
-    scan = Scan(library=library_name)
+    scan = Scan(library=library_name, library_id=library_id)
     await scan_repo.create_scan(db, scan)
 
     num_files = _rng.randint(5, min(25, limit or 25))

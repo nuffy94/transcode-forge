@@ -35,8 +35,10 @@ def _finished_task() -> asyncio.Task[None]:
     return asyncio.create_task(asyncio.sleep(0))
 
 
-async def _seed_scan(db, library: str, *, hours_ago: float, status=ScanStatus.COMPLETE) -> None:
-    scan = Scan(library=library)
+async def _seed_scan(
+    db, library_id: str, library: str, *, hours_ago: float, status=ScanStatus.COMPLETE
+) -> None:
+    scan = Scan(library=library, library_id=library_id)
     await scan_repo.create_scan(db, scan)
     started = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
     await db.execute(
@@ -123,8 +125,8 @@ class TestSchedulerCron:
         library within seconds of boot. The scans table is the memory now:
         a library scanned an hour ago (interval 24 h) waits, one scanned
         30 h ago runs, one never scanned runs."""
-        await _seed_scan(db, "Fresh", hours_ago=1)
-        await _seed_scan(db, "Stale", hours_ago=30)
+        await _seed_scan(db, "a", "Fresh", hours_ago=1)
+        await _seed_scan(db, "b", "Stale", hours_ago=30)
         libs = [_lib("a", "Fresh"), _lib("b", "Stale"), _lib("c", "Never")]
         with (
             patch("transcode_forge.scheduler_cron.lib_repo.list_libraries", return_value=libs),
@@ -140,7 +142,7 @@ class TestSchedulerCron:
     async def test_failed_attempt_still_counts_as_the_last_attempt(self, db):
         """A library whose path is missing fails its scan; it is retried on
         the next interval, not every tick (that was the old behavior too)."""
-        await _seed_scan(db, "Broken", hours_ago=1, status=ScanStatus.FAILED)
+        await _seed_scan(db, "a", "Broken", hours_ago=1, status=ScanStatus.FAILED)
         with (
             patch(
                 "transcode_forge.scheduler_cron.lib_repo.list_libraries",
@@ -169,8 +171,8 @@ class TestSchedulerCron:
 async def test_boot_reaps_rows_a_dead_process_left_running(db):
     """Scans are tasks of the scheduler process, so at boot none can be
     running; a 'running' row is a stranded one and is marked failed."""
-    await _seed_scan(db, "Movies", hours_ago=2, status=ScanStatus.RUNNING)
-    await _seed_scan(db, "TV", hours_ago=1, status=ScanStatus.COMPLETE)
+    await _seed_scan(db, "m", "Movies", hours_ago=2, status=ScanStatus.RUNNING)
+    await _seed_scan(db, "t", "TV", hours_ago=1, status=ScanStatus.COMPLETE)
     assert await scan_repo.fail_running(db) == 1
     scans, _ = await scan_repo.list_scans(db)
     assert {s.library: s.status for s in scans} == {

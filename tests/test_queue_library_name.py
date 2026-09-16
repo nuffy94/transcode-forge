@@ -1,9 +1,11 @@
-"""Jobs queued via the media API must carry the library NAME.
+"""Jobs queued via the media API carry the library id as the key and the
+name as a label.
 
-Regression guard: /api/media/queue stored the library UUID while the
-scanner/seed paths stored the name — every library filter matches on
-name, so media-queued jobs were invisible to filtering. (The old tests
-missed it because their fixture library had id == name.)
+History: /api/media/queue once stored the library UUID in `library` while
+the scanner/seed paths stored the name, and every filter matched on name,
+so media-queued jobs were invisible to filtering (the old tests missed it
+because their fixture library had id == name). Since migration 0018 the
+filters match `library_id`; the name column is the label at queue time.
 """
 
 from httpx import AsyncClient
@@ -42,7 +44,7 @@ async def _seed_uuid_library_file(db) -> tuple[str, str]:
     return lib_id, file_id
 
 
-async def test_media_queue_stores_library_name(client: AsyncClient, app):
+async def test_media_queue_stores_library_id_and_name(client: AsyncClient, app):
     db = app.state.db
     lib_id, file_id = await _seed_uuid_library_file(db)
 
@@ -51,17 +53,21 @@ async def test_media_queue_stores_library_name(client: AsyncClient, app):
     assert resp.json()["queued"] == 1
 
     jobs, _ = await job_repo.list_jobs(db)
+    assert jobs[0].library_id == lib_id
     assert jobs[0].library == "movies"
-    assert jobs[0].library != lib_id
 
 
 async def test_library_filter_sees_media_queued_jobs(client: AsyncClient, app):
     db = app.state.db
-    _, file_id = await _seed_uuid_library_file(db)
+    lib_id, file_id = await _seed_uuid_library_file(db)
     await client.post("/api/media/queue", json={"file_ids": [file_id]})
 
-    api = (await client.get("/api/jobs?library=movies")).json()
+    api = (await client.get(f"/api/jobs?library_id={lib_id}")).json()
     assert api["meta"]["total"] == 1
 
-    partial = (await client.get("/partials/jobs?library=movies")).text
+    partial = (await client.get(f"/partials/jobs?library_id={lib_id}")).text
     assert partial.count("data-job-id=") == 1
+
+    assert (await client.get("/api/jobs?library_id=movies")).json()["meta"]["total"] == 0, (
+        "the name is a label, not a key"
+    )

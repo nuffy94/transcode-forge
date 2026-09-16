@@ -18,6 +18,7 @@ class Scan(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     library: str
+    library_id: str | None = None
     files_found: int = 0
     files_new: int = 0
     files_updated: int = 0

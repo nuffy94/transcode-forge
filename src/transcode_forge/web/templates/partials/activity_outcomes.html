@@ -106,7 +106,7 @@
 {# Build filter querystring once so pagination preserves all active filters. #}
 {% set filter_qs = [] %}
 {% if status_filter %}{% set _ = filter_qs.append('status=' ~ status_filter) %}{% endif %}
-{% if library_filter %}{% set _ = filter_qs.append('library=' ~ library_filter) %}{% endif %}
+{% if library_filter %}{% set _ = filter_qs.append('library_id=' ~ library_filter) %}{% endif %}
 {% if since_filter %}{% set _ = filter_qs.append('since=' ~ since_filter) %}{% endif %}
 {% set _ = filter_qs.append('sort=' ~ sort) %}
 {% set _ = filter_qs.append('dir=' ~ dir) %}

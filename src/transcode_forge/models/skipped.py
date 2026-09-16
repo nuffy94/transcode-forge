@@ -23,6 +23,7 @@ class SkippedFile(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     file_path: str
     library: str
+    library_id: str | None = None
     codec: str
     resolution: str | None = None
     file_size: int | None = None
