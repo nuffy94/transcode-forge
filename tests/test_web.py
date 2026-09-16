@@ -525,7 +525,7 @@ class TestPartials:
         assert "forge-pill--pending" not in response.text
 
     async def test_history_partial_filters_by_library(self, client: AsyncClient, app):
-        """history?library=X should drop jobs from other libraries."""
+        """activity-outcomes?library_id=X should drop jobs from other libraries."""
         db = app.state.db
         for path, lib in [
             ("/movies/a.mkv", "movies"),
@@ -535,6 +535,7 @@ class TestPartials:
             j = Job(
                 source_path=path,
                 library=lib,
+                library_id=lib,
                 source_codec="h264",
                 quality_value=21,
                 status=JobStatus.COMPLETE,
@@ -542,7 +543,7 @@ class TestPartials:
             await job_repo.create_job(db, j)
             await job_repo.update_job(db, j.id, status="complete")
 
-        response = await client.get("/partials/activity-outcomes?library=tv")
+        response = await client.get("/partials/activity-outcomes?library_id=tv")
         assert response.status_code == 200
         assert "c.mkv" in response.text
         assert "a.mkv" not in response.text

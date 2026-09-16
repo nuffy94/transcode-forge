@@ -69,7 +69,7 @@ async def scan_s3_library(
     # The scanner owns its scan record (same contract as the filesystem
     # scanner) so an S3 scan is never invisible — a failure before this
     # point in older versions left NO record: success toast, then nothing.
-    scan = Scan(library=library_name)
+    scan = Scan(library=library_name, library_id=library_id)
     await scan_repo.create_scan(db, scan)
 
     files_found = 0

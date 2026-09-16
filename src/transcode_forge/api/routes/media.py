@@ -192,10 +192,8 @@ async def queue_selected_files(
     async with db.transaction() as tx:
         libs = await lib_repo.list_libraries(tx)
         presets = {lib["id"]: lib["quality_preset"] for lib in libs}
-        # Jobs carry the library NAME — the queue/Activity filters and the
-        # stats group-bys all match on it. Storing the UUID here made
-        # media-queued jobs invisible to library filtering (fixed along
-        # with migration 0008, which backfills old rows).
+        # library_id is the key every filter and lookup matches on
+        # (migration 0018); the name rides along as the label at queue time.
         lib_names = {lib["id"]: lib["name"] for lib in libs}
         for mf in candidates:
             path = mf["file_path"]
@@ -207,6 +205,7 @@ async def queue_selected_files(
             job = Job(
                 source_path=path,
                 library=lib_names.get(mf["library_id"], mf["library_id"]),
+                library_id=mf["library_id"],
                 source_codec=mf["video_codec"],
                 source_resolution=mf["resolution"],
                 source_bitrate=mf["bitrate"],

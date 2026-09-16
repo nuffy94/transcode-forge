@@ -82,7 +82,7 @@ async function triggerScan() {
     // A scan is always the whole library: a capped walk is a partial
     // catalog, and the end-of-scan prune refuses to act on one.
     const body = {};
-    if (lib) body.library = lib;
+    if (lib) body.library_id = lib;
 
     btn.disabled = true;
     status.textContent = 'Starting…';
@@ -215,7 +215,7 @@ fetch('/api/libraries')
             if (!sel) continue;
             for (const lib of data) {
                 const opt = document.createElement('option');
-                opt.value = lib.name;
+                opt.value = lib.id;
                 opt.textContent = lib.name;
                 sel.appendChild(opt);
             }

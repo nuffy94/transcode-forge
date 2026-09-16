@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from transcode_forge.api.deps import get_db, get_settings
 from transcode_forge.config import Settings
@@ -20,7 +20,11 @@ router = APIRouter(tags=["scans"])
 
 
 class ScanRequest(BaseModel):
-    library: str | None = None  # None = scan all libraries
+    # A selector this model does not know (the pre-0018 `library` name)
+    # is refused, not ignored: ignoring it would scan every library.
+    model_config = ConfigDict(extra="forbid")
+
+    library_id: str | None = None  # None = scan all libraries
     limit: int = Field(
         default=0, ge=0, le=1_000_000, description="Max files to probe (0 = whole library)"
     )
@@ -61,13 +65,13 @@ async def trigger_scan(
             )
         db_libs = await lib_repo.list_libraries(db, enabled_only=True)
 
-    if body.library:
-        targets = [lib for lib in db_libs if lib["name"] == body.library]
+    if body.library_id:
+        targets = [lib for lib in db_libs if lib["id"] == body.library_id]
         if not targets:
-            valid = [lib["name"] for lib in db_libs]
+            valid = [f"{lib['name']} ({lib['id']})" for lib in db_libs]
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown library '{body.library}'. Valid: {valid}",
+                detail=f"Unknown library id '{body.library_id}'. Valid: {valid}",
             )
     else:
         targets = db_libs

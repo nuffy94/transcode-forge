@@ -270,18 +270,17 @@ class TestJobLifecycleViaHttp:
         assert final.space_saved == 500_000_000
 
     async def test_claim_carries_s3_backend_fields(self, client: AsyncClient, app):
-        """Jobs store the library NAME (since migration 0008), so the claim
-        endpoint must resolve the library row by name to attach the S3
-        coordinates. Regression (found live 2026-07-06): resolving by id
-        returned None for name-keyed jobs, the backend fields were dropped,
-        and workers processed S3 jobs as filesystem — every S3 job failed
-        with 'Source file not found'."""
+        """The claim resolves the library by job.library_id (migration 0018)
+        to attach the S3 coordinates. Regression (found live 2026-07-06):
+        a lookup that missed dropped the backend fields, and workers
+        processed S3 jobs as filesystem, every one failing with 'Source
+        file not found'."""
         from transcode_forge.models.job import Job, JobStatus
         from transcode_forge.models.library import StorageBackendType
         from transcode_forge.repos import jobs as job_repo
         from transcode_forge.repos import libraries as lib_repo
 
-        await lib_repo.create_library(
+        lib_id = await lib_repo.create_library(
             app.state.db,
             name="Movies (S3)",
             media_type="movies",
@@ -292,7 +291,8 @@ class TestJobLifecycleViaHttp:
         )
         job = Job(
             source_path="masters/movies/film.mov",
-            library="Movies (S3)",  # the NAME, exactly as /api/media/queue stamps it
+            library="Movies (S3)",
+            library_id=lib_id,
             source_codec="h264",
             quality_value=21,
             status=JobStatus.PENDING,
@@ -333,15 +333,16 @@ class TestJobLifecycleViaHttp:
             assert claimed["_s3_bucket"] == "forge-media"
             assert claimed["_s3_prefix"] == "masters/movies/"
 
-    async def test_claim_resolves_stray_id_keyed_job(self, client: AsyncClient, app):
-        """A stray pre-0008 job may still carry the library UUID — the
-        claim endpoint's id fallback must resolve it."""
+    async def test_claim_without_library_id_carries_no_backend(self, client: AsyncClient, app):
+        """A row migration 0018 could not backfill (its name matched no
+        library) claims as filesystem, exactly as a missed name lookup
+        left it before."""
         from transcode_forge.models.job import Job, JobStatus
         from transcode_forge.models.library import StorageBackendType
         from transcode_forge.repos import jobs as job_repo
         from transcode_forge.repos import libraries as lib_repo
 
-        lib_id = await lib_repo.create_library(
+        await lib_repo.create_library(
             app.state.db,
             name="Movies (S3)",
             media_type="movies",
@@ -352,7 +353,7 @@ class TestJobLifecycleViaHttp:
         )
         job = Job(
             source_path="masters/movies/old.mkv",
-            library=lib_id,  # pre-backfill style: the UUID
+            library="Movies (S3)",  # no library_id: the name is only a label
             source_codec="h264",
             quality_value=21,
             status=JobStatus.PENDING,
@@ -386,8 +387,8 @@ class TestJobLifecycleViaHttp:
             )
             claimed = r.json()["job"]
             assert claimed is not None
-            assert claimed["_backend_type"] == "s3"
-            assert claimed["_s3_bucket"] == "forge-media"
+            assert "_backend_type" not in claimed
+            assert "_s3_bucket" not in claimed
 
     async def test_register_derivative_persists_with_real_library_id(
         self, client: AsyncClient, app
@@ -416,7 +417,8 @@ class TestJobLifecycleViaHttp:
         )
         job = Job(
             source_path="masters/movies/film.mov",
-            library="Movies (S3)",  # the NAME, as /api/media/queue stamps it
+            library="Movies (S3)",
+            library_id=lib_id,
             source_codec="h264",
             quality_value=21,
             status=JobStatus.PENDING,

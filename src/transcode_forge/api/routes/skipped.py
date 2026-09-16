@@ -15,7 +15,7 @@ router = APIRouter(tags=["skipped"])
 
 @router.get("/skipped")
 async def list_skipped(
-    library: str | None = Query(None, description="Library name to filter"),
+    library_id: str | None = Query(None, description="Library id to filter"),
     reason: str | None = Query(None, description="Skip reason to filter"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=200, description="Results per page (max 200)"),
@@ -31,7 +31,7 @@ async def list_skipped(
 
     offset = (page - 1) * per_page
     files, total = await skip_repo.list_skipped(
-        db, library=library, reason=reason, limit=per_page, offset=offset
+        db, library_id=library_id, reason=reason, limit=per_page, offset=offset
     )
     return {
         "data": [f.model_dump(mode="json") for f in files],
@@ -41,11 +41,11 @@ async def list_skipped(
 
 @router.get("/skipped/stats")
 async def skipped_stats(
-    library: str | None = None,
+    library_id: str | None = None,
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Get skip reason breakdown counts."""
-    counts = await skip_repo.skip_reason_counts(db, library=library)
+    counts = await skip_repo.skip_reason_counts(db, library_id=library_id)
     total = sum(counts.values())
     return {
         "data": counts,

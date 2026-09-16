@@ -335,7 +335,7 @@ class TestSkippedRoutes:
 
     async def test_list_skipped_with_library_filter(self, client):
         """Test list_skipped with library filter."""
-        response = await client.get("/api/skipped?library=movies")
+        response = await client.get("/api/skipped?library_id=movies")
         assert response.status_code == 200
         assert "data" in response.json()
 

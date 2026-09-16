@@ -21,10 +21,10 @@ async def create_scan(db: DBConnection, scan: Scan) -> str:
     """Insert a new scan record. Returns scan ID."""
     now = datetime.now(UTC).isoformat()
     await db.execute(
-        """INSERT INTO scans (id, library, files_found, files_new, files_updated,
-            files_skipped, started_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (scan.id, scan.library, 0, 0, 0, 0, now, scan.status.value),
+        """INSERT INTO scans (id, library, library_id, files_found, files_new,
+            files_updated, files_skipped, started_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (scan.id, scan.library, scan.library_id, 0, 0, 0, 0, now, scan.status.value),
     )
     await db.commit()
     return scan.id
@@ -65,14 +65,15 @@ async def fail_running(db: DBConnection) -> int:
     return int(cur.rowcount)
 
 
-async def latest_started_at(db: DBConnection, library: str) -> datetime | None:
+async def latest_started_at(db: DBConnection, library_id: str) -> datetime | None:
     """When this library's most recent scan attempt started, any status.
+    Keyed by id: two libraries sharing a display name keep separate clocks.
 
     The scheduled-scan loop's memory of "last scan" (ledger R-007): it
     used to live in process memory and every restart forgot it.
     """
     async with db.execute(
-        "SELECT MAX(started_at) FROM scans WHERE library = ?", (library,)
+        "SELECT MAX(started_at) FROM scans WHERE library_id = ?", (library_id,)
     ) as cursor:
         row = await cursor.fetchone()
     return datetime.fromisoformat(row[0]) if row and row[0] else None

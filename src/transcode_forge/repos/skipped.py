@@ -37,6 +37,7 @@ async def record_skip(
     *,
     file_path: str,
     library: str,
+    library_id: str | None = None,
     codec: str,
     resolution: str | None = None,
     file_size: int | None = None,
@@ -46,10 +47,11 @@ async def record_skip(
     """Record a skipped file. Updates reason if file already tracked."""
     now = datetime.now(UTC).isoformat()
     await db.execute(
-        """INSERT INTO skipped_files (id, file_path, library, codec, resolution,
-            file_size, skip_reason, scan_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO skipped_files (id, file_path, library, library_id, codec,
+            resolution, file_size, skip_reason, scan_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_path) DO UPDATE SET
+            library_id = excluded.library_id,
             codec = excluded.codec,
             resolution = excluded.resolution,
             file_size = excluded.file_size,
@@ -61,6 +63,7 @@ async def record_skip(
             str(uuid4()),
             file_path,
             library,
+            library_id,
             codec,
             resolution,
             file_size,
@@ -76,7 +79,7 @@ async def record_skip(
 async def list_skipped(
     db: DBConnection,
     *,
-    library: str | None = None,
+    library_id: str | None = None,
     reason: str | None = None,
     sort_by: str = "updated_at",
     sort_dir: str = "desc",
@@ -87,7 +90,7 @@ async def list_skipped(
 
     Args:
         db: Database connection.
-        library: Library name to filter by.
+        library_id: Library id to filter by.
         reason: Skip reason to filter by (validated against SkipReason enum).
         sort_by: Column to sort by (validated against _VALID_SKIP_SORTS).
         sort_dir: Sort direction, 'asc' or 'desc'.
@@ -103,9 +106,9 @@ async def list_skipped(
     conditions: list[str] = []
     params: list[str | int] = []
 
-    if library:
-        conditions.append("library = ?")
-        params.append(library)
+    if library_id:
+        conditions.append("library_id = ?")
+        params.append(library_id)
 
     if reason:
         # Validate reason against the enum to prevent SQL injection
@@ -128,13 +131,14 @@ async def list_skipped(
         return [_row_to_skipped(r) for r in rows], total
 
 
-async def skip_reason_counts(db: DBConnection, *, library: str | None = None) -> dict[str, int]:
+async def skip_reason_counts(db: DBConnection, *, library_id: str | None = None) -> dict[str, int]:
     """Get count of skipped files grouped by reason."""
-    if library:
+    if library_id:
         query = (
-            "SELECT skip_reason, COUNT(*) FROM skipped_files WHERE library = ? GROUP BY skip_reason"
+            "SELECT skip_reason, COUNT(*) FROM skipped_files"
+            " WHERE library_id = ? GROUP BY skip_reason"
         )
-        params: tuple[str, ...] = (library,)
+        params: tuple[str, ...] = (library_id,)
     else:
         query = "SELECT skip_reason, COUNT(*) FROM skipped_files GROUP BY skip_reason"
         params = ()

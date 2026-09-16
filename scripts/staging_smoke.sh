@@ -108,7 +108,9 @@ wait_for 120 "staging-cpu registration" bash -c \
 say "5/8 drop the file + scan"
 cp "$FILE" "$MEDIA_DIR/movies/"
 BASENAME=$(basename "$FILE")
-api POST /api/scan '{"library": "movies"}' >/dev/null
+MOVIES_ID=$(api GET /api/libraries | jq -re '.data[] | select(.name == "movies") | .id' | head -1)
+[ -n "$MOVIES_ID" ] || fail "movies library not found in /api/libraries"
+api POST /api/scan "{\"library_id\": \"$MOVIES_ID\"}" >/dev/null
 wait_for 180 "file to be cataloged" bash -c \
     "curl -fsS -b '$COOKIES' '$BASE/api/media/movies?search=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))' "$BASENAME")' | jq -e '.data[0].id'"
 

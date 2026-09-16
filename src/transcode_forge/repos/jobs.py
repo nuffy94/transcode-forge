@@ -54,15 +54,16 @@ async def create_job(db: DBConnection, job: Job) -> str:
     now = datetime.now(UTC).isoformat()
     await db.execute(
         """INSERT INTO jobs (
-            id, source_path, library, source_codec, source_resolution,
+            id, source_path, library, library_id, source_codec, source_resolution,
             source_bitrate, source_duration, source_size, target_codec,
             target_height, quality_value, target_vmaf, status, retry_count,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.id,
             job.source_path,
             job.library,
+            job.library_id,
             job.source_codec,
             job.source_resolution,
             job.source_bitrate,
@@ -93,7 +94,7 @@ async def list_jobs(
     db: DBConnection,
     *,
     status: str | None = None,
-    library: str | None = None,
+    library_id: str | None = None,
     worker_id: str | None = None,
     source_path: str | None = None,
     since_hours: int | None = None,
@@ -107,7 +108,7 @@ async def list_jobs(
     Args:
         db: Database connection.
         status: Comma-separated job statuses to filter by (e.g., 'pending,complete').
-        library: Library name to filter by.
+        library_id: Library id to filter by.
         worker_id: Worker ID to filter by.
         source_path: Exact file path — a single file's job history.
         since_hours: Only include jobs created within the last N hours.
@@ -136,9 +137,9 @@ async def list_jobs(
         conditions.append(f"status IN ({placeholders})")
         params.extend(requested_statuses)
 
-    if library:
-        conditions.append("library = ?")
-        params.append(library)
+    if library_id:
+        conditions.append("library_id = ?")
+        params.append(library_id)
 
     if worker_id:
         conditions.append("worker_id = ?")
@@ -321,6 +322,21 @@ async def report_progress(
     )
     await db.commit()
     return bool(cur.rowcount)
+
+
+async def completed_by_library(db: DBConnection) -> list[tuple[str | None, str, int, int]]:
+    """Completed jobs and bytes saved per library, as (library_id, name
+    snapshot, completed, space_saved). Grouped by id so a renamed library
+    is one line; rows with no id (their name matched no library at
+    migration 0018) group by the snapshot, one line per old name.
+    """
+    async with db.execute(
+        "SELECT library_id, MAX(library), COUNT(*),"
+        " CAST(COALESCE(SUM(space_saved), 0) AS BIGINT)"
+        " FROM jobs WHERE status = 'complete'"
+        " GROUP BY COALESCE(library_id, library)"
+    ) as cur:
+        return [(r[0], r[1], r[2], r[3]) for r in await cur.fetchall()]
 
 
 async def count_queued_jobs(db: DBConnection) -> int:

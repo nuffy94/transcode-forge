@@ -49,7 +49,7 @@ async def _tick(settings: Settings, db: DBConnection) -> None:
         if not lib.get("auto_scan"):
             continue
         interval = timedelta(hours=lib.get("scan_interval_hours", 24))
-        last = await scan_repo.latest_started_at(db, lib["name"])
+        last = await scan_repo.latest_started_at(db, lib["id"])
         if last is not None and now - last < interval:
             continue
 

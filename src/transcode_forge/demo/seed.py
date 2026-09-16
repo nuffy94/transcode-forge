@@ -293,6 +293,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         scan_interval_hours=24,
     )
     logger.info("Created libraries: movies=%s, tv=%s", movie_lib_id, tv_lib_id)
+    lib_ids = {"movies": movie_lib_id, "tv": tv_lib_id}
 
     # --- Workers ---
     worker_ids: list[str] = []
@@ -423,6 +424,7 @@ async def seed_demo_data(db: DBConnection) -> None:
             first_try = Job(
                 source_path=fpath,
                 library=lib,
+                library_id=lib_ids[lib],
                 source_codec="h264",
                 source_resolution=resolution,
                 source_size=source_size,
@@ -451,6 +453,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution=resolution,
             source_bitrate=_rng.randint(3_000_000, 20_000_000),
@@ -501,6 +504,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution="1080p",
             source_size=_rng.randint(1_000_000_000, 10_000_000_000),
@@ -537,6 +541,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution="1080p",
             source_size=_rng.randint(1_000_000_000, 10_000_000_000),
@@ -565,6 +570,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution="1080p",
             source_size=_rng.randint(1_000_000_000, 10_000_000_000),
@@ -599,6 +605,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution="1080p",
             source_bitrate=_rng.randint(5_000_000, 15_000_000),
@@ -653,6 +660,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         job = Job(
             source_path=fpath,
             library=lib,
+            library_id=lib_ids[lib],
             source_codec="h264",
             source_resolution="720p",
             source_size=source_size,
@@ -695,6 +703,7 @@ async def seed_demo_data(db: DBConnection) -> None:
         found = _rng.randint(80, 200)
         scan = Scan(
             library=lib_name,
+            library_id=lib_ids[lib_name],
             started_at=started,
             status=ScanStatus.RUNNING,
         )
@@ -733,7 +742,8 @@ async def seed_demo_data(db: DBConnection) -> None:
             await skip_repo.record_skip(
                 db,
                 file_path=row["file_path"],
-                library="movies" if "/movies/" in row["file_path"] else "tv",
+                library=(lib := "movies" if "/movies/" in row["file_path"] else "tv"),
+                library_id=lib_ids[lib],
                 codec=row["video_codec"],
                 resolution=row["resolution"],
                 file_size=row["file_size"],
@@ -752,7 +762,8 @@ async def seed_demo_data(db: DBConnection) -> None:
             await skip_repo.record_skip(
                 db,
                 file_path=row["file_path"],
-                library="movies" if "/movies/" in row["file_path"] else "tv",
+                library=(lib := "movies" if "/movies/" in row["file_path"] else "tv"),
+                library_id=lib_ids[lib],
                 codec="hevc",
                 resolution=row["resolution"],
                 file_size=row["file_size"],

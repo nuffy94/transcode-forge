@@ -78,7 +78,7 @@ fetch('/api/libraries')
             if (!sel) continue;
             for (const lib of data) {
                 const opt = document.createElement('option');
-                opt.value = lib.name;
+                opt.value = lib.id;
                 opt.textContent = lib.name;
                 sel.appendChild(opt);
             }
