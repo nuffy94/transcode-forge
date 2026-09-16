@@ -26,7 +26,7 @@ router = APIRouter(tags=["jobs"])
 @router.get("/jobs")
 async def list_jobs(
     status: str | None = Query(None, description="Comma-separated job statuses to filter"),
-    library: str | None = Query(None, description="Library name to filter"),
+    library_id: str | None = Query(None, description="Library id to filter"),
     worker: str | None = Query(None, description="Worker ID to filter"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=200, description="Results per page (max 200)"),
@@ -48,7 +48,7 @@ async def list_jobs(
 
     offset = (page - 1) * per_page
     jobs, total = await job_repo.list_jobs(
-        db, status=status, library=library, worker_id=worker, limit=per_page, offset=offset
+        db, status=status, library_id=library_id, worker_id=worker, limit=per_page, offset=offset
     )
     return {
         "data": [j.model_dump(mode="json") for j in jobs],

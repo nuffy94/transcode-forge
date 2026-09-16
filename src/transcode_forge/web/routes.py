@@ -12,6 +12,7 @@ from redis.asyncio import Redis
 
 from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
+from transcode_forge.api.routes import stats as stats_api
 from transcode_forge.db import DBConnection, check_db_health
 from transcode_forge.models.job import ACTIVE_JOB_STATUSES, WAITING_JOB_STATUSES
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
@@ -285,7 +286,7 @@ async def scan_history_partial(
 async def jobs_partial(
     request: Request,
     status: str | None = None,
-    library: str | None = None,
+    library_id: str | None = None,
     sort: str = "created_at",
     dir: str = "desc",
     page: int = 1,
@@ -296,7 +297,7 @@ async def jobs_partial(
     jobs, total = await job_repo.list_jobs(
         db,
         status=status or None,
-        library=library or None,
+        library_id=library_id or None,
         sort_by=sort,
         sort_dir=dir,
         limit=per_page,
@@ -408,7 +409,7 @@ async def queue_badge_partial(
 async def activity_outcomes_partial(
     request: Request,
     status: str | None = None,
-    library: str | None = None,
+    library_id: str | None = None,
     since: str | None = None,
     sort: str = "created_at",
     dir: str = "desc",
@@ -424,7 +425,7 @@ async def activity_outcomes_partial(
     jobs, total = await job_repo.list_jobs(
         db,
         status=filter_status,
-        library=library or None,
+        library_id=library_id or None,
         since_hours=since_hours,
         sort_by=sort,
         sort_dir=dir,
@@ -452,7 +453,7 @@ async def activity_outcomes_partial(
             "page": page,
             "per_page": per_page,
             "status_filter": status or "",
-            "library_filter": library or "",
+            "library_filter": library_id or "",
             "since_filter": since or "",
             "sort": sort,
             "dir": dir,
@@ -465,7 +466,7 @@ async def activity_outcomes_partial(
 async def activity_skips_partial(
     request: Request,
     reason: str | None = None,
-    library: str | None = None,
+    library_id: str | None = None,
     sort: str = "updated_at",
     dir: str = "desc",
     page: int = 1,
@@ -476,7 +477,7 @@ async def activity_skips_partial(
     files, total = await skip_repo.list_skipped(
         db,
         reason=reason or None,
-        library=library or None,
+        library_id=library_id or None,
         sort_by=sort,
         sort_dir=dir,
         limit=per_page,
@@ -527,14 +528,7 @@ async def stats_partial(
         stats["total_source_bytes"] = row[2] if row else 0
         stats["total_output_bytes"] = row[3] if row else 0
 
-    async with db.execute(
-        "SELECT library, COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT) "
-        "FROM jobs WHERE status = 'complete' GROUP BY library"
-    ) as cur:
-        stats["by_library"] = {
-            row[0]: {"completed": row[1], "space_saved_bytes": row[2]}
-            for row in await cur.fetchall()
-        }
+    stats["by_library"] = await stats_api._by_library(db)
 
     async with db.execute(
         "SELECT skip_reason, COUNT(*) FROM skipped_files GROUP BY skip_reason"

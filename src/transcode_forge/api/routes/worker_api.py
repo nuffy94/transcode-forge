@@ -491,14 +491,10 @@ async def claim_job(
         db, body.worker_id, supported_codecs, supports_downscale=supports_downscale
     )
     if job is not None:
-        # Fetch the library to include backend + content info in the response.
-        # Jobs carry the library NAME (migration 0008); fall back to an id
-        # lookup for any stray pre-backfill row. Resolving by id alone
-        # silently dropped the S3 fields and every S3 job failed with
-        # 'Source file not found' (found live 2026-07-06).
-        library = await library_repo.get_library_by_name(db, job.library)
-        if library is None:
-            library = await library_repo.get_library(db, job.library)
+        # The library row by id (migration 0018) puts backend + content info
+        # on the claim. A job with no library_id predates the backfill and
+        # matched no library by name, so it claims as filesystem, as before.
+        library = await library_repo.get_library(db, job.library_id) if job.library_id else None
         job_dict = job.model_dump(mode="json")
         # The attempt identity for this claim, on the same private-attr
         # channel as the backend and floor stamps. It is excluded from the
@@ -753,6 +749,7 @@ async def skip_job(
                 tx,
                 file_path=job.source_path,
                 library=job.library,
+                library_id=job.library_id,
                 codec=job.source_codec,
                 resolution=job.source_resolution,
                 file_size=job.source_size,
@@ -821,13 +818,10 @@ async def register_derivative(
     # Fetch the job (verifying ownership) to get library_id and source metadata.
     job = await _require_owned_job(db, job_id, token_row)
 
-    # derivatives.library_id is a real FK to libraries(id); jobs carry the
-    # library NAME (migration 0008), so resolve it — passing the name
-    # straight through raised an FK violation that the dedup-race handler
-    # silently ate, and the derivative cache never populated.
-    library = await library_repo.get_library_by_name(db, job.library)
-    if library is None:
-        library = await library_repo.get_library(db, job.library)
+    # derivatives.library_id is a real FK to libraries(id): the row has to
+    # exist before the insert, or the FK violation lands in the dedup-race
+    # handler and is swallowed (review of PR #34).
+    library = await library_repo.get_library(db, job.library_id) if job.library_id else None
     if library is None:
         raise HTTPException(
             status_code=409,

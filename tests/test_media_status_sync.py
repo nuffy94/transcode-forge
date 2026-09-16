@@ -67,6 +67,7 @@ async def _seed_catalog_job(
         source_path=path,
         # S3 jobs carry the library NAME so the claim attaches the backend.
         library=lib_name if s3 else "movies",
+        library_id=lib_id,
         source_codec="h264",
         quality_value=21,
         status=JobStatus.PENDING,

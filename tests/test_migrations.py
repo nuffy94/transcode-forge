@@ -135,6 +135,18 @@ class TestExistingInstallBootstrap:
                 "status TEXT NOT NULL DEFAULT 'offline', "
                 "registered_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
+            # 0018 ALTERs scans and skipped_files, which a real pre-migrations
+            # install also had.
+            await conn.execute(
+                "CREATE TABLE scans (id TEXT PRIMARY KEY, library TEXT NOT NULL, "
+                "started_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running')"
+            )
+            await conn.execute(
+                "CREATE TABLE skipped_files (id TEXT PRIMARY KEY, "
+                "file_path TEXT NOT NULL UNIQUE, library TEXT NOT NULL, "
+                "codec TEXT NOT NULL, skip_reason TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
             # Insert a row to make sure data is preserved through bootstrap
             await conn.execute(
                 "INSERT INTO jobs (id, source_path, library, source_codec, "

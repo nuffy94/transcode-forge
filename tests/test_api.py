@@ -11,6 +11,7 @@ from transcode_forge.models.job import ACTIVE_JOB_STATUSES, Job, JobStatus
 from transcode_forge.models.skipped import SkipReason
 from transcode_forge.models.worker import Worker
 from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.repos import skipped as skip_repo
 from transcode_forge.repos import workers as worker_repo
 from transcode_forge.scanner import runner
@@ -394,14 +395,20 @@ class TestScanEndpoint:
         assert resp.status_code == 202
         assert resp.json() == {"scan_ids": [], "status": "running", "skipped": []}
 
-    async def test_second_scan_of_a_running_library_is_409(self, client: AsyncClient, tmp_path):
+    async def test_second_scan_of_a_running_library_is_409(
+        self, client: AsyncClient, app, tmp_path
+    ):
         """R-007: the loop's docstring promised a running-scan guard and
         there was none, so a manual scan started on top of the nightly
         one. Both routes now answer 409 while a library's scan is alive,
         a scan-everything request skips the busy library, and each
         library's scan runs once."""
+        ids = {}
         for name in ("movies", "tv", "anime"):
             (tmp_path / name).mkdir(exist_ok=True)
+            ids[name] = await lib_repo.create_library(
+                app.state.db, name=name, media_type=name, path=str(tmp_path / name)
+            )
         gate = asyncio.Event()
         calls: list[str] = []
 
@@ -410,10 +417,10 @@ class TestScanEndpoint:
             await gate.wait()
 
         with patch("transcode_forge.scanner.scanner.scan_library", side_effect=blocked_scan):
-            first = await client.post("/api/scan", json={"library": "movies"})
+            first = await client.post("/api/scan", json={"library_id": ids["movies"]})
             assert first.status_code == 202
 
-            again = await client.post("/api/scan", json={"library": "movies"})
+            again = await client.post("/api/scan", json={"library_id": ids["movies"]})
             assert again.status_code == 409
             assert "already running" in again.json()["detail"]
 
@@ -435,15 +442,20 @@ class TestScanEndpoint:
             await asyncio.gather(*runner.live_scans())
             assert sorted(calls) == ["anime", "movies", "tv"]
 
-            after = await client.post("/api/scan", json={"library": "movies"})
+            after = await client.post("/api/scan", json={"library_id": ids["movies"]})
             assert after.status_code == 202
             await asyncio.gather(*runner.live_scans())
 
     async def test_trigger_scan(self, client: AsyncClient, app, tmp_path):
         # Create library directory so scan doesn't fail immediately
         (tmp_path / "movies").mkdir(exist_ok=True)
+        ids = {
+            "movies": await lib_repo.create_library(
+                app.state.db, name="movies", media_type="movies", path=str(tmp_path / "movies")
+            )
+        }
 
-        response = await client.post("/api/scan", json={"library": "movies"})
+        response = await client.post("/api/scan", json={"library_id": ids["movies"]})
         assert response.status_code == 202
         data = response.json()
         assert "movies" in data["scan_ids"]
@@ -475,8 +487,14 @@ class TestScanEndpoint:
             assert bool(lib["auto_scan"]) is True, lib["name"]
             assert lib["scan_interval_hours"] == 24
 
+    async def test_old_name_selector_is_refused_not_broadened(self, client: AsyncClient):
+        """The pre-0018 body {"library": name} must not silently scan every
+        library because the field is no longer known."""
+        response = await client.post("/api/scan", json={"library": "movies"})
+        assert response.status_code == 422
+
     async def test_trigger_scan_unknown_library(self, client: AsyncClient):
-        response = await client.post("/api/scan", json={"library": "nonexistent"})
+        response = await client.post("/api/scan", json={"library_id": "nonexistent"})
         assert response.status_code == 400
 
     async def test_list_scans_empty(self, client: AsyncClient):

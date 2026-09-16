@@ -54,7 +54,7 @@
                     <option value="failed">Failed</option>
                     <option value="skipped">Discarded (post-encode)</option>
                 </select>
-                <select id="outcomes-library" aria-label="Filter outcomes by library" class="forge-select" name="library"
+                <select id="outcomes-library" aria-label="Filter outcomes by library" class="forge-select" name="library_id"
                         hx-get="/partials/activity-outcomes" hx-trigger="change" hx-target="#outcomes-container"
                         hx-include="#outcomes-status, #outcomes-since, #outcomes-sort, #outcomes-dir">
                     <option value="">All libraries</option>
@@ -120,7 +120,7 @@
                     <option value="too_small">Too small</option>
                     <option value="manual_skip">Manual skip</option>
                 </select>
-                <select id="skip-library-filter" aria-label="Filter by library" class="forge-select" name="library"
+                <select id="skip-library-filter" aria-label="Filter by library" class="forge-select" name="library_id"
                         hx-get="/partials/activity-skips" hx-trigger="change" hx-target="#skipped-container"
                         hx-include="#skip-reason-filter, #skip-sort, #skip-dir">
                     <option value="">All libraries</option>

@@ -61,10 +61,17 @@ class TestJobRepo:
         assert total == 0
 
     async def test_list_jobs_with_filter(self, db):
-        job1 = Job(source_path="/a.mkv", library="movies", source_codec="h264", quality_value=21)
+        job1 = Job(
+            source_path="/a.mkv",
+            library="movies",
+            library_id="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
         job2 = Job(
             source_path="/b.mkv",
             library="tv",
+            library_id="tv",
             source_codec="h264",
             quality_value=24,
             status=JobStatus.COMPLETE,
@@ -73,7 +80,7 @@ class TestJobRepo:
         await job_repo.create_job(db, job2)
 
         # Filter by library
-        movies, _ = await job_repo.list_jobs(db, library="movies")
+        movies, _ = await job_repo.list_jobs(db, library_id="movies")
         assert len(movies) == 1
         assert movies[0].library == "movies"
 

@@ -160,12 +160,12 @@ async def scan_library(
 
     if not root.exists() or not root.is_dir():
         logger.error("Library path does not exist or is not a directory: %s", library_path)
-        scan = Scan(library=library_name, status=ScanStatus.FAILED)
+        scan = Scan(library=library_name, library_id=library_id, status=ScanStatus.FAILED)
         await scan_repo.create_scan(db, scan)
         await scan_repo.update_scan(db, scan.id, status=ScanStatus.FAILED)
         return scan
 
-    scan = Scan(library=library_name)
+    scan = Scan(library=library_name, library_id=library_id)
     await scan_repo.create_scan(db, scan)
 
     logger.info("Scanning library '%s' at %s", library_name, library_path)

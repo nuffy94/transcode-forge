@@ -6,8 +6,27 @@ from fastapi import APIRouter, Depends
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
+from transcode_forge.repos import jobs as job_repo
+from transcode_forge.repos import libraries as lib_repo
 
 router = APIRouter(tags=["stats"])
+
+
+async def _by_library(db: DBConnection) -> dict[str, dict[str, Any]]:
+    """Completed count and bytes saved per library, keyed by library id.
+    The label is the library's current name, or the name the jobs were
+    written under when the library is gone. Rows with no id are keyed
+    "name:<snapshot>" so an old name can never shadow an id.
+    """
+    names = {lib["id"]: lib["name"] for lib in await lib_repo.list_libraries(db)}
+    return {
+        (lib_id or f"name:{snapshot}"): {
+            "name": names.get(lib_id or "", snapshot),
+            "completed": completed,
+            "space_saved_bytes": saved,
+        }
+        for lib_id, snapshot, completed, saved in await job_repo.completed_by_library(db)
+    }
 
 
 @router.get("/stats")
@@ -38,15 +57,8 @@ async def get_stats(
             stats["total_source_bytes"] = row[2]
             stats["total_output_bytes"] = row[3]
 
-    # Per-library breakdown
-    async with db.execute(
-        "SELECT library, COUNT(*), CAST(COALESCE(SUM(space_saved), 0) AS BIGINT) "
-        "FROM jobs WHERE status = 'complete' GROUP BY library"
-    ) as cursor:
-        stats["by_library"] = {
-            row[0]: {"completed": row[1], "space_saved_bytes": row[2]}
-            for row in await cursor.fetchall()
-        }
+    # Per-library breakdown, keyed by library id (the name is the label).
+    stats["by_library"] = await _by_library(db)
 
     # Skipped file counts
     async with db.execute(
