@@ -334,7 +334,9 @@ async def completed_by_library(db: DBConnection) -> list[tuple[str | None, str, 
         "SELECT library_id, MAX(library), COUNT(*),"
         " CAST(COALESCE(SUM(space_saved), 0) AS BIGINT)"
         " FROM jobs WHERE status = 'complete'"
-        " GROUP BY COALESCE(library_id, library)"
+        # library_id is constant within a COALESCE group (one id, or all NULL);
+        # naming it too keeps Postgres from calling the bare column ungrouped.
+        " GROUP BY COALESCE(library_id, library), library_id"
     ) as cur:
         return [(r[0], r[1], r[2], r[3]) for r in await cur.fetchall()]
 
