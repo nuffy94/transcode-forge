@@ -50,9 +50,10 @@ htmlcov/
 /.tailwind/
 
 # Claude Code agent tooling / local settings — not part of the shipped
-# project, EXCEPT the committed project commands (e.g. /qa-codify).
+# project, EXCEPT the committed project commands and skills (e.g. /qa-codify, shape).
 .claude/*
 !.claude/commands/
+!.claude/skills/
 
 # Audit / UX testing artifacts (Playwright screenshots, page snapshots, ad-hoc diffs)
 # Audit reports are moved to docs/audits/ when worth keeping.

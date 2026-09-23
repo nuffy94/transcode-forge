@@ -64,6 +64,11 @@ The served `src/transcode_forge/web/static/css/app.css` is **generated** by the
 pinned Tailwind v4 standalone CLI (no Node). Edit the source
 `assets/css/forge.css` and rebuild — never hand-edit the built file.
 
+## Fixing bugs
+
+Before any fix, run the shape skill and stop for Mason's pick.
+Every PR body opens with a Shape: or Rule: line.
+
 ## Architecture
 
 ### Two-process model
