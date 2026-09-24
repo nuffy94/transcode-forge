@@ -422,7 +422,7 @@ async def register(
     active = ",".join("?" * len(ACTIVE_JOB_STATUSES))
     cur = await db.execute(
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         f" WHERE worker_id = ? AND status IN ({active})",
         (
             JobStatus.QUEUED.value,

@@ -415,7 +415,7 @@ async def requeue_orphan_active_jobs(
     placeholders_alive = ",".join("?" * len(alive))
     sql = (
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})"
@@ -530,7 +530,7 @@ async def requeue_abandoned_active_jobs(
     condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
     sql = (
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})" + condition + " )"
@@ -554,6 +554,18 @@ async def requeue_abandoned_active_jobs(
         rows = await cur.fetchall()
     await db.commit()
     return [dict(r) for r in rows]
+
+
+# What an attempt writes about itself as it runs, and so what the next
+# attempt must not inherit. The claim resets these in the same statement
+# that starts the attempt, so a release (retry, registration, either
+# sweep) only has to drop the owner and never has to know this list.
+_ATTEMPT_COLUMNS: dict[str, object] = {
+    "progress": 0,
+    "phase": None,
+    "phase_pct": None,
+    "phase_detail": None,
+}
 
 
 async def claim_next_job(
@@ -582,7 +594,8 @@ async def claim_next_job(
     straight to TRANSCODING (R-020). Claiming into ASSIGNED and bumping
     it afterwards was a second, unfenced write by job id alone: a cancel
     or a release landing in that window was stomped back to TRANSCODING.
-    One statement has no window.
+    One statement has no window. It also resets _ATTEMPT_COLUMNS, so the
+    new attempt never shows the last one's phase or percentage.
     """
     codecs = supported_codecs or ["hevc"]
     now = datetime.now(UTC).isoformat()
@@ -591,8 +604,10 @@ async def claim_next_job(
     codec_placeholders = ",".join("?" * len(codecs))
     waiting_placeholders = ",".join("?" * len(WAITING_JOB_STATUSES))
     downscale_clause = "" if supports_downscale else " AND target_height IS NULL"
+    attempt_reset = "".join(f", {col} = ?" for col in _ATTEMPT_COLUMNS)
     sql = f"""UPDATE jobs
-        SET status = ?, worker_id = ?, claim_token = ?, started_at = ?, updated_at = ?
+        SET status = ?, worker_id = ?, claim_token = ?, started_at = ?,
+            updated_at = ?{attempt_reset}
         WHERE id = (
             SELECT id FROM jobs
             WHERE status IN ({waiting_placeholders})
@@ -609,6 +624,7 @@ async def claim_next_job(
             claim_token,
             now,
             now,
+            *_ATTEMPT_COLUMNS.values(),
             *WAITING_JOB_STATUSES,
             *codecs,
         ),
