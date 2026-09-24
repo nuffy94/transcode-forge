@@ -4,175 +4,186 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-A self-hosted transcoder that shrinks your media library into modern,
-efficient codecs — HEVC and AV1 today, with room for whatever comes next.
-One scheduler, as many worker machines as you've got, and an 8-step pipeline
-with one obsession: never lose an original — even if a worker dies mid-encode.
+Transcode Forge re-encodes your media library into HEVC or AV1 to save disk
+space, and it never loses an original. You run one scheduler and as many
+workers as you have machines. Each encode goes through an 8-step pipeline
+that keeps the original until the new file has been checked, so a worker
+dying mid-encode costs you time, not files.
 
-- **Atomic 8-step pipeline** — lock → transcode → verify → compare →
-  swap → confirm → cleanup → unlock. The original file is always
-  recoverable.
-- **Decode healthcheck on every swap** — not just an ffprobe. Actual
-  frames are pushed through the decoder at three offsets before the
-  file is kept.
-- **Distribute across your machines** — each worker picks the best encoder it
-  has: Intel QSV or NVIDIA NVENC on Linux, software x265 as a universal
-  fallback. Workers connect HTTP-only with a revocable token and never see DB
-  or Redis credentials.
-- **No file ever lost** — orphan-job detection, integrity audit, and
-  cross-view consistency tests so the dashboard never lies about state.
+- **Checked before it replaces anything.** Every output is probed, decoded at
+  three points and matched stream for stream against the source. When the
+  worker can measure VMAF (the Docker image can), it also has to clear a
+  quality floor. If any check fails, the original stays.
+- **Spread across your machines.** Each worker uses the best encoder it has:
+  Intel QSV, then NVIDIA NVENC, then software (x265 for HEVC, SVT-AV1 for
+  AV1). NETINT Quadra cards work too, when you ask for them.
+- **Workers hold no database access.** A worker talks to the scheduler over
+  HTTP with a token you can revoke. It never sees the database or Redis
+  credentials.
+- **Stuck jobs recover on their own.** If a worker dies or loses track of a
+  job, the scheduler hands the job back to the queue.
 
-> **Status**: actively developed, in production use. Self-hostable;
-> install in three commands.
+> **Status**: actively developed and in production use.
 
 ## The console
 
-A dense ops console — live transcodes with per-worker attribution, honest
-zero states, and a VMAF readout on every finished encode. Fully self-hosted
-chrome: fonts, icons, and scripts are all vendored, so the UI loads nothing
-from third-party hosts.
+The dashboard shows live encodes by worker, your total savings, and the VMAF
+score of every finished encode. The fonts, icons and scripts are all bundled,
+so the UI loads nothing from outside hosts.
 
-![Dashboard — live transcodes, cumulative savings, scan history](docs/img/dashboard.png)
+![Dashboard: live transcodes, total savings, scan history](docs/img/dashboard.png)
 
-Click any file for the full story — probe data, encode economics (savings,
-achieved VMAF vs. target, CRF, encoder backend), and the complete attempt
-timeline:
+Click any file for its full history: probe data, what the encode saved, the
+VMAF it reached against its target, the CRF and encoder used, and every
+attempt.
 
-![File detail drawer — 47% saved, VMAF 96.4 against a 95 target](docs/img/file-drawer.png)
+![File detail drawer: 47% saved, VMAF 96.4 against a 95 target](docs/img/file-drawer.png)
 
-The Activity ledger keeps two honest books: encode outcomes (jobs that ran,
-including ones discarded for size regression or a missed VMAF floor) and
-scan skips (files never attempted — already HEVC, wrong codec):
+The Activity page keeps two lists. Encode outcomes are the jobs that ran,
+including the ones thrown out for coming out bigger or missing the VMAF
+floor. Scan skips are the files never attempted, for example because they are
+already HEVC.
 
-![Activity — encode outcomes with error traces and retry actions](docs/img/activity.png)
+![Activity: encode outcomes with error traces and retry actions](docs/img/activity.png)
 
-## Install — 60 seconds
+## Install
 
-Requires Docker (or Podman) and Compose. Developed and run on Linux; the
-containerized stack should also run on macOS or Windows via Docker Desktop,
-but those aren't regularly tested.
+You need Docker (or Podman) with Compose. It is developed and run on Linux.
+Docker Desktop on macOS or Windows should work too, but nobody tests it
+regularly.
 
 ```bash
 git clone https://github.com/nuffy94/transcode-forge.git
 cd transcode-forge
 
-# Generate random secrets in .env. Idempotent — safe to re-run.
+# Writes random secrets to .env. Safe to run again.
 ./bootstrap.sh        # or: powershell -File bootstrap.ps1
 
-# Edit .env to point TF_LIBRARY_MOVIES / TF_LIBRARY_TV at your library.
+# Point TF_LIBRARY_MOVIES and TF_LIBRARY_TV in .env at your library.
 $EDITOR .env
 
 docker compose up -d
 ```
 
-bootstrap generated your admin password into `.env` alongside the other
-secrets. Read it with `grep TF_ADMIN_PASSWORD .env`, then open
-http://localhost:8000 and log in as `admin` with that value. From there you
-scan your library, queue jobs, and watch progress on the dashboard.
+`bootstrap.sh` puts your admin password in `.env` next to the other secrets.
+Read it with `grep TF_ADMIN_PASSWORD .env`, open http://localhost:8000 and log
+in with it. There is one admin and no username.
 
-### Pre-built image (skip the build)
+The scheduler scans your library and runs the queue, but it does not encode
+anything itself. Nothing transcodes until you add at least one worker (see
+[Adding workers](#adding-workers)). To run one on the same machine, uncomment
+the `worker` service in `docker-compose.yml` and put its token in `.env` as
+`TF_WORKER_TOKEN`. That service is set up for Intel QSV; on a host without
+`/dev/dri`, drop its `devices` lines and it encodes in software.
 
-Tagged releases publish a public image to GHCR — no registry login needed.
-Use the production compose file:
+### Pre-built image
+
+Releases publish a public image to GHCR, so you can skip the build. No
+registry login is needed.
 
 ```bash
 ./bootstrap.sh
 docker compose -f docker-compose.prod.yml up -d   # pulls ghcr.io/nuffy94/transcode-forge
 ```
 
-Pin a version with `TF_VERSION=0.7.0` in `.env` (defaults to `:latest`).
+`:latest` is the newest release. To pin one, set `TF_VERSION=0.16.0` in
+`.env`. Every push to `main` also publishes `:edge`, if you want to run ahead
+of releases.
 
-### Deploying on Linode
+### Linode and Kubernetes
 
-Two StackScripts deploy the full stack on Linode Compute — Caddy TLS edge,
-Object Storage media plane, optional Managed Database, and token-joined
-CPU workers. See [deploy/linode/README.md](deploy/linode/README.md).
+Two StackScripts deploy the whole stack on Linode: a Caddy TLS edge, media in
+Object Storage, an optional Managed Database, and CPU workers that join with a
+token. See [deploy/linode/README.md](deploy/linode/README.md). For Kubernetes,
+there is a Helm chart in [deploy/lke/](deploy/lke/README.md).
 
 ## Adding workers
 
-The scheduler can transcode by itself, but the point of having a separate
-**worker** process is so you can spread the work across machines — a box with
-an NVIDIA GPU at night, another with Intel QSV during the day, or any spare
+A worker is the process that actually encodes. Run one on every machine you
+want to use: a box with an NVIDIA GPU, one with Intel QSV, or any spare
 machine with ffmpeg.
 
-The quickest path is in the UI: **Workers → Add a worker** issues a token and
-hands you a ready-to-paste **Docker** or **`uv`** join command, with the storage
-notes for your library type (read-write media mount for filesystem libraries;
-bucket credentials for S3). To wire one up by hand instead:
+The quickest way is the **Workers** page, under **Add a worker**. It issues a
+token and gives you a Docker or `uv` command to paste, with notes for your
+library type (a read-write media mount for filesystem libraries, bucket
+credentials for S3). To set one up by hand instead:
 
-1. **Workers → Add a worker** (or **Settings → Workers**) → issue a token,
-   label it "gpu-node" (or whatever), copy it (it's shown once).
-2. On the worker machine, install [uv](https://docs.astral.sh/uv/) and a
-   recent ffmpeg with the right hardware encoder — or just run the published
-   Docker image (it bundles ffmpeg): `ghcr.io/nuffy94/transcode-forge:latest`
-   with the command `python -m transcode_forge.worker`.
-3. Set environment variables:
+1. On the **Workers** page, issue a token and name it, for example
+   "gpu-node". Copy it now: it is shown once.
+2. On the worker machine, either install [uv](https://docs.astral.sh/uv/)
+   and an ffmpeg with the hardware encoder you want, or run the published
+   image (it bundles ffmpeg): `ghcr.io/nuffy94/transcode-forge:latest` with
+   the command `python -m transcode_forge.worker`.
+3. Set these environment variables:
 
 ```bash
 TF_SERVER_URL=http://<scheduler-host>:8000
 TF_WORKER_TOKEN=<paste-the-token>
-TF_WORKER_NAME=gpu-node
-TF_PREFERRED_ENCODER=auto         # or qsv / nvenc / cpu
+TF_WORKER_NAME=gpu-node            # defaults to worker-<hostname>
+TF_PREFERRED_BACKEND=auto          # or qsv, nvenc, quadra, cpu
 TF_PATH_MAP='{"/media/movies":"/mnt/media/movies"}'
 ```
 
-`TF_PATH_MAP` translates the path the scheduler stores into the path the
-worker can read on its own filesystem. Empty if both machines mount the
-library identically.
+`TF_PATH_MAP` turns the path the scheduler knows into the path this machine
+can read. Leave it empty if both machines mount the library at the same path.
+The old name `TF_PREFERRED_ENCODER` still works for now, but it is deprecated.
 
-4. Run the worker:
+4. Start the worker:
 
 ```bash
 uv run python -m transcode_forge.worker
 ```
 
-It registers itself with the scheduler and starts pulling jobs. The
-dashboard shows it under Workers within a heartbeat interval (~10s).
+It registers with the scheduler and starts taking jobs. It shows up on the
+Workers page within one heartbeat (10 seconds).
 
-To stop using a worker (machine retired, token leaked, whatever), go to
-**Settings → Workers → revoke**. Its next request is rejected and it
-exits cleanly.
+To retire a worker, or if its token leaks, revoke the token under **Worker
+tokens** on the Workers page. The scheduler refuses that token from then on,
+so the worker gets no more jobs. The process itself keeps running and
+retrying, so stop it on that machine too.
 
 ## Configuration
 
-Everything is configured through environment variables (`TF_*`) or the
-admin UI (libraries, schedules, exclusions, worker tokens).
+Settings come from `TF_*` environment variables. Libraries, schedules,
+exclusions and worker tokens live in the admin UI, and the Settings page can
+change some of the variables below without a restart.
 
-| Common knobs | What it does |
+| Setting | What it does |
 |---|---|
-| `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV` | Library paths the scheduler scans |
-| `TF_QUALITY_MOVIES`, `TF_QUALITY_TV` | HEVC CRF (lower = bigger, better) |
-| `TF_PORT` | Web UI port (default 8000) |
-| `TF_LOG_LEVEL` | Log verbosity: `debug` / `info` / `warning` / `error` (default `info`) |
-| `TF_SESSION_SECURE` | Set `true` when serving over HTTPS so the session cookie is Secure-only |
-| `TF_AUTH_SECRET` | Cookie-signing secret. Pinning makes sessions survive restarts |
+| `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` | The library paths the scheduler scans |
+| `TF_TARGET_VMAF` | The quality to aim for (default 98). When the CRF search is on (the default) and the worker's ffmpeg has libvmaf, the worker encodes short samples first to find the CRF that reaches it |
+| `TF_QUALITY_MOVIES`, `TF_QUALITY_TV`, `TF_QUALITY_ANIME` | The CRF to use when that search is off or cannot find one (defaults 21, 21, 19; lower means bigger and better) |
+| `TF_PORT`, `TF_BIND` | Where Compose publishes the web UI (defaults 8000 and 0.0.0.0) |
+| `TF_LOG_LEVEL` | `debug`, `info`, `warning`, `error` or `critical` (default `info`) |
+| `TF_SESSION_SECURE` | Set `true` behind HTTPS so the session cookie is only sent over HTTPS |
+| `TF_AUTH_SECRET` | Signs sessions and protects stored worker tokens. `bootstrap.sh` sets it; if it is ever unset, the app makes a new one each start, which logs you out and breaks every issued worker token |
 
 **Guides:** [Getting Started](docs/GETTING-STARTED.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md) · [Backup](docs/BACKUP.md) ·
 [Upgrade](docs/UPGRADE.md) · [Staging](docs/STAGING.md) ·
-[Changelog](CHANGELOG.md). For the exhaustive
-env-var list and internal architecture, see [CLAUDE.md](./CLAUDE.md).
+[Changelog](CHANGELOG.md). The full list of settings and how the app is built
+is in [CLAUDE.md](./CLAUDE.md).
 
 ## Security
 
-Single-admin, built for a network you control.
+It is built for one admin on a network you control.
 
-- **Exposure** — the web UI binds `0.0.0.0` by default (LAN-reachable). Postgres
-  and Redis are **never** published to the host;
-  they live only on the internal Docker network.
-- **Untrusted networks / the internet** — don't expose the UI directly. Set
-  `TF_BIND=127.0.0.1` and put a TLS reverse proxy (Caddy, nginx) or a
-  Cloudflare Tunnel in front, with `TF_SESSION_SECURE=true`
-  so the session cookie is HTTPS-only.
-- **Secrets** — `bootstrap.sh` generates `TF_PG_PASSWORD` and
-  `TF_AUTH_SECRET`; `.env` is git-ignored. Cross-site requests are rejected
-  (CSRF protection on state-changing routes).
-- **Workers** hold only the scheduler URL + a revocable bearer token — never
-  DB or Redis credentials. Tokens are stored hashed (HMAC-SHA256), not in the
-  clear.
+- **Exposure.** The web UI listens on all interfaces by default, so your LAN
+  can reach it. Postgres and Redis are never published to the host. They
+  live only on the internal Docker network.
+- **The internet.** Do not expose the UI directly. Set `TF_BIND=127.0.0.1`,
+  put a TLS reverse proxy (Caddy, nginx) or a Cloudflare Tunnel in front, and
+  set `TF_SESSION_SECURE=true`.
+- **Secrets.** `bootstrap.sh` generates `TF_ADMIN_PASSWORD`, `TF_PG_PASSWORD`
+  and `TF_AUTH_SECRET`, and `.env` is git-ignored. Requests that change
+  anything are refused when they come from another site (the app checks the
+  browser's `Origin` and `Sec-Fetch-Site` headers).
+- **Workers** hold only the scheduler URL and a token you can revoke, never
+  database or Redis credentials. Tokens are stored as HMAC-SHA256 hashes,
+  not as the token itself.
 
-**Reverse proxy with automatic HTTPS (Caddy).** Front the app with this
-`Caddyfile` and Caddy provisions and renews the TLS cert for you:
+**Automatic HTTPS with Caddy.** Put this `Caddyfile` in front of the app and
+Caddy gets and renews the certificate for you:
 
 ```caddyfile
 forge.example.com {
@@ -180,70 +191,87 @@ forge.example.com {
 }
 ```
 
-Then set in `.env`: `TF_BIND=127.0.0.1` (only the proxy reaches the app) and
-`TF_SESSION_SECURE=true` (session cookie becomes HTTPS-only). A Cloudflare
-Tunnel gives you the same TLS without opening a port.
-**Never expose `:8000` directly over plain HTTP** — the admin password and
-worker tokens would travel unencrypted.
+Then set `TF_BIND=127.0.0.1` in `.env` so only the proxy can reach the app,
+and `TF_SESSION_SECURE=true`. A Cloudflare Tunnel gives you the same TLS
+without opening a port. **Never expose port 8000 over plain HTTP.** Your admin
+password and worker tokens would cross the network unencrypted.
 
-## What it does (and doesn't)
+## What it does and doesn't do
 
-**Does**:
-- Watches your media library, finds the files worth re-encoding, queues them
-- Distributes work to one or more workers (QSV / NVENC / CPU)
-- Verifies every output before replacing the original
-- Re-queues stuck jobs if a worker disappears mid-transcode
-- Shows live progress, history, savings stats, integrity audit
-- Schedules: "only transcode between 11pm and 7am on weekdays"
-- Excludes: "never try this file again" with one click
+**Does:**
+- Scans your library and lists the files worth re-encoding. You pick what to
+  queue.
+- Spreads the work over one or more workers (QSV, NVENC, Quadra or software).
+- Checks every output before it replaces the original.
+- Hands stuck jobs back to the queue when a worker dies mid-encode.
+- Shows live progress, history and savings.
+- Runs on a schedule, for example only between 11pm and 7am on weekdays.
+- Remembers "never try this file again" with one click.
 
-**Doesn't (yet)**:
-- Plugin/flow editor. Roadmap: v1.0.
-- Multi-output profiles (e.g. an h264 fallback file alongside the HEVC one).
-- An arm64 image — amd64 only for now (the Intel QSV apt packages block arm64).
+**Doesn't, yet:**
+- A plugin or flow editor. That is on the roadmap for v1.0.
+- More than one output per file, like an H.264 copy next to the HEVC one.
+- An arm64 image. It is amd64 only for now, because the Intel QSV packages
+  in the image are x86-only.
 
-## Hardware encoder support
+## Hardware encoders
 
-| Encoder | Platform | What you need |
+| Encoder | Codecs | What you need |
 |---|---|---|
-| Intel QSV | Linux (gen8+) | `intel-media-va-driver-non-free` + `libmfx1` (gen8-10) or `libmfx-gen` (gen11+); pass `/dev/dri` into the container |
-| NVIDIA NVENC | Linux | Driver 470+, `nvidia-container-toolkit` if running in Docker. Should also work on Windows, but that's untested. |
-| Software x265 | Anywhere | Slow, but always works. The only encoder path on macOS, though macOS itself is untested. |
+| Intel QSV | HEVC, AV1 | Linux, `intel-media-va-driver-non-free` plus `libmfx1` (gen 8 to 10) or `libmfx-gen` (gen 11 and up), and `/dev/dri` passed into the container. The GPU has to encode 10-bit, so Skylake does not qualify |
+| NVIDIA NVENC | HEVC, AV1 | Linux, driver 470 or newer, and `nvidia-container-toolkit` in Docker. Windows should work but is untested |
+| NETINT Quadra | HEVC, AV1 | A Quadra card and its ffmpeg build |
+| Software (x265, SVT-AV1) | HEVC, AV1 | Nothing extra. Slow, but it always works. It is the only path on macOS, which is untested |
 
-Workers detect available encoders at startup and pick the best one. Set
-`TF_PREFERRED_ENCODER` to `qsv`, `nvenc`, or `cpu` to force a specific one.
-Linux is the tested platform; the Windows and macOS paths above are best-effort.
+AV1 needs a GPU that can encode it, for example Intel Arc or an NVIDIA RTX 40
+card. At startup each worker test-encodes every codec and backend pair and
+only offers the ones that work. It then uses `TF_PREFERRED_BACKEND` if that
+supports the job's codec, otherwise QSV, then NVENC, then software. Quadra is
+never picked on its own: set `TF_PREFERRED_BACKEND=quadra` on the worker that
+has the card. Linux is the tested platform; Windows and macOS are best effort.
 
 ## Pipeline safety
 
-Every transcode goes through eight steps:
+Every encode goes through eight steps:
 
 ```
 LOCK → TRANSCODE → VERIFY → COMPARE → SWAP → CONFIRM → CLEANUP → UNLOCK
 ```
 
-If a step fails, the original is preserved. The output is
-verified by ffprobe AND a real decode of frames at three offsets before
-the swap happens. If the post-swap file fails its decode check, the
-original is restored from `.tf_bak`.
+- **LOCK** puts a `.tf_lock` file next to the original, so two workers never
+  encode the same file.
+- **VERIFY** probes the output and decodes frames at three points. Any
+  decoder or demuxer complaint fails it, even when ffmpeg exits 0.
+- **COMPARE** checks that every stream in the source landed where the
+  encoder planned it and that the output is smaller than the source. When
+  the worker can measure VMAF, the full file also has to clear the safety
+  floors (mean 91.5 and worst scenes 86 by default). Failing any of these
+  ends the job as skipped, with the original kept.
+- **SWAP** and **CONFIRM** move the new file into place and check it again.
+  If that check fails, the original comes back from its `.tf_bak` copy.
 
-Stuck jobs (worker crashed mid-transcode) are detected by the integrity
-audit endpoint at `/api/audit/integrity`. The dashboard surfaces them
-and an admin can re-queue or exclude them.
+If a step fails, the original is kept. The scheduler also sweeps for stuck
+jobs every 30 seconds. A job whose worker died goes back to the queue after
+10 minutes, and a job whose worker is alive but working on something else
+goes back after 2 minutes. For a manual check, `GET /api/audit/integrity`
+lists anything that looks stuck.
 
 ## Development
 
 ```bash
 uv sync --extra dev --dev
-uv run pytest                       # ~480 tests, about a minute
+uv run pytest                       # about 1,100 tests, a few minutes
 uv run pytest tests/test_pipeline.py
 uv run ruff check src/ tests/
+uv run ruff format src/ tests/
 uv run mypy src/
 ```
 
-The repo has separate test suites for unit tests, repository tests,
-HTTP handler tests, view-consistency tests, schema migrations, and the
-worker HTTP API. Run `pytest -k <name>` to filter.
+The suite covers the repositories, the HTTP handlers, the worker API, the
+pipeline, schema migrations, and tests that keep every view of the same data
+in agreement. Filter with `pytest -k <name>`. CI also runs the suite against
+real Postgres, a UI sweep, and a production image build; see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
 
 ## License
 
