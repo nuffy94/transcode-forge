@@ -136,6 +136,37 @@ class TestQueuePauseGate:
         monkeypatch.setattr(sched_module, "is_active_now", stub)
         assert await system_repo.is_queue_paused(db) is False
 
+    async def test_status_splits_hand_pause_from_closed_window(
+        self, client: AsyncClient, db, monkeypatch
+    ):
+        """Outside the window the button can only own the hand-set pause:
+        the status names the two causes apart, so Resume is not offered for
+        a pause it cannot lift, and a pause by hand can be set overnight."""
+        await sched_repo.create_schedule(db, name="day", start_hour=9, end_hour=17)
+
+        from transcode_forge.repos import schedules as sched_module
+
+        original = sched_module.is_active_now
+
+        def stub(sched, now=None):
+            return original(sched, MONDAY.replace(hour=3))
+
+        monkeypatch.setattr(sched_module, "is_active_now", stub)
+
+        status = (await client.get("/api/queue/status")).json()
+        assert status == {"paused": True, "paused_by_hand": False, "schedule_closed": True}
+
+        assert (await client.post("/api/queue/pause")).status_code == 200
+        status = (await client.get("/api/queue/status")).json()
+        assert status["paused_by_hand"] is True
+        assert status["schedule_closed"] is True
+
+        assert (await client.post("/api/queue/resume")).status_code == 200
+        status = (await client.get("/api/queue/status")).json()
+        assert status == {"paused": True, "paused_by_hand": False, "schedule_closed": True}
+        # Claiming still checks both causes.
+        assert await system_repo.is_queue_paused(db) is True
+
 
 class TestApi:
     async def test_create_then_list(self, client: AsyncClient):

@@ -5,6 +5,8 @@ from typing import Any
 from uuid import uuid4
 
 from transcode_forge.db import DBConnection
+from transcode_forge.models.skipped import SkipReason
+from transcode_forge.repos import skipped as skip_repo
 from transcode_forge.scanner.probe import format_resolution
 
 _VALID_TRANSCODE_STATUSES = frozenset(
@@ -116,8 +118,40 @@ async def upsert_media_file(
             now,
         ),
     )
+    if skip_reason is not None:
+        # Only a skip this scan decided is recorded: a kept row's reason (a
+        # worker's VMAF-gate skip, a manual skip) already has its record.
+        async with db.execute(
+            "SELECT skip_reason FROM media_files WHERE file_path = ?", (file_path,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row["skip_reason"] == skip_reason:
+            await record_skip_from_catalog(db, file_path, SkipReason(skip_reason))
     await db.commit()
     return file_id
+
+
+async def record_skip_from_catalog(db: DBConnection, file_path: str, reason: SkipReason) -> None:
+    """Record a skip for a cataloged file, so Activity lists it with its reason."""
+    async with db.execute(
+        "SELECT m.library_id, m.video_codec, m.resolution, m.file_size, l.name"
+        " FROM media_files m LEFT JOIN libraries l ON l.id = m.library_id"
+        " WHERE m.file_path = ?",
+        (file_path,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return
+    await skip_repo.record_skip(
+        db,
+        file_path=file_path,
+        library=row["name"] or row["library_id"],
+        library_id=row["library_id"],
+        codec=row["video_codec"] or "",
+        resolution=row["resolution"],
+        file_size=row["file_size"],
+        skip_reason=reason,
+    )
 
 
 async def get_media_file(db: DBConnection, file_id: str) -> dict[str, Any] | None:

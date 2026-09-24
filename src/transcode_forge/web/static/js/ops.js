@@ -6,46 +6,53 @@ import { showToast } from './toast.js';
 
 /* Pause/resume button (#pause-btn). The button carries pause-icon /
  * play-icon / pause-label role spans; the resume label is derived from
- * the pause label ("Pause queue" → "Resume queue"). */
+ * the pause label ("Pause queue" → "Resume queue"). It toggles only the
+ * hand-set pause; a closed schedule window gets its own label, since
+ * only Settings can open it. */
 export function initPauseButton() {
     const btn = document.getElementById('pause-btn');
     if (!btn) return;
     const label = btn.querySelector('[data-role="pause-label"]');
     const pauseText = label ? label.textContent.trim() : 'Pause';
     const resumeText = pauseText.replace('Pause', 'Resume');
+    const waitingText = 'Waiting for schedule window';
 
-    const apply = (paused) => {
-        btn.querySelector('[data-role="pause-icon"]')?.classList.toggle('hidden', paused);
-        btn.querySelector('[data-role="play-icon"]')?.classList.toggle('hidden', !paused);
-        if (label) label.textContent = paused ? resumeText : pauseText;
+    const apply = ({ paused_by_hand, schedule_closed }) => {
+        btn.querySelector('[data-role="pause-icon"]')?.classList.toggle('hidden', paused_by_hand);
+        btn.querySelector('[data-role="play-icon"]')?.classList.toggle('hidden', !paused_by_hand);
+        if (!label) return;
+        if (paused_by_hand) label.textContent = resumeText;
+        else if (schedule_closed) label.textContent = waitingText;
+        else label.textContent = pauseText;
+    };
+
+    const fetchStatus = async () => {
+        const resp = await fetch('/api/queue/status');
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        return resp.json();
     };
 
     btn.addEventListener('click', async () => {
         try {
-            const resp = await fetch('/api/queue/status');
-            if (!resp.ok) {
-                showToast('Error fetching queue status', 'error');
-                return;
-            }
-            const { paused } = await resp.json();
-            const action = await fetch(paused ? '/api/queue/resume' : '/api/queue/pause', {
+            const { paused_by_hand } = await fetchStatus();
+            const action = await fetch(paused_by_hand ? '/api/queue/resume' : '/api/queue/pause', {
                 method: 'POST',
             });
             if (!action.ok) {
                 showToast('Error changing queue state', 'error');
                 return;
             }
-            apply(!paused);
-            showToast(paused ? 'Queue resumed' : 'Queue paused', paused ? 'success' : 'warning');
+            const status = await fetchStatus();
+            apply(status);
+            if (status.paused_by_hand) showToast('Queue paused', 'warning');
+            else if (status.schedule_closed) showToast('Pause lifted. Waiting for schedule window', 'info');
+            else showToast('Queue resumed', 'success');
         } catch (e) {
             showToast(`Failed to change queue state: ${e.message}`, 'error');
         }
     });
 
-    fetch('/api/queue/status')
-        .then((r) => r.json())
-        .then(({ paused }) => apply(paused))
-        .catch(() => {});
+    fetchStatus().then(apply).catch(() => {});
 }
 
 /* Live progress over WebSocket. Rows are matched by data-job-id and
