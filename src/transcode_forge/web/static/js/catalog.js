@@ -12,16 +12,11 @@ import { esc, showToast } from './toast.js';
 
 const GIB = 1073741824;
 
-const PILL_CLASS = {
-    complete: 'forge-pill--complete',
-    transcoding: 'forge-pill--running',
-    queued: 'forge-pill--queued',
-    pending: 'forge-pill--pending',
-    failed: 'forge-pill--failed',
-    skipped: 'forge-pill--skipped',
-    cancelled: 'forge-pill--cancelled',
-    needs_transcode: 'forge-pill--queued',
-};
+// The status-to-pill map is defined once server-side (web/routes.py
+// status_pills) and handed over through data-status-pills.
+const PILL_CLASS = JSON.parse(
+    document.querySelector('[data-status-pills]')?.dataset.statusPills || '{}'
+);
 
 function pill(status) {
     const cls = PILL_CLASS[status] || 'forge-pill--pending';

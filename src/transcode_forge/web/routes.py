@@ -36,6 +36,19 @@ templates.env.globals["app_version"] = __version__
 templates.env.globals["waiting_job_statuses"] = WAITING_JOB_STATUSES
 templates.env.globals["active_job_statuses"] = ACTIVE_JOB_STATUSES
 templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
+# The media-file status to pill class map, defined once. Templates read it
+# as a Jinja global; catalog.js reads it from data-status-pills on the
+# Movies and TV pages. An unmapped status renders the muted pending pill.
+templates.env.globals["status_pills"] = {
+    "complete": "forge-pill--complete",
+    "transcoding": "forge-pill--running",
+    "queued": "forge-pill--queued",
+    "pending": "forge-pill--pending",
+    "failed": "forge-pill--failed",
+    "skipped": "forge-pill--skipped",
+    "cancelled": "forge-pill--cancelled",
+    "needs_transcode": "forge-pill--queued",
+}
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`
 # fails to COMPILE (TemplateSyntaxError) — which 500'd /partials/schedules
