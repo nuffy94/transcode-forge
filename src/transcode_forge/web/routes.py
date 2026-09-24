@@ -14,7 +14,11 @@ from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
 from transcode_forge.api.routes import stats as stats_api
 from transcode_forge.db import DBConnection, check_db_health
-from transcode_forge.models.job import ACTIVE_JOB_STATUSES, WAITING_JOB_STATUSES
+from transcode_forge.models.job import (
+    ACTIVE_JOB_STATUSES,
+    WAITING_JOB_STATUSES,
+    display_percent,
+)
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 from transcode_forge.redis import check_redis_health
 from transcode_forge.repos import exclusions as excl_repo
@@ -36,6 +40,8 @@ templates.env.globals["app_version"] = __version__
 templates.env.globals["waiting_job_statuses"] = WAITING_JOB_STATUSES
 templates.env.globals["active_job_statuses"] = ACTIVE_JOB_STATUSES
 templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
+# Progress percentages round in one place, shared with the live event.
+templates.env.filters["percent"] = display_percent
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`
 # fails to COMPILE (TemplateSyntaxError) — which 500'd /partials/schedules

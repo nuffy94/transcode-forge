@@ -78,6 +78,37 @@ class TestProgressPollMorph:
             assert "48%" in resp.text, partial
             assert "47%" not in resp.text, partial
 
+    async def test_halves_round_up_like_the_live_event(self, client: AsyncClient, app):
+        """Exact halves round up in the markup, the same integer the
+        progress event carries: 0.125 is 13% (Jinja's round said 12%) and
+        a Gauge at 0.345 is 35% (it said 34%)."""
+        db = app.state.db
+        meter = Job(
+            source_path="/media/movies/HalfMeter.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        gauge = Job(
+            source_path="/media/movies/HalfGauge.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        for job in (meter, gauge):
+            await job_repo.create_job(db, job)
+        await job_repo.update_job(db, meter.id, status="transcoding", progress=0.125)
+        await job_repo.update_job(
+            db, gauge.id, status="transcoding", progress=1.0, phase="gauge", phase_pct=0.345
+        )
+
+        for partial in ("/partials/active-transcodes", "/partials/jobs"):
+            resp = await client.get(partial)
+            assert resp.status_code == 200
+            assert "data-progress-pct>13%" in resp.text, partial
+            assert "data-phase-detail>35%" in resp.text, partial
+
     async def test_phased_job_renders_station_bar(self, client: AsyncClient, app):
         """A job with a reported phase renders the five-station pipeline bar
         with the current station active — and gate-off jobs mark Search and

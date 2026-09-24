@@ -49,7 +49,9 @@ export function initPauseButton() {
 }
 
 /* Live progress over WebSocket. Rows are matched by data-job-id and
- * carry data-progress-bar / data-progress-pct (contract C.1). */
+ * carry data-progress-bar / data-progress-pct (contract C.1). The event's
+ * percent / phase_percent are already computed by the server (the same
+ * function the templates use), so this only displays them. */
 export function initLiveProgress() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     function connect() {
@@ -58,7 +60,7 @@ export function initLiveProgress() {
             const data = JSON.parse(evt.data);
             const row = document.querySelector(`[data-job-id="${data.job_id}"]`);
             if (!row) return;
-            const pct = Math.round(data.progress * 100);
+            const pct = data.percent;
             const barEl = row.querySelector('[data-progress-bar]');
             const pctEl = row.querySelector('[data-progress-pct]');
             if (barEl) barEl.style.width = pct + '%';
@@ -86,18 +88,19 @@ export function initLiveProgress() {
                     else st.classList.add('forge-station--todo');
                 });
             }
-            // One rule for the active station: phase_pct (the server copies
-            // Encode's progress into it) draws a fill; no number breathes
-            // and the readout shows the probe label, if any.
+            // One rule for the active station: phase_percent (the server
+            // copies Encode's progress into it) draws a fill; no number
+            // breathes and the readout shows the probe label, if any.
             const active = data.phase && row.querySelector('.forge-station--active');
             if (active) {
-                const known = typeof data.phase_pct === 'number';
-                const stationPct = known ? Math.round(data.phase_pct * 100) : null;
+                const known = typeof data.phase_percent === 'number';
                 active.classList.toggle('forge-station--timed', !known);
                 const fillEl = active.querySelector('[data-station-fill]');
-                if (fillEl && known) fillEl.style.width = stationPct + '%';
+                if (fillEl && known) fillEl.style.width = data.phase_percent + '%';
                 const detailEl = active.querySelector('[data-phase-detail]');
-                if (detailEl) detailEl.textContent = known ? stationPct + '%' : data.phase_detail || '';
+                if (detailEl) {
+                    detailEl.textContent = known ? data.phase_percent + '%' : data.phase_detail || '';
+                }
             }
         };
         ws.onclose = () => setTimeout(connect, 5000);

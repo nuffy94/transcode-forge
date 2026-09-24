@@ -30,6 +30,7 @@ from transcode_forge.models.job import (
     Job,
     JobPhase,
     JobStatus,
+    display_percent,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
@@ -646,6 +647,10 @@ async def progress(
                         "phase": body.phase,
                         "phase_pct": phase_pct,
                         "phase_detail": body.phase_detail,
+                        # What the page shows, rounded here so the
+                        # browser only displays it (models.job).
+                        "percent": display_percent(body.progress),
+                        "phase_percent": display_percent(phase_pct),
                     }
                 ),
             )

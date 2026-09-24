@@ -1,5 +1,6 @@
 """Job model — represents a single transcode task."""
 
+import math
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
@@ -71,6 +72,17 @@ class JobPhase(StrEnum):
     # shows the plain meter labelled "waiting" plus a "Waiting for lock"
     # line built from phase_detail ("<owner id8> <age>s").
     WAIT = "wait"
+
+
+def display_percent(fraction: float | None) -> int | None:
+    """The whole percent a person sees for a 0..1 progress fraction,
+    rounded half up. The one place it is computed: the templates (the
+    ``percent`` filter) and the live progress event both call this, and
+    the browser only displays the result, so a poll and a WebSocket
+    update can never round the same value two ways."""
+    if fraction is None:
+        return None
+    return math.floor(fraction * 100 + 0.5)
 
 
 class Job(BaseModel):

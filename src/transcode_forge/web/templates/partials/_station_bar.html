@@ -38,7 +38,7 @@
 {% if job.phase and job.phase in order %}
 {% set cur = order.index(job.phase) %}
 {% set gate_off = job.target_vmaf is none %}
-{% set spct = (job.phase_pct * 100)|round|int if job.phase_pct is not none else none %}
+{% set spct = job.phase_pct|percent %}
 <div class="forge-stations">
     <span class="forge-tick forge-tick--lit" role="img" aria-label="Lock: original claimed and protected" title="Lock"></span>
     {% for key, label in STATIONS %}
