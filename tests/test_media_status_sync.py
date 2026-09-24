@@ -36,7 +36,7 @@ async def _seed_catalog_job(
 
     db = app.state.db
     # Unique name/path per call — libraries.path carries a UNIQUE constraint.
-    suffix = uuid4().hex[:6]
+    suffix = uuid4().hex
     lib_name = f"movies-{suffix}"
     if s3:
         lib_id = await lib_repo.create_library(
