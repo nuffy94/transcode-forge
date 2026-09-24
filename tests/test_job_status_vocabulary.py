@@ -184,3 +184,38 @@ async def test_browser_reads_the_sets_from_the_dom(client: AsyncClient, app) -> 
     rows = (await client.get(f"/partials/jobs?status={default_filter}")).text
     assert re.search(r'data-status="queued"\s+data-cancellable="1"', rows)
     assert re.search(r'data-status="transcoding"\s+data-cancellable="0"', rows)
+
+
+async def test_retry_is_offered_for_every_status_the_api_retries(client: AsyncClient, app) -> None:
+    """The retry endpoint and the pages share one list. The queue rows carry
+    a server-rendered data-retryable flag (bulk retry reads it, like
+    data-cancellable), and both tables show a Retry button exactly where
+    POST /api/jobs/{id}/retry would succeed. A cancelled job used to be
+    retryable by the API with no button anywhere."""
+    db = app.state.db
+    jobs = {}
+    for status in (JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.QUEUED):
+        job = Job(
+            source_path=f"/movies/retry-{status}.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=24,
+            status=status,
+        )
+        await job_repo.create_job(db, job)
+        jobs[status] = job
+
+    rows = (await client.get("/partials/jobs?status=failed,cancelled,queued")).text
+    for status in (JobStatus.FAILED, JobStatus.CANCELLED):
+        assert f'/api/jobs/{jobs[status].id}/retry"' in rows
+    assert f'/api/jobs/{jobs[JobStatus.QUEUED].id}/retry"' not in rows
+    flag = r'data-status="{}"\s+data-cancellable="[01]"\s+data-retryable="{}"'
+    assert re.search(flag.format("failed", 1), rows)
+    assert re.search(flag.format("cancelled", 1), rows)
+    assert re.search(flag.format("queued", 0), rows)
+
+    outcomes = (await client.get("/partials/activity-outcomes?status=cancelled")).text
+    assert f'/api/jobs/{jobs[JobStatus.CANCELLED].id}/retry"' in outcomes
+
+    retried = await client.post(f"/api/jobs/{jobs[JobStatus.CANCELLED].id}/retry")
+    assert retried.status_code == 200

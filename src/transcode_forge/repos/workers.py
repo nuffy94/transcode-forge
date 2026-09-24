@@ -29,12 +29,14 @@ def _row_to_worker(row: aiosqlite.Row) -> Worker:
 async def upsert_worker(db: DBConnection, worker: Worker) -> None:
     """Insert or update a worker (heartbeat IS registration).
 
-    Deliberately does NOT stamp current_job_changed_at even though it
-    resets current_job_id (unlike update_worker_heartbeat, which does):
-    registration already releases the worker's jobs, so there is nothing
-    for the reconciliation sweep to time against a stale value — and a
-    left-over timestamp is either old enough to sweep promptly (correct)
-    or fresh enough that the normal grace applies."""
+    Registration counts as a heartbeat naming "no job": it resets
+    current_job_id and stamps current_job_changed_at, so the
+    reconciliation sweep always has a start time for the worker's
+    mismatch. Jobs held before registration are released by the caller,
+    but a claim committed AFTER it whose reply the worker never received
+    is only visible to the sweep, and the sweep can only time it against
+    this stamp. Before it was stamped here, a worker that never
+    heartbeated a job kept a NULL stamp and such a job was stranded."""
     now = datetime.now(UTC).isoformat()
     caps_json = json.dumps(worker.capabilities)
     codecs_json = json.dumps(worker.supported_codecs)
@@ -43,8 +45,9 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
         """INSERT INTO workers (
             id, name, host, capabilities, supported_codecs, supports_downscale,
             sends_claim_token, ffmpeg_version, max_concurrent, status,
-            current_job_id, last_heartbeat, registered_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            current_job_id, current_job_changed_at, last_heartbeat, registered_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             host = excluded.host,
@@ -56,6 +59,7 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
             max_concurrent = excluded.max_concurrent,
             status = excluded.status,
             current_job_id = excluded.current_job_id,
+            current_job_changed_at = excluded.current_job_changed_at,
             last_heartbeat = excluded.last_heartbeat,
             updated_at = excluded.updated_at
         """,
@@ -71,6 +75,7 @@ async def upsert_worker(db: DBConnection, worker: Worker) -> None:
             worker.max_concurrent,
             worker.status.value,
             worker.current_job_id,
+            now,
             now,
             now,
             now,

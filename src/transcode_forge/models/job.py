@@ -43,6 +43,11 @@ TERMINAL_JOB_STATUSES: tuple[str, ...] = (
 )
 """Finished. A terminal job never changes status again (finalize_job's fence)."""
 
+RETRYABLE_JOB_STATUSES: tuple[str, ...] = (JobStatus.FAILED.value, JobStatus.CANCELLED.value)
+"""The finished jobs POST /api/jobs/{id}/retry puts back in the queue. Not
+part of the partition above: the pages read it (data-retryable) so a Retry
+button shows exactly where the endpoint accepts one."""
+
 
 class TargetCodec(StrEnum):
     """Output codecs a job can target. Extending (VP9/AV2 later) means a new

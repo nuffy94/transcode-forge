@@ -165,10 +165,10 @@ async function bulkCancel() {
 
 async function bulkRetry() {
     const ids = selectedCheckboxes()
-        .filter((c) => c.dataset.status === 'failed')
+        .filter((c) => c.dataset.retryable === '1')
         .map((c) => c.value);
     if (!ids.length) {
-        showToast('No failed jobs selected', 'warning');
+        showToast('No retryable jobs selected', 'warning');
         return;
     }
     const results = await Promise.all(

@@ -1217,7 +1217,6 @@ class TestRequeueOrphanActiveJobs:
         assert fetched.status == JobStatus.QUEUED
         assert fetched.worker_id is None
         assert fetched.started_at is None
-        assert fetched.progress == 0
 
     async def test_missing_worker_row_requeued(self, db):
         """A job whose worker_id references nobody (row deleted) is just as

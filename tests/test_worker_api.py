@@ -830,7 +830,6 @@ class TestWorkerCrashRecovery:
         # would inherit a token a parked report could still match.
         assert requeued.claim_token is None
         assert requeued.started_at is None
-        assert requeued.progress == 0.0
 
     async def test_reregister_only_releases_own_active_jobs(self, client: AsyncClient, app):
         """The release must be scoped: another worker's in-flight job and the
@@ -1245,6 +1244,47 @@ class TestPhaseProgressDetail:
                 headers=headers,
             )
             assert r.status_code == 422
+
+    async def test_a_new_attempt_starts_with_no_progress_or_phase(self, client: AsyncClient, app):
+        """The claim is the one statement that starts an attempt, so it
+        clears the per-attempt columns itself. A retried job must not show
+        the previous attempt's "gauge 83%" before (or, with a pre-phase
+        worker, instead of) the new attempt's first report."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app, "/m/retry-phase.mkv")
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "rp")
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 1.0, "phase": "gauge", "phase_pct": 0.83},
+                headers=headers,
+            )
+            assert r.status_code == 204
+            r = await c.post(
+                f"/api/worker/job/{job.id}/failed",
+                json={"error_message": "boom", "retry_count": 1},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+            assert (await client.post(f"/api/jobs/{job.id}/retry")).status_code == 200
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+
+        row = await job_repo.get_job(app.state.db, job.id)
+        assert row is not None
+        assert (row.progress, row.phase, row.phase_pct, row.phase_detail) == (0, None, None, None)
 
 
 class TestAttemptIdentity:

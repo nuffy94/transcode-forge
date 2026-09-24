@@ -368,13 +368,15 @@ async def test_heartbeat_stamps_transitions_not_steady_state(db):
     'mismatch sustained since T' is readable straight off the row."""
     worker = Worker(name="hb", host="h", status=WorkerStatus.ONLINE)
     await worker_repo.upsert_worker(db, worker)
+    t0 = await _changed_at(db, worker.id)
+    assert t0 is not None  # registration is a heartbeat naming no job
 
     await worker_repo.update_worker_heartbeat(db, worker.id, current_job_id=None)
-    assert await _changed_at(db, worker.id) is None  # None→None: no transition
+    assert await _changed_at(db, worker.id) == t0  # None→None: no transition
 
     await worker_repo.update_worker_heartbeat(db, worker.id, current_job_id="job-a")
     t1 = await _changed_at(db, worker.id)
-    assert t1 is not None  # None→a stamps
+    assert t1 is not None and t1 >= t0  # None→a stamps
 
     await worker_repo.update_worker_heartbeat(db, worker.id, current_job_id="job-a")
     assert await _changed_at(db, worker.id) == t1  # a→a: steady
@@ -449,6 +451,63 @@ async def test_pre_migration_worker_is_not_swept(db):
     assert await job_repo.requeue_abandoned_active_jobs(db, grace_seconds=120) == []
     status, _ = await _job_status(db, job_id)
     assert status == JobStatus.TRANSCODING.value
+
+
+async def _rewind(db, table: str, row_id: str, columns: tuple[str, ...], seconds: float) -> None:
+    """Let time pass for one row: every timestamp it holds gets older,
+    and a NULL stays NULL."""
+    async with db.execute(
+        f"SELECT {', '.join(columns)} FROM {table} WHERE id = ?", (row_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    shifted = [
+        None
+        if row[col] is None
+        else (datetime.fromisoformat(row[col]) - timedelta(seconds=seconds)).isoformat()
+        for col in columns
+    ]
+    await db.execute(
+        f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in columns)} WHERE id = ?",
+        (*shifted, row_id),
+    )
+    await db.commit()
+
+
+async def test_lost_claim_reply_is_swept_while_worker_idles(client: AsyncClient, app):
+    """The scheduler commits a claim, the reply never reaches the worker,
+    and the worker stays up heartbeating "no job". Registration counts as
+    a heartbeat naming no job, so the mismatch has a start time and the
+    abandoned sweep takes the job once the grace passes. It used to sit
+    in 'transcoding' forever: the worker's current_job_changed_at was
+    NULL, which the sweep skipped."""
+    db = app.state.db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        job_id, headers = await _claimed_job(client, app, c, "lostreply")
+        job = await job_repo.get_job(db, job_id)
+        assert job is not None and job.worker_id is not None
+        worker_id = job.worker_id
+        for _ in range(3):
+            r = await c.post(
+                "/api/worker/heartbeat",
+                json={"worker_id": worker_id, "status": "online", "current_job_id": None},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+    # A just-claimed job keeps its grace.
+    assert await job_repo.requeue_abandoned_active_jobs(db) == []
+
+    await _rewind(db, "jobs", job_id, ("updated_at", "started_at", "created_at"), 3600)
+    await _rewind(
+        db,
+        "workers",
+        worker_id,
+        ("current_job_changed_at", "last_heartbeat", "registered_at", "updated_at"),
+        3600,
+    )
+    requeued = await job_repo.requeue_abandoned_active_jobs(db)
+    assert [r["id"] for r in requeued] == [job_id]
+    assert await _job_status(db, job_id) == (JobStatus.QUEUED.value, None)
 
 
 async def test_dead_worker_is_orphan_territory_not_abandoned(db):

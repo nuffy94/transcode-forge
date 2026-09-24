@@ -14,7 +14,11 @@ from transcode_forge import __version__
 from transcode_forge.api.deps import get_db, get_redis
 from transcode_forge.api.routes import stats as stats_api
 from transcode_forge.db import DBConnection, check_db_health
-from transcode_forge.models.job import ACTIVE_JOB_STATUSES, WAITING_JOB_STATUSES
+from transcode_forge.models.job import (
+    ACTIVE_JOB_STATUSES,
+    RETRYABLE_JOB_STATUSES,
+    WAITING_JOB_STATUSES,
+)
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 from transcode_forge.redis import check_redis_health
 from transcode_forge.repos import exclusions as excl_repo
@@ -35,6 +39,7 @@ templates.env.globals["app_version"] = __version__
 # (tests/test_job_status_vocabulary.py fails if one does).
 templates.env.globals["waiting_job_statuses"] = WAITING_JOB_STATUSES
 templates.env.globals["active_job_statuses"] = ACTIVE_JOB_STATUSES
+templates.env.globals["retryable_job_statuses"] = RETRYABLE_JOB_STATUSES
 templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`

@@ -16,6 +16,7 @@ from transcode_forge.models.job import (
     JobStatus,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
+from transcode_forge.repos import media as media_repo
 from transcode_forge.repos.media import IN_FLIGHT_STATUSES
 
 # Valid job statuses for filtering (whitelist validation)
@@ -244,6 +245,15 @@ def _attempt_fence(claim_token: str | None) -> tuple[str, list[object]]:
     return " AND claim_token = ?", [claim_token]
 
 
+# The catalog status a file takes when the job it was queued into ends.
+# A failed encode kept the original, so the file can be queued again.
+_CATALOG_STATUS_FOR: dict[JobStatus, str] = {
+    JobStatus.COMPLETE: "complete",
+    JobStatus.SKIPPED: "skipped",
+    JobStatus.FAILED: "needs_transcode",
+}
+
+
 async def finalize_job(
     db: DBConnection,
     job_id: str,
@@ -251,6 +261,7 @@ async def finalize_job(
     status: JobStatus,
     *,
     claim_token: str | None = None,
+    skip_reason: str | None = None,
     **fields: object,
 ) -> bool:
     """Atomically transition an owned job to a terminal status.
@@ -264,6 +275,12 @@ async def finalize_job(
     worker re-claimed mid-request, or the SAME worker re-claimed as a new
     attempt (R-020). Returns False when the transition lost; the caller
     re-reads and answers 204/409/403.
+
+    The winning transition also moves the catalog row queued into the job
+    (_CATALOG_STATUS_FOR, with skip_reason on a skip), so every door that
+    ends a job keeps the file list in step. Pass a transaction so the two
+    writes commit together: once the job reads terminal a retried report
+    settles as a duplicate and nothing would ever re-run a missed sync.
     """
     invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
     if invalid_cols:
@@ -281,8 +298,14 @@ async def finalize_job(
         f" AND status NOT IN ({placeholders_terminal})",
         [status.value, *values, job_id, worker_id, *fence_params, *TERMINAL_JOB_STATUSES],
     )
+    won = bool(cur.rowcount)
+    catalog_status = _CATALOG_STATUS_FOR.get(status)
+    if won and catalog_status is not None:
+        await media_repo.update_status_by_job(
+            db, job_id, transcode_status=catalog_status, skip_reason=skip_reason
+        )
     await db.commit()
-    return bool(cur.rowcount)
+    return won
 
 
 async def report_progress(
@@ -415,7 +438,7 @@ async def requeue_orphan_active_jobs(
     placeholders_alive = ",".join("?" * len(alive))
     sql = (
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})"
@@ -462,14 +485,14 @@ ABANDONED_GRACE_SECONDS = 120
 # pair below. A worker heartbeating THE job's id never matches, regardless
 # of how stale the job row is — a multi-hour VMAF gauge sends no progress,
 # but its heartbeat names the job the whole time (the long-gauge safety
-# property). current_job_changed_at IS NOT NULL keeps pre-migration rows
-# (no transition observed yet) out of the sweep. j.updated_at is checked
-# too: a claim bumps it, so a just-claimed job is safe even though the
-# worker's previous mismatch (e.g. NULL since its last job) is old.
+# property). Registration stamps current_job_changed_at, so every worker
+# that has registered since migration 0013 has a start time for its
+# mismatch. j.updated_at is checked too: a claim bumps it, so a
+# just-claimed job is safe even though the worker's previous mismatch
+# (e.g. NULL since its last job or its registration) is old.
 _ABANDONED_CONDITION = (
     "  AND w.status IN ({alive})"
     "  AND (w.current_job_id IS NULL OR w.current_job_id != j.id)"
-    "  AND w.current_job_changed_at IS NOT NULL"
     "  AND w.current_job_changed_at < ?"
     "  AND j.updated_at < ?"
 )
@@ -530,7 +553,7 @@ async def requeue_abandoned_active_jobs(
     condition = _ABANDONED_CONDITION.format(alive=",".join("?" * len(alive)))
     sql = (
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         " WHERE id IN ("
         "   SELECT j.id FROM jobs j JOIN workers w ON w.id = j.worker_id"
         f"  WHERE j.status IN ({placeholders_active})" + condition + " )"
@@ -554,6 +577,18 @@ async def requeue_abandoned_active_jobs(
         rows = await cur.fetchall()
     await db.commit()
     return [dict(r) for r in rows]
+
+
+# What an attempt writes about itself as it runs, and so what the next
+# attempt must not inherit. The claim resets these in the same statement
+# that starts the attempt, so a release (retry, registration, either
+# sweep) only has to drop the owner and never has to know this list.
+_ATTEMPT_COLUMNS: dict[str, object] = {
+    "progress": 0,
+    "phase": None,
+    "phase_pct": None,
+    "phase_detail": None,
+}
 
 
 async def claim_next_job(
@@ -582,7 +617,8 @@ async def claim_next_job(
     straight to TRANSCODING (R-020). Claiming into ASSIGNED and bumping
     it afterwards was a second, unfenced write by job id alone: a cancel
     or a release landing in that window was stomped back to TRANSCODING.
-    One statement has no window.
+    One statement has no window. It also resets _ATTEMPT_COLUMNS, so the
+    new attempt never shows the last one's phase or percentage.
     """
     codecs = supported_codecs or ["hevc"]
     now = datetime.now(UTC).isoformat()
@@ -591,8 +627,10 @@ async def claim_next_job(
     codec_placeholders = ",".join("?" * len(codecs))
     waiting_placeholders = ",".join("?" * len(WAITING_JOB_STATUSES))
     downscale_clause = "" if supports_downscale else " AND target_height IS NULL"
+    attempt_reset = "".join(f", {col} = ?" for col in _ATTEMPT_COLUMNS)
     sql = f"""UPDATE jobs
-        SET status = ?, worker_id = ?, claim_token = ?, started_at = ?, updated_at = ?
+        SET status = ?, worker_id = ?, claim_token = ?, started_at = ?,
+            updated_at = ?{attempt_reset}
         WHERE id = (
             SELECT id FROM jobs
             WHERE status IN ({waiting_placeholders})
@@ -609,6 +647,7 @@ async def claim_next_job(
             claim_token,
             now,
             now,
+            *_ATTEMPT_COLUMNS.values(),
             *WAITING_JOB_STATUSES,
             *codecs,
         ),

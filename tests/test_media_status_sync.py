@@ -194,6 +194,59 @@ class TestWorkerOutcomeSyncsMedia:
         assert row["video_codec"] == "h264"
         assert row["file_size"] == 1000
 
+    async def test_s3_dedup_completion_marks_media_complete(self, client: AsyncClient, app):
+        """The reuse-a-copy shortcut (check-derivative finds the output)
+        ends the job COMPLETE like a worker's own report does, so the
+        catalog row follows it. It used to stay 'queued' forever, pointing
+        at a finished job, and the worker's follow-up /complete settled 204
+        as a duplicate without syncing it either."""
+        from transcode_forge.repos import derivatives as deriv_repo
+
+        path = "masters/movies/dedup.mkv"
+        file_id, job = await _seed_catalog_job(app, path=path, s3=True)
+        await deriv_repo.create_derivative(
+            app.state.db,
+            library_id=job.library_id,
+            source_key=path,
+            source_path=path,
+            source_resolution="3840x2160",
+            source_audio_codec="aac",
+            target_resolution="3840x2160",
+            target_audio_codec="copy",
+            target_codec="hevc",
+            backend="cpu",
+            crf=21,
+            preset="medium",
+            derivative_key="sha256:dedup",
+            output_size=400,
+        )
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await register_worker(client, c, "w")
+            claim = await c.post(
+                "/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers
+            )
+            assert claim.json()["job"]["id"] == job.id
+            r = await c.post(
+                f"/api/worker/job/{job.id}/check-derivative",
+                json={"job_id": job.id, "derivative_key": "sha256:dedup"},
+                headers=headers,
+            )
+            assert r.json()["found"] is True
+            r = await c.post(
+                f"/api/worker/job/{job.id}/complete",
+                json={"output_size": 400, "space_saved": 0, "source_size": 1000},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        row = await _media_row(app, file_id)
+        assert row["transcode_status"] == "complete"
+        assert row["job_id"] == job.id
+        # An S3 master is never replaced: codec and size stay as scanned.
+        assert row["video_codec"] == "h264"
+        assert row["file_size"] == 1000
+
     async def test_worker_skip_marks_media_skipped_with_reason(self, client: AsyncClient, app):
         file_id, job = await _seed_catalog_job(app)
         transport = ASGITransport(app=app)
