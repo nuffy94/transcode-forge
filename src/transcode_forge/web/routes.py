@@ -358,19 +358,21 @@ async def workers_partial(
     enriched = []
     for w in workers_list:
         d = w.model_dump(mode="json")
+        d["removable"] = worker_repo.is_removable(w, now)
         if w.last_heartbeat:
             delta = (now - w.last_heartbeat).total_seconds()
             d["heartbeat_age_seconds"] = int(delta)
             d["heartbeat_relative"] = _humanize_age(delta)
-            # Tiers: fresh < 60s, slow 60-300s, stale 300-1800s, dead > 1800s.
-            if delta < 60:
+            # Tiers: fresh < 60s, slow 60-300s, stale from 300s until the
+            # worker is removable (repos/workers.py threshold), then dead.
+            if d["removable"]:
+                d["heartbeat_tier"] = "dead"
+            elif delta < 60:
                 d["heartbeat_tier"] = "fresh"
             elif delta < 300:
                 d["heartbeat_tier"] = "slow"
-            elif delta < 1800:
-                d["heartbeat_tier"] = "stale"
             else:
-                d["heartbeat_tier"] = "dead"
+                d["heartbeat_tier"] = "stale"
         else:
             d["heartbeat_age_seconds"] = None
             d["heartbeat_relative"] = "never"
