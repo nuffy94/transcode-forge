@@ -630,15 +630,16 @@ async def job_exists_for_path(db: DBConnection, source_path: str) -> bool:
 
 
 async def active_paths(db: DBConnection, paths: list[str]) -> set[str]:
-    """Return the subset of `paths` that already have a non-terminal job (one query)."""
+    """Return the subset of `paths` that already have a waiting or active job (one query)."""
     if not paths:
         return set()
-    terminal = (JobStatus.FAILED.value, JobStatus.CANCELLED.value)
+    live = (*WAITING_JOB_STATUSES, *ACTIVE_JOB_STATUSES)
     placeholders = ",".join("?" * len(paths))
+    status_placeholders = ",".join("?" * len(live))
     async with db.execute(
         f"SELECT DISTINCT source_path FROM jobs "
-        f"WHERE source_path IN ({placeholders}) AND status NOT IN (?, ?)",
-        [*paths, *terminal],
+        f"WHERE source_path IN ({placeholders}) AND status IN ({status_placeholders})",
+        [*paths, *live],
     ) as cur:
         return {row["source_path"] for row in await cur.fetchall()}
 
