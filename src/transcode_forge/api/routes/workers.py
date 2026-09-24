@@ -65,7 +65,7 @@ async def delete_worker(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Worker heartbeated {int(age_seconds)}s ago — wait until it's "
+                f"Worker heartbeated {int(age_seconds)}s ago. Wait until it's "
                 f"silent for {worker_repo.WORKER_STALE_THRESHOLD_SECONDS}s, "
                 "or stop it manually first."
             ),
