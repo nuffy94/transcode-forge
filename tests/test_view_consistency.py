@@ -182,6 +182,26 @@ class TestSpaceSavedConsistency:
         assert api == {"value": "512.0", "unit": "GiB"}
 
 
+class TestAvgSavingsConsistency:
+    """S1-7 (average savings): Stats rounded with Python round and the
+    Activity strip with Math.round, so 12.5% read 12 on one page and 13 on
+    the other. The server computes the integer once; /api/stats carries it
+    and activity.js only displays it."""
+
+    async def test_half_percent_rounds_once(self, client: AsyncClient, app):
+        db = app.state.db
+        j = _job(JobStatus.PENDING, "half")
+        await job_repo.create_job(db, j)
+        await job_repo.update_job(
+            db, j.id, status="complete", source_size=1000, output_size=875, space_saved=125
+        )
+
+        stats = _extract_stat((await client.get("/partials/stats")).text, "Avg savings")
+        api = (await client.get("/api/stats")).json()["data"]["avg_savings_pct"]
+
+        assert stats == api == 12
+
+
 class TestActiveTranscodesConsistency:
     """The dashboard 'Active Transcodes' list and the queue page banner
     both purport to show the same set of in-flight jobs.

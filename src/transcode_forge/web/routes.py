@@ -557,10 +557,9 @@ async def stats_partial(
     ) as cur:
         stats["jobs_by_worker"] = {row[0]: row[1] for row in await cur.fetchall()}
 
-    # Pre-calculate avg savings %
-    source = stats.get("total_source_bytes", 0)
-    output = stats.get("total_output_bytes", 0)
-    stats["avg_savings_pct"] = max(0, round((1 - output / source) * 100)) if source > 0 else 0
+    stats["avg_savings_pct"] = stats_api.avg_savings_pct(
+        stats["total_source_bytes"], stats["total_output_bytes"]
+    )
 
     return _render(request, "partials/stats.html", {"stats": stats})
 

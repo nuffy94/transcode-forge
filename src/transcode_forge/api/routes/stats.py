@@ -25,6 +25,15 @@ def format_size(num_bytes: int | None) -> dict[str, str]:
     return {"value": f"{gib:.1f}", "unit": "GiB"}
 
 
+def avg_savings_pct(source_bytes: int | None, output_bytes: int | None) -> int:
+    """Whole-percent size reduction, rounded once here. The Stats page
+    renders it and /api/stats ships it to the Activity strip, so the two
+    can never round the same ratio differently."""
+    if not source_bytes:
+        return 0
+    return max(0, round((1 - (output_bytes or 0) / source_bytes) * 100))
+
+
 async def _by_library(db: DBConnection) -> dict[str, dict[str, Any]]:
     """Completed count and bytes saved per library, keyed by library id.
     The label is the library's current name, or the name the jobs were
@@ -70,6 +79,7 @@ async def get_stats(
             stats["total_space_saved_display"] = format_size(row[1])
             stats["total_source_bytes"] = row[2]
             stats["total_output_bytes"] = row[3]
+            stats["avg_savings_pct"] = avg_savings_pct(row[2], row[3])
 
     # Per-library breakdown, keyed by library id (the name is the label).
     stats["by_library"] = await _by_library(db)
