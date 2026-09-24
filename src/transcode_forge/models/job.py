@@ -59,11 +59,12 @@ class JobPhase(StrEnum):
 
     These are the five stretches a person can WATCH, not the 8 protocol
     steps — LOCK/CONFIRM/CLEANUP/UNLOCK are sub-second bookkeeping (the UI
-    shows them as tick marks with no duration). Only ENCODE carries a true
-    percentage; the others render as elapsed time."""
+    shows them as tick marks with no duration). A phase with a known
+    percentage draws a fill (ENCODE's is its progress, GAUGE reports one
+    while it scores); one without breathes."""
 
     SEARCH = "search"  # CRF search probes on samples (optional pre-step)
-    ENCODE = "encode"  # the full transcode — the only honest %
+    ENCODE = "encode"  # the full transcode; its percentage is its progress
     VERIFY = "verify"  # ffprobe + decode samples on the output
     GAUGE = "gauge"  # full-file VMAF vs the original (COMPARE's long half)
     SWAP = "swap"  # atomic swap + post-swap confirm
