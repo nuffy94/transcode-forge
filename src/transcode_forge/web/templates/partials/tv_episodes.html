@@ -20,19 +20,7 @@
             {% if f.file_size %}<span class="text-forge-ink">{{ (f.file_size / 1073741824)|round(1) }}<span class="text-forge-mute"> GiB</span></span>{% endif %}
         </td>
         <td>
-            {% if f.transcode_status == 'complete' %}
-            <span class="forge-pill forge-pill--complete">Complete</span>
-            {% elif f.transcode_status == 'transcoding' %}
-            <span class="forge-pill forge-pill--running">Transcoding</span>
-            {% elif f.transcode_status == 'queued' %}
-            <span class="forge-pill forge-pill--queued">Queued</span>
-            {% elif f.transcode_status == 'failed' %}
-            <span class="forge-pill forge-pill--failed">Failed</span>
-            {% elif f.transcode_status == 'skipped' %}
-            <span class="forge-pill forge-pill--skipped">Skipped</span>
-            {% else %}
-            <span class="forge-pill forge-pill--pending">{{ f.transcode_status|replace('_',' ') }}</span>
-            {% endif %}
+            <span class="forge-pill {{ status_pills.get(f.transcode_status, 'forge-pill--pending') }}">{{ f.transcode_status|replace('_',' ') }}</span>
         </td>
         <td class="text-right">
             {% if f.video_codec == 'h264' and f.transcode_status not in ('queued','transcoding','complete') %}

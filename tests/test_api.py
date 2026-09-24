@@ -504,6 +504,22 @@ class TestScanEndpoint:
 
 
 class TestSkippedEndpoint:
+    async def test_invalid_reason_error_lists_accepted_values(self, client: AsyncClient):
+        """S1-10: the check read the enum values while the error listed
+        the enum names, so ?reason=ALREADY_HEVC was refused with a
+        message naming ALREADY_HEVC. The parameter is typed SkipReason,
+        so FastAPI's one validator both checks and words the error."""
+        response = await client.get("/api/skipped?reason=ALREADY_HEVC")
+        detail = response.json()["detail"]
+        message = detail if isinstance(detail, str) else detail[0]["msg"]
+        assert "ALREADY_HEVC" not in message
+        for reason in SkipReason:
+            assert f"'{reason.value}'" in message
+        assert response.status_code == 422
+
+        ok = await client.get("/api/skipped?reason=already_hevc")
+        assert ok.status_code == 200
+
     async def test_list_skipped_empty(self, client: AsyncClient):
         response = await client.get("/api/skipped")
         assert response.status_code == 200

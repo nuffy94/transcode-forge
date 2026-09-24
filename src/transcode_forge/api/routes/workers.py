@@ -19,7 +19,9 @@ async def list_workers(
     """List all registered workers."""
     workers = await worker_repo.list_workers(db)
     return {
-        "data": [w.model_dump(mode="json") for w in workers],
+        "data": [
+            {**w.model_dump(mode="json"), "removable": worker_repo.is_removable(w)} for w in workers
+        ],
     }
 
 
@@ -58,17 +60,16 @@ async def delete_worker(
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
 
-    if worker.last_heartbeat is not None:
+    if worker.last_heartbeat is not None and not worker_repo.is_removable(worker):
         age_seconds = (datetime.now(UTC) - worker.last_heartbeat).total_seconds()
-        if age_seconds < worker_repo.WORKER_STALE_THRESHOLD_SECONDS:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Worker heartbeated {int(age_seconds)}s ago — wait until it's "
-                    f"silent for {worker_repo.WORKER_STALE_THRESHOLD_SECONDS}s, "
-                    "or stop it manually first."
-                ),
-            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Worker heartbeated {int(age_seconds)}s ago. Wait until it's "
+                f"silent for {worker_repo.WORKER_STALE_THRESHOLD_SECONDS}s, "
+                "or stop it manually first."
+            ),
+        )
 
     active = await worker_repo.count_active_jobs_for_worker(db, worker_id)
     if active > 0:

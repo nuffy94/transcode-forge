@@ -36,6 +36,19 @@ templates.env.globals["app_version"] = __version__
 templates.env.globals["waiting_job_statuses"] = WAITING_JOB_STATUSES
 templates.env.globals["active_job_statuses"] = ACTIVE_JOB_STATUSES
 templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
+# The media-file status to pill class map, defined once. Templates read it
+# as a Jinja global; catalog.js reads it from data-status-pills on the
+# Movies and TV pages. An unmapped status renders the muted pending pill.
+templates.env.globals["status_pills"] = {
+    "complete": "forge-pill--complete",
+    "transcoding": "forge-pill--running",
+    "queued": "forge-pill--queued",
+    "pending": "forge-pill--pending",
+    "failed": "forge-pill--failed",
+    "skipped": "forge-pill--skipped",
+    "cancelled": "forge-pill--cancelled",
+    "needs_transcode": "forge-pill--queued",
+}
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`
 # fails to COMPILE (TemplateSyntaxError) — which 500'd /partials/schedules
@@ -49,6 +62,9 @@ def _day_names(days_mask: int | None) -> list[str]:
 
 
 templates.env.filters["day_names"] = _day_names
+# One byte-size formatter for every page (GiB, then TiB); /api/stats
+# ships the same output to the Activity strip.
+templates.env.filters["size"] = stats_api.format_size
 
 router = APIRouter()
 
@@ -221,7 +237,7 @@ async def dashboard_stats_partial(
         request,
         "partials/dashboard_stats.html",
         {
-            "space_saved_gb": space_saved / 1073741824,
+            "space_saved_bytes": space_saved,
             "completed": completed,
             "queued": queued,
             "workers_online": workers_online,
@@ -358,19 +374,21 @@ async def workers_partial(
     enriched = []
     for w in workers_list:
         d = w.model_dump(mode="json")
+        d["removable"] = worker_repo.is_removable(w, now)
         if w.last_heartbeat:
             delta = (now - w.last_heartbeat).total_seconds()
             d["heartbeat_age_seconds"] = int(delta)
             d["heartbeat_relative"] = _humanize_age(delta)
-            # Tiers: fresh < 60s, slow 60-300s, stale 300-1800s, dead > 1800s.
-            if delta < 60:
+            # Tiers: fresh < 60s, slow 60-300s, stale from 300s until the
+            # worker is removable (repos/workers.py threshold), then dead.
+            if d["removable"]:
+                d["heartbeat_tier"] = "dead"
+            elif delta < 60:
                 d["heartbeat_tier"] = "fresh"
             elif delta < 300:
                 d["heartbeat_tier"] = "slow"
-            elif delta < 1800:
-                d["heartbeat_tier"] = "stale"
             else:
-                d["heartbeat_tier"] = "dead"
+                d["heartbeat_tier"] = "stale"
         else:
             d["heartbeat_age_seconds"] = None
             d["heartbeat_relative"] = "never"
@@ -552,10 +570,9 @@ async def stats_partial(
     ) as cur:
         stats["jobs_by_worker"] = {row[0]: row[1] for row in await cur.fetchall()}
 
-    # Pre-calculate avg savings %
-    source = stats.get("total_source_bytes", 0)
-    output = stats.get("total_output_bytes", 0)
-    stats["avg_savings_pct"] = max(0, round((1 - output / source) * 100)) if source > 0 else 0
+    stats["avg_savings_pct"] = stats_api.avg_savings_pct(
+        stats["total_source_bytes"], stats["total_output_bytes"]
+    )
 
     return _render(request, "partials/stats.html", {"stats": stats})
 

@@ -154,6 +154,19 @@ async def delete_worker(db: DBConnection, worker_id: str) -> bool:
 WORKER_STALE_THRESHOLD_SECONDS = 1800
 
 
+def is_removable(worker: Worker, now: datetime | None = None) -> bool:
+    """Whether the worker has been silent long enough to delete.
+
+    The one copy of the rule: the delete gate, the workers partial and
+    the /api/workers payload (which the Clear stale button reads) all
+    take it from here.
+    """
+    if worker.last_heartbeat is None:
+        return True
+    age = ((now or datetime.now(UTC)) - worker.last_heartbeat).total_seconds()
+    return age >= WORKER_STALE_THRESHOLD_SECONDS
+
+
 async def count_active_jobs_for_worker(db: DBConnection, worker_id: str) -> int:
     """Count jobs assigned to this worker that are still in flight.
 

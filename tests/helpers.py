@@ -5,6 +5,8 @@ worker-token/register API shape has changed once already; a single copy
 means the next change is a one-file fix.
 """
 
+import re
+
 from transcode_forge.scanner.probe import ProbeResult
 
 
@@ -93,3 +95,17 @@ async def seed_media_file(
         duration=5400.0,
         file_size=4_000_000_000,
     )
+
+
+def read_stat(html: str, name: str) -> int:
+    """The count a partial renders under its data-stat="<name>" hook.
+
+    The one way tests read a number off a page: by the hook's name, never
+    by looking for a digit somewhere in the HTML (a page always contains
+    some digit, so that check passes on a wrong count).
+    tests/test_view_consistency.py guards the pattern.
+    """
+    m = re.search(rf'data-stat="{re.escape(name)}"[^>]*>\s*(\d+)', html)
+    if m is None:
+        raise AssertionError(f"no data-stat={name!r} count in HTML")
+    return int(m.group(1))
