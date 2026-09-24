@@ -109,6 +109,27 @@ class TestProgressPollMorph:
             assert "data-progress-pct>13%" in resp.text, partial
             assert "data-phase-detail>35%" in resp.text, partial
 
+    async def test_running_jobs_offer_no_cancel(self, client: AsyncClient, app):
+        """The active list only holds jobs the cancel endpoint refuses
+        (it accepts waiting jobs only), so a Cancel button there could
+        only ever fail with "Error: Bad Request"."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Running.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.2)
+
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert "Running.mkv" in resp.text
+        assert 'data-action="cancel-job"' not in resp.text
+        refused = await client.post(f"/api/jobs/{job.id}/cancel")
+        assert refused.status_code == 400
+
     async def test_phased_job_renders_station_bar(self, client: AsyncClient, app):
         """A job with a reported phase renders the five-station pipeline bar
         with the current station active — and gate-off jobs mark Search and

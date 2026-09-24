@@ -25,9 +25,6 @@
             {% endif %}
             <span class="flex-1"></span>
             <span class="forge-pill forge-pill--running"><span class="forge-dot forge-dot--hot forge-pulse"></span>{{ job.status }}</span>
-            <button class="forge-iconbtn forge-iconbtn--danger" data-action="cancel-job" data-id="{{ job.id }}" aria-label="Cancel {{ job.source_path.split('/')[-1] }}">
-                {{ icon('x', 'forge-icon--sm') }}
-            </button>
         </div>
         {{ station_bar(job, pct) }}
     </div>
