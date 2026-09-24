@@ -12,7 +12,6 @@ The test will skip if MinIO is not reachable.
 
 import logging
 import tempfile
-from hashlib import blake2b
 from pathlib import Path
 from uuid import uuid4
 
@@ -206,6 +205,10 @@ class TestS3Integration:
         2. Creates an identical second job.
         3. Verifies the second job is marked COMPLETE via dedup lookup.
         """
+        from transcode_forge.models.derivative import (
+            compute_derivative_key,
+            target_resolution_for,
+        )
         from transcode_forge.models.job import Job
         from transcode_forge.repos import derivatives as deriv_repo
         from transcode_forge.worker.storage.s3 import S3Backend
@@ -279,14 +282,17 @@ class TestS3Integration:
             job2.target_audio_codec = "aac"  # type: ignore
             job2.crf = 23  # type: ignore
 
-            # Compute the derivative key (same as job1).
-            hash_input = (
-                f"{job2.source_path}|{job2.source_resolution}|{job2.source_audio_codec}"
-                f"|{job2.target_resolution}|{job2.target_audio_codec}|"
-                f"{job2.encoder}|{job2.quality_value}|{job2.preset}"
+            # Compute the derivative key (same goal as job1, so the same key).
+            derivative_key = compute_derivative_key(
+                source_path=job2.source_path,
+                source_resolution=job2.source_resolution,
+                source_audio_codec=None,
+                target_resolution=target_resolution_for(job2.target_height, job2.source_resolution),
+                target_audio_codec="copy",
+                target_codec=job2.target_codec,
+                target_vmaf=job2.target_vmaf,
+                local_output=transcoded_file,
             )
-            key_hash = blake2b(hash_input.encode(), digest_size=16).hexdigest()
-            derivative_key = f"{key_hash}_{job2.encoder}-crf{job2.quality_value}.mkv"
 
             # Look up the derivative.
             existing = await deriv_repo.lookup_by_key(db, derivative_key)
