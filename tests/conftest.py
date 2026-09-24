@@ -14,20 +14,21 @@ import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from transcode_forge.admin import ensure_admin
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection, init_db
-from transcode_forge.main import create_app
-from transcode_forge.scanner import runner
+from transcode_forge.main import create_app, lifespan
 
 _TEST_DB_URL = os.environ.get("TF_TEST_DB_URL", "")
 USE_PG = _TEST_DB_URL.startswith("postgres")
+
+# Startup creates the admin from this, exactly as TF_ADMIN_PASSWORD does.
+ADMIN_PASSWORD = "test-pwd-12345"
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -101,48 +102,40 @@ def test_settings(tmp_db_path: str, tmp_path: Path) -> Settings:
         library_movies=str(tmp_path / "movies"),
         library_tv=str(tmp_path / "tv"),
         library_anime=str(tmp_path / "anime"),
+        admin_password=ADMIN_PASSWORD,
     )
 
 
 @pytest_asyncio.fixture
 async def app(test_settings: Settings) -> Any:
-    """Create a test FastAPI app with mocked Redis."""
+    """A test FastAPI app booted through the real lifespan, with Redis mocked."""
     application = create_app(settings=test_settings)
 
     mock_redis = AsyncMock()
     mock_redis.ping = AsyncMock(return_value=True)
     mock_redis.aclose = AsyncMock()
 
-    application.state.db = await init_db(test_settings.db_url)
-    application.state.redis = mock_redis
-    application.state.settings = test_settings
-
-    yield application
-
-    # Like the lifespan's shutdown: no scan task may outlive its DB.
-    await runner.cancel_all()
-    await application.state.db.close()
+    with patch("transcode_forge.main.create_redis_pool", AsyncMock(return_value=mock_redis)):
+        async with lifespan(application):
+            yield application
 
 
 @pytest_asyncio.fixture
 async def client(app: Any) -> AsyncClient:
-    """Async HTTP test client. Auto-creates an admin and logs in so
-    individual tests don't have to. Tests that need to verify auth
-    behavior should use `unauthed_client` instead.
+    """Async HTTP test client, logged in as the admin that startup created
+    from TF_ADMIN_PASSWORD. Tests that need to verify auth behavior should
+    use `unauthed_client` instead.
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        # The app fixture wires state by hand and runs no lifespan, so mint
-        # the admin the same way startup does, then log in over HTTP.
-        await ensure_admin(app.state.db, "test-pwd-12345")
-        await c.post("/api/auth/login", json={"password": "test-pwd-12345"})
+        await c.post("/api/auth/login", json={"password": ADMIN_PASSWORD})
         yield c
 
 
 @pytest_asyncio.fixture
 async def unauthed_client(app: Any) -> AsyncClient:
-    """Same client but with no admin and no session — for testing the
-    auth middleware itself."""
+    """Same client but with no session, for testing the auth middleware
+    itself."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
