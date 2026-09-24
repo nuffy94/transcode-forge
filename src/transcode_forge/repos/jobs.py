@@ -16,6 +16,7 @@ from transcode_forge.models.job import (
     JobStatus,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
+from transcode_forge.repos import media as media_repo
 from transcode_forge.repos.media import IN_FLIGHT_STATUSES
 
 # Valid job statuses for filtering (whitelist validation)
@@ -244,6 +245,15 @@ def _attempt_fence(claim_token: str | None) -> tuple[str, list[object]]:
     return " AND claim_token = ?", [claim_token]
 
 
+# The catalog status a file takes when the job it was queued into ends.
+# A failed encode kept the original, so the file can be queued again.
+_CATALOG_STATUS_FOR: dict[JobStatus, str] = {
+    JobStatus.COMPLETE: "complete",
+    JobStatus.SKIPPED: "skipped",
+    JobStatus.FAILED: "needs_transcode",
+}
+
+
 async def finalize_job(
     db: DBConnection,
     job_id: str,
@@ -251,6 +261,7 @@ async def finalize_job(
     status: JobStatus,
     *,
     claim_token: str | None = None,
+    skip_reason: str | None = None,
     **fields: object,
 ) -> bool:
     """Atomically transition an owned job to a terminal status.
@@ -264,6 +275,12 @@ async def finalize_job(
     worker re-claimed mid-request, or the SAME worker re-claimed as a new
     attempt (R-020). Returns False when the transition lost; the caller
     re-reads and answers 204/409/403.
+
+    The winning transition also moves the catalog row queued into the job
+    (_CATALOG_STATUS_FOR, with skip_reason on a skip), so every door that
+    ends a job keeps the file list in step. Pass a transaction so the two
+    writes commit together: once the job reads terminal a retried report
+    settles as a duplicate and nothing would ever re-run a missed sync.
     """
     invalid_cols = set(fields.keys()) - _VALID_JOB_COLUMNS
     if invalid_cols:
@@ -281,8 +298,14 @@ async def finalize_job(
         f" AND status NOT IN ({placeholders_terminal})",
         [status.value, *values, job_id, worker_id, *fence_params, *TERMINAL_JOB_STATUSES],
     )
+    won = bool(cur.rowcount)
+    catalog_status = _CATALOG_STATUS_FOR.get(status)
+    if won and catalog_status is not None:
+        await media_repo.update_status_by_job(
+            db, job_id, transcode_status=catalog_status, skip_reason=skip_reason
+        )
     await db.commit()
-    return bool(cur.rowcount)
+    return won
 
 
 async def report_progress(

@@ -566,17 +566,20 @@ async def check_derivative(
                 "derivative_key": body.derivative_key,
             }
         claim_token = await _require_claim_token(db, token_row, body.claim_token)
-        won = await job_repo.finalize_job(
-            db,
-            job_id,
-            job.worker_id or "",
-            JobStatus.COMPLETE,
-            claim_token=claim_token,
-            output_size=existing.get("output_size"),
-            space_saved=0,  # S3 doesn't reclaim space.
-            progress=1.0,
-            completed_at=datetime.now(UTC).isoformat(),
-        )
+        # A transaction, like the worker's own reports: finalize_job also
+        # moves the catalog row, and both writes land together.
+        async with db.transaction() as tx:
+            won = await job_repo.finalize_job(
+                tx,
+                job_id,
+                job.worker_id or "",
+                JobStatus.COMPLETE,
+                claim_token=claim_token,
+                output_size=existing.get("output_size"),
+                space_saved=0,  # S3 doesn't reclaim space.
+                progress=1.0,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
         if not won:
             await _answer_lost_finalize(db, job_id, JobStatus.COMPLETE)
         logger.info(
@@ -687,10 +690,6 @@ async def complete_job(
             completed_at=datetime.now(UTC).isoformat(),
         )
         if won:
-            # Keep the catalog in step with the outcome — S3 rows can't
-            # self-heal on rescan (the master object is unchanged), so this
-            # is their only path out of 'queued'.
-            await media_repo.update_status_by_job(tx, job_id, transcode_status="complete")
             # The swap replaced the file: the row must describe the output
             # (codec, size, downscaled dimensions), not the last scan, or
             # it reads complete|h264 until the next rescan re-probes it.
@@ -735,6 +734,7 @@ async def skip_job(
             job.worker_id or "",
             JobStatus.SKIPPED,
             claim_token=claim_token,
+            skip_reason=body.reason,
             error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
             achieved_vmaf=body.achieved_vmaf,
             achieved_vmaf_perc5=body.achieved_vmaf_perc5,
@@ -754,9 +754,6 @@ async def skip_job(
                 resolution=job.source_resolution,
                 file_size=job.source_size,
                 skip_reason=SkipReason(body.reason),
-            )
-            await media_repo.update_status_by_job(
-                tx, job_id, transcode_status="skipped", skip_reason=body.reason
             )
     if not won:
         await _answer_lost_finalize(db, job_id, JobStatus.SKIPPED)
@@ -786,10 +783,6 @@ async def fail_job(
             retry_count=body.retry_count,
             completed_at=datetime.now(UTC).isoformat(),
         )
-        if won:
-            # Original kept and re-queueable; the row keeps job_id so the
-            # drawer still surfaces the failed job.
-            await media_repo.update_status_by_job(tx, job_id, transcode_status="needs_transcode")
     if not won:
         await _answer_lost_finalize(db, job_id, JobStatus.FAILED)
 
