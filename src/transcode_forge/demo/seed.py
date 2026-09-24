@@ -623,13 +623,17 @@ async def seed_demo_data(db: DBConnection) -> None:
         # rendered and pixel-guarded.
         phases = ["encode", "search", "gauge", "encode", None]
         phase = phases[i % len(phases)]
+        progress = round(_rng.uniform(0.05, 0.75), 3) if phase == "encode" else 0.0
         await job_repo.update_job(
             db,
             job.id,
             worker_id=wid,
-            progress=round(_rng.uniform(0.05, 0.75), 3) if phase == "encode" else 0.0,
+            progress=progress,
             started_at=_past(started_hours_ago).isoformat(),
             **({"phase": phase} if phase else {}),
+            # Stored the way the progress endpoint stores an Encode report:
+            # the station's percentage is the job's progress.
+            **({"phase_pct": progress} if phase == "encode" else {}),
         )
         await db.execute(
             "UPDATE jobs SET created_at = ? WHERE id = ?",

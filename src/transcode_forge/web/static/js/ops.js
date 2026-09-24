@@ -49,7 +49,9 @@ export function initPauseButton() {
 }
 
 /* Live progress over WebSocket. Rows are matched by data-job-id and
- * carry data-progress-bar / data-progress-pct (contract C.1). */
+ * carry data-progress-bar / data-progress-pct (contract C.1). The event's
+ * percent / phase_percent are already computed by the server (the same
+ * function the templates use), so this only displays them. */
 export function initLiveProgress() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     function connect() {
@@ -58,14 +60,16 @@ export function initLiveProgress() {
             const data = JSON.parse(evt.data);
             const row = document.querySelector(`[data-job-id="${data.job_id}"]`);
             if (!row) return;
-            const pct = Math.round(data.progress * 100);
+            const pct = data.percent;
             const barEl = row.querySelector('[data-progress-bar]');
             const pctEl = row.querySelector('[data-progress-pct]');
             if (barEl) barEl.style.width = pct + '%';
             // At 0% the server renders "starting" — don't fight it with "0%".
             if (pctEl && pct > 0) pctEl.textContent = pct + '%';
             // Phase transitions move the station highlight between polls;
-            // label colors and readout copy catch up on the next 3s morph.
+            // label colors and the phase sentence catch up on the next morph.
+            // Every station carries its own fill and readout slot, shown
+            // only while active (forge.css), so moving classes is enough.
             if (data.phase && row.dataset.phase !== data.phase) {
                 row.dataset.phase = data.phase;
                 const order = ['search', 'encode', 'verify', 'gauge', 'swap'];
@@ -80,23 +84,22 @@ export function initLiveProgress() {
                         'forge-station--timed'
                     );
                     if (i < cur) st.classList.add('forge-station--done');
-                    else if (i === cur) {
-                        st.classList.add('forge-station--active');
-                        if (data.phase !== 'encode') st.classList.add('forge-station--timed');
-                    } else st.classList.add('forge-station--todo');
+                    else if (i === cur) st.classList.add('forge-station--active');
+                    else st.classList.add('forge-station--todo');
                 });
             }
-            // Within-phase progress on the active timed station (gauge %,
-            // search probe count). The span is server-rendered empty, so
-            // there's always a target; query AFTER the class move above.
-            if (data.phase && data.phase !== 'encode') {
-                const detailEl = row.querySelector('.forge-station--active [data-phase-detail]');
+            // One rule for the active station: phase_percent (the server
+            // copies Encode's progress into it) draws a fill; no number
+            // breathes and the readout shows the probe label, if any.
+            const active = data.phase && row.querySelector('.forge-station--active');
+            if (active) {
+                const known = typeof data.phase_percent === 'number';
+                active.classList.toggle('forge-station--timed', !known);
+                const fillEl = active.querySelector('[data-station-fill]');
+                if (fillEl && known) fillEl.style.width = data.phase_percent + '%';
+                const detailEl = active.querySelector('[data-phase-detail]');
                 if (detailEl) {
-                    if (typeof data.phase_pct === 'number') {
-                        detailEl.textContent = Math.round(data.phase_pct * 100) + '%';
-                    } else if (data.phase_detail) {
-                        detailEl.textContent = data.phase_detail;
-                    }
+                    detailEl.textContent = known ? data.phase_percent + '%' : data.phase_detail || '';
                 }
             }
         };

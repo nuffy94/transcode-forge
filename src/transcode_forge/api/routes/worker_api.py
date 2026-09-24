@@ -28,7 +28,9 @@ from transcode_forge.models.job import (
     ACTIVE_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     Job,
+    JobPhase,
     JobStatus,
+    display_percent,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
@@ -603,13 +605,17 @@ async def progress(
 ) -> None:
     job = await _require_owned_job(db, job_id, token_row)
     claim_token = await _require_claim_token(db, token_row, body.claim_token)
+    # phase_pct is "this station's progress" for every phase, so the
+    # station bar reads one field. Encode's number arrives in progress
+    # (old workers send it nowhere else), so it is copied here.
+    phase_pct = body.progress if body.phase == JobPhase.ENCODE else body.phase_pct
     fields: dict[str, object] = {"progress": body.progress}
     if body.phase is not None:
         # phase_pct/phase_detail always ride along (None clears) so a
         # stale gauge % can't survive into the next phase.
         fields |= {
             "phase": body.phase,
-            "phase_pct": body.phase_pct,
+            "phase_pct": phase_pct,
             "phase_detail": body.phase_detail,
         }
     won = await job_repo.report_progress(
@@ -639,8 +645,12 @@ async def progress(
                         "progress": body.progress,
                         "speed": body.speed,
                         "phase": body.phase,
-                        "phase_pct": body.phase_pct,
+                        "phase_pct": phase_pct,
                         "phase_detail": body.phase_detail,
+                        # What the page shows, rounded here so the
+                        # browser only displays it (models.job).
+                        "percent": display_percent(body.progress),
+                        "phase_percent": display_percent(phase_pct),
                     }
                 ),
             )
