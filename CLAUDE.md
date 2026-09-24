@@ -252,14 +252,17 @@ Common knobs:
   There is no HTTP endpoint that creates the account (R-040).
 - `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` — library paths.
 - `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
-  file); mapped per encoder in `worker/encoder.py`.
+  file); mapped per encoder in `worker/encoder.py`. Used once, to seed
+  each library's `quality_preset` on the first scan. After that the
+  preset is set per library (the Settings page library panel), and the
+  library row is what queueing reads.
 - `TF_DEFAULT_CODEC` — pre-fills the queue-time codec selector (hevc).
 - `TF_TARGET_VMAF` — the quality goal the CRF search aims for on samples
   (not a gate). `TF_VMAF_SAFETY_MEAN` / `TF_VMAF_SAFETY_PERC5` — absolute
   "refuse to keep" floors for the full-file gate (91.5/86 defaults on
   the VMAF v1 scale, calibrated in plans/vmaf-v1-gate1-results.md), never
-  derived from the target. These, `TF_DEFAULT_CODEC` and the quality
-  presets are DB-overridable from the Settings page (`repos/settings.py`,
+  derived from the target. These and `TF_DEFAULT_CODEC` are
+  DB-overridable from the Settings page (`repos/settings.py`,
   `effective(key)` = DB override else env). The old `TF_VMAF_MIN_FLOOR`
   knob is retired and ignored.
 - `TF_CRF_SEARCH_ENABLED` toggles the per-file CRF search. Worker-side
