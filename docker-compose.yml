@@ -77,7 +77,7 @@ services:
     restart: unless-stopped
 
   # Optional local Intel QSV worker. Uncomment if /dev/dri exists on the host.
-  # Generate a token in Settings → Workers, then put it here as TF_WORKER_TOKEN.
+  # Issue a token on the Workers page (Add a worker), then set TF_WORKER_TOKEN in .env.
   #
   # worker:
   #   build: .
@@ -89,7 +89,7 @@ services:
   #     TF_PREFERRED_BACKEND: "auto"
   #     TF_WORKER_STATE_DIR: "/var/lib/transcode-forge"
   #   volumes:
-  #     # Workers do the writes — RW mount.
+  #     # Workers write the new files, so the mount is read-write.
   #     - "${TF_LIBRARY_MOVIES:-./media/movies}:/media/movies:rw"
   #     - "${TF_LIBRARY_TV:-./media/tv}:/media/tv:rw"
   #     # Durable worker state (milestone outbox): a named volume so
