@@ -2,8 +2,12 @@
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from transcode_forge.models.job import Job
 
 
 class Derivative(BaseModel):
@@ -42,6 +46,30 @@ def target_resolution_for(target_height: int | None, source_resolution: str | No
     scheduler's register-derivative row (worker_api) both call this, so the
     stored row can never drift from the key it describes."""
     return f"{target_height}p" if target_height else (source_resolution or "")
+
+
+def derivative_key_for_job(job: "Job", local_output: Path | str) -> str:
+    """Goal-keyed derivative key for a job (D6): source identity +
+    target codec/resolution/audio + target VMAF. Recipe details
+    (backend/crf/preset) deliberately don't participate, so any worker's
+    gate-passing encode satisfies the same goal.
+
+    ONE home on purpose: the worker agent's dedup check and register
+    call and S3Backend.commit's upload all use this, so the object in the
+    bucket always carries the key the scheduler records."""
+    return compute_derivative_key(
+        source_path=job.source_path,
+        source_resolution=job.source_resolution or "",
+        source_audio_codec=getattr(job, "source_audio_codec", "") or "",
+        # Height-keyed for downscale jobs (shared rule: the scheduler's
+        # register-derivative row uses the same helper). Audio streams
+        # are always copied.
+        target_resolution=target_resolution_for(job.target_height, job.source_resolution),
+        target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
+        target_codec=job.target_codec or "hevc",
+        target_vmaf=job.target_vmaf,
+        local_output=Path(local_output),
+    )
 
 
 def compute_derivative_key(
