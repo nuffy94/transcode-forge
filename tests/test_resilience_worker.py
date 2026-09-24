@@ -376,12 +376,20 @@ async def test_stale_entry_never_lands_on_reclaimed_job(client: AsyncClient, app
     worker may claim again, so it can never land on attempt 2."""
     agent, _hostile = await _make_agent(client, app, tmp_path, "fence-node")
     job = await _queue_and_claim(client, app, agent, "fence")
-    # Stale attempt-1 outcome, delivery lost:
-    _journal(agent, job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
-    # Operator retries the job — same id, ownership cleared:
-    await job_repo.update_job(
-        app.state.db, job.id, status=JobStatus.PENDING, worker_id=None, error_message=None
+    # Attempt 1 fails through the real report path, but the ack is lost,
+    # so the same report stays journaled:
+    await agent._client.failed(
+        job_id=job.id,
+        error_message="attempt-1 stale",
+        retry_count=1,
+        claim_token=agent._claim_token,
     )
+    assert (await job_repo.get_job(app.state.db, job.id)).status == JobStatus.FAILED
+    _journal(agent, job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
+    # Operator retries the job through the real endpoint: same id, owner
+    # and claim token cleared.
+    retry = await client.post(f"/api/jobs/{job.id}/retry")
+    assert retry.status_code == 200, retry.text
 
     # The job loop's fence: drain MUST settle before any claim.
     assert await agent._drain_outbox() is DrainResult.EMPTY  # 403 → discarded
