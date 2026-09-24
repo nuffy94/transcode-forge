@@ -3,8 +3,12 @@ name: tests
 on:
   push:
     branches: [main]
+    # A v* tag runs the whole suite again on the tagged commit, because the
+    # publish job at the bottom only releases what this run just tested.
+    tags: ["v*"]
   pull_request:
     branches: [main, "redesign/**"]
+  workflow_dispatch: {}
 
 jobs:
   test:
@@ -147,9 +151,9 @@ jobs:
   image-build:
     # Prove the production image recipe at PR time: the Dockerfile builds and
     # its baked-in smoke (encoder presence + every VMAF model the gate can
-    # name, scored on 1080p frames) passes. No push — publishing is
-    # publish.yml's job (tags -> semver + latest, main -> edge). Before this
-    # job, a broken Dockerfile only surfaced at publish time.
+    # name, scored on 1080p frames) passes. No push: the publish job below
+    # does that, after every job here passes. Before this job, a broken
+    # Dockerfile only surfaced at publish time.
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -176,3 +180,62 @@ jobs:
         run: >-
           docker run --rm -v "$PWD/scripts:/scripts:ro" transcode-forge:ci
           python /scripts/check_image_lock.py
+
+  publish:
+    # Build and push the container image to GHCR, split by release channel:
+    #   push to main      -> :edge                     (integration/soak channel)
+    #   tag vX.Y.Z        -> :X.Y.Z, :X.Y, :latest     (the release channel)
+    #   workflow_dispatch -> whatever the ref qualifies for (main -> :edge)
+    # It needs every other job, so an image only ever comes from a run that
+    # tested that exact commit. This used to be its own workflow with its own
+    # triggers, and v0.16.0's images went public 11 minutes before that
+    # commit's tests finished (red, from a flaky test).
+    # `:latest` is ONLY ever a tagged release: fresh installs (compose default,
+    # StackScripts, README quickstart) resolve to it, so an untagged main build
+    # must never shadow it. The fleet itself pins exact versions.
+    #   git tag v0.6.0 && git push origin v0.6.0
+    #
+    # amd64 only for now: the Dockerfile installs the Intel QSV media stack
+    # (intel-media-va-driver-non-free, libmfx1), which is x86-only. arm64 would
+    # need those packages guarded behind a TARGETARCH check in the Dockerfile.
+    needs: [test, test-postgres, qa-sweep, css-fresh, image-build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=edge,branch=main
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

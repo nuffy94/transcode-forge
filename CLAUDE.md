@@ -50,11 +50,18 @@ CI (`.github/workflows/tests.yml`) runs five jobs on every push and PR:
 - `css-fresh` — `build_css.py --check`; fails if the committed CSS is
   stale relative to its source.
 - `image-build` — the production Dockerfile must build (its baked-in
-  encoder + VMAF smoke runs at PR time; publishing stays in
-  `publish.yml`), and `scripts/check_image_lock.py` run inside the
+  encoder + VMAF smoke runs at PR time; it never pushes), and
+  `scripts/check_image_lock.py` run inside the
   result must find every installed distribution pinned in `uv.lock` at
   the same version. The image installs from the lock export, so the
   suite tests what the fleet runs.
+
+A sixth job, `publish`, runs only on pushes to main, on `v*` tags and on
+manual runs, never on PRs. It needs all five jobs above, then builds and
+pushes the GHCR image (main to `:edge`; a `v*` tag to its version tags
+plus `:latest`). An image can only come from a commit whose own tests
+passed, so pushing a release tag runs the whole suite again first. There
+is no separate publish workflow.
 
 A formatting drift, type error, dialect regression, or CSS drift will
 fail the build — always run `ruff format`, `mypy src/`, and rebuild the
