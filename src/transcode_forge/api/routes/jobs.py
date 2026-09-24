@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import WAITING_JOB_STATUSES, JobStatus
+from transcode_forge.models.job import RETRYABLE_JOB_STATUSES, WAITING_JOB_STATUSES, JobStatus
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
@@ -74,11 +74,11 @@ async def retry_job(
     response: Response,
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
-    """Retry a failed job."""
+    """Retry a failed or cancelled job."""
     job = await job_repo.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
+    if job.status not in RETRYABLE_JOB_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot retry job with status '{job.status}'")
     if await excl_repo.is_excluded(db, job.source_path):
         raise HTTPException(
