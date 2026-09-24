@@ -2,7 +2,7 @@
 <div class="flex flex-col gap-4">
 
 <!-- Hero readouts -->
-{% set saved_gib = stats.total_space_saved_bytes / 1073741824 %}
+{% set saved = stats.total_space_saved_bytes|size %}
 <div class="forge-panel grid grid-cols-2 lg:grid-cols-5">
     <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60">
         <p class="forge-stat-label">Total processed</p>
@@ -12,9 +12,8 @@
     <div class="p-3.5 border-b lg:border-b-0 lg:border-r border-forge-rule/60 relative overflow-hidden">
         <div class="absolute inset-y-0 left-0 w-0.5 bg-forge-ember" aria-hidden="true"></div>
         <p class="forge-stat-label">Space saved</p>
-        <p class="forge-stat-value text-2xl mt-1.5 {% if saved_gib > 0 %}text-forge-ember-hot{% else %}text-forge-mute{% endif %}">
-            {%- if saved_gib >= 1024 %}{{ "%.1f"|format(saved_gib / 1024) }}<span class="forge-stat-unit">TiB</span>
-            {%- else %}{{ "%.1f"|format(saved_gib) }}<span class="forge-stat-unit">GiB</span>{% endif %}
+        <p class="forge-stat-value text-2xl mt-1.5 {% if stats.total_space_saved_bytes > 0 %}text-forge-ember-hot{% else %}text-forge-mute{% endif %}">
+            {{- saved.value }}<span class="forge-stat-unit">{{ saved.unit }}</span>
         </p>
         <p class="forge-stat-meta mt-1.5">reclaimed cumulative</p>
     </div>

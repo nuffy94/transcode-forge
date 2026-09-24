@@ -132,6 +132,56 @@ class TestCompletedCountConsistency:
         assert by_status_completed == 7
 
 
+class TestSpaceSavedConsistency:
+    """S1-8: Dashboard 'Space reclaimed', Stats 'Space saved' and the
+    Activity strip (fed by /api/stats) format the same total through one
+    size formatter, so all three switch to TiB together."""
+
+    @staticmethod
+    def _saved(html: str, label: str) -> str:
+        m = re.search(
+            rf">{re.escape(label)}<.*?forge-stat-value[^>]*>\s*([\d.]+)\s*<.*?"
+            r'forge-stat-unit">\s*(\w+)\s*<',
+            html,
+            re.DOTALL,
+        )
+        if m is None:
+            raise AssertionError(f"stat label {label!r} not found in HTML")
+        return f"{m.group(1)} {m.group(2)}"
+
+    async def _seed_saved(self, db, saved: int) -> None:
+        j = _job(JobStatus.PENDING, "saved")
+        await job_repo.create_job(db, j)
+        await job_repo.update_job(
+            db,
+            j.id,
+            status="complete",
+            source_size=saved * 2,
+            output_size=saved,
+            space_saved=saved,
+        )
+
+    async def test_two_tib_reads_tib_everywhere(self, client: AsyncClient, app):
+        await self._seed_saved(app.state.db, 2 * 1024**4)
+
+        dash = self._saved((await client.get("/partials/dashboard-stats")).text, "Space reclaimed")
+        stats = self._saved((await client.get("/partials/stats")).text, "Space saved")
+        assert dash == stats == "2.0 TiB"
+
+        api = (await client.get("/api/stats")).json()["data"]["total_space_saved_display"]
+        assert api == {"value": "2.0", "unit": "TiB"}
+
+    async def test_below_one_tib_stays_gib(self, client: AsyncClient, app):
+        await self._seed_saved(app.state.db, 512 * 1024**3)
+
+        dash = self._saved((await client.get("/partials/dashboard-stats")).text, "Space reclaimed")
+        stats = self._saved((await client.get("/partials/stats")).text, "Space saved")
+        assert dash == stats == "512.0 GiB"
+
+        api = (await client.get("/api/stats")).json()["data"]["total_space_saved_display"]
+        assert api == {"value": "512.0", "unit": "GiB"}
+
+
 class TestActiveTranscodesConsistency:
     """The dashboard 'Active Transcodes' list and the queue page banner
     both purport to show the same set of in-flight jobs.

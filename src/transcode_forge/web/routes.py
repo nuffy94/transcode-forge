@@ -49,6 +49,9 @@ def _day_names(days_mask: int | None) -> list[str]:
 
 
 templates.env.filters["day_names"] = _day_names
+# One byte-size formatter for every page (GiB, then TiB); /api/stats
+# ships the same output to the Activity strip.
+templates.env.filters["size"] = stats_api.format_size
 
 router = APIRouter()
 
@@ -221,7 +224,7 @@ async def dashboard_stats_partial(
         request,
         "partials/dashboard_stats.html",
         {
-            "space_saved_gb": space_saved / 1073741824,
+            "space_saved_bytes": space_saved,
             "completed": completed,
             "queued": queued,
             "workers_online": workers_online,

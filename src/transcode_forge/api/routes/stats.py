@@ -12,6 +12,19 @@ from transcode_forge.repos import libraries as lib_repo
 router = APIRouter(tags=["stats"])
 
 
+def format_size(num_bytes: int | None) -> dict[str, str]:
+    """A byte total as display parts: GiB below 1 TiB, TiB from there.
+
+    The one size formatter: web/routes.py registers it as the `size`
+    Jinja filter, and /api/stats ships its output so the Activity strip
+    shows the same string without a JS copy.
+    """
+    gib = (num_bytes or 0) / 1024**3
+    if gib >= 1024:
+        return {"value": f"{gib / 1024:.1f}", "unit": "TiB"}
+    return {"value": f"{gib:.1f}", "unit": "GiB"}
+
+
 async def _by_library(db: DBConnection) -> dict[str, dict[str, Any]]:
     """Completed count and bytes saved per library, keyed by library id.
     The label is the library's current name, or the name the jobs were
@@ -54,6 +67,7 @@ async def get_stats(
         if row:
             stats["completed"] = row[0]
             stats["total_space_saved_bytes"] = row[1]
+            stats["total_space_saved_display"] = format_size(row[1])
             stats["total_source_bytes"] = row[2]
             stats["total_output_bytes"] = row[3]
 
