@@ -15,9 +15,11 @@ Add a new "view of the same data" — add it to the relevant test here.
 
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from httpx import AsyncClient
 
+from tests.helpers import read_stat
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.models.worker import Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
@@ -44,23 +46,6 @@ async def _seed_jobs(db, **counts: int) -> None:
             await job_repo.create_job(db, _job(status, f"{status_name}-{i}"))
 
 
-def _extract_stat(html: str, label: str) -> int:
-    """Pull the zero-padded integer out of a forge-stat panel by its label."""
-    pattern = rf">{re.escape(label)}<.*?forge-stat-value[^>]*>(\d+)<"
-    m = re.search(pattern, html, re.DOTALL)
-    if m is None:
-        raise AssertionError(f"stat label {label!r} not found in HTML")
-    return int(m.group(1))
-
-
-def _extract_scheduler_info_queue(html: str) -> int:
-    """The scheduler-info card formats queue count as a tabular-nums span."""
-    m = re.search(r"jobs-queued[^>]*>(\d+)<", html, re.DOTALL)
-    if m is None:
-        raise AssertionError("scheduler-info queue count not found")
-    return int(m.group(1))
-
-
 # --- the actual tests ------------------------------------------------
 
 
@@ -73,9 +58,9 @@ class TestQueueCountConsistency:
         sched = (await client.get("/partials/scheduler-info")).text
         stats = (await client.get("/api/stats")).json()["data"]["jobs_by_status"]
 
-        assert _extract_stat(dash, "Queued") == 0
+        assert read_stat(dash, "jobs-queued") == 0
         assert badge == ""  # badge is blank (not "0") when empty
-        assert _extract_scheduler_info_queue(sched) == 0
+        assert read_stat(sched, "jobs-queued") == 0
         assert stats.get("pending", 0) + stats.get("queued", 0) == 0
 
     async def test_pending_and_queued_both_count(self, client: AsyncClient, app):
@@ -83,7 +68,7 @@ class TestQueueCountConsistency:
         db = app.state.db
         await _seed_jobs(db, pending=3, queued=2)
 
-        dash = _extract_stat((await client.get("/partials/dashboard-stats")).text, "Queued")
+        dash = read_stat((await client.get("/partials/dashboard-stats")).text, "jobs-queued")
         badge = (await client.get("/partials/queue-badge")).text.strip()
         sched = (await client.get("/partials/scheduler-info")).text
         stats = (await client.get("/api/stats")).json()["data"]["jobs_by_status"]
@@ -91,7 +76,7 @@ class TestQueueCountConsistency:
 
         assert dash == 5
         assert badge == "5"
-        assert _extract_scheduler_info_queue(sched) == 5
+        assert read_stat(sched, "jobs-queued") == 5
         assert api_total == 5
 
     async def test_other_statuses_do_not_count(self, client: AsyncClient, app):
@@ -108,7 +93,7 @@ class TestQueueCountConsistency:
             cancelled=2,
         )
 
-        dash = _extract_stat((await client.get("/partials/dashboard-stats")).text, "Queued")
+        dash = read_stat((await client.get("/partials/dashboard-stats")).text, "jobs-queued")
         badge = (await client.get("/partials/queue-badge")).text.strip()
 
         assert dash == 2, "only pending+queued count toward queue depth"
@@ -122,7 +107,7 @@ class TestCompletedCountConsistency:
         db = app.state.db
         await _seed_jobs(db, complete=7, failed=2, skipped=3, transcoding=1)
 
-        dash = _extract_stat((await client.get("/partials/dashboard-stats")).text, "Completed")
+        dash = read_stat((await client.get("/partials/dashboard-stats")).text, "jobs-completed")
         stats = (await client.get("/api/stats")).json()["data"]
         stats_completed = stats["completed"]
         by_status_completed = stats["jobs_by_status"].get("complete", 0)
@@ -196,7 +181,7 @@ class TestAvgSavingsConsistency:
             db, j.id, status="complete", source_size=1000, output_size=875, space_saved=125
         )
 
-        stats = _extract_stat((await client.get("/partials/stats")).text, "Avg savings")
+        stats = read_stat((await client.get("/partials/stats")).text, "avg-savings-pct")
         api = (await client.get("/api/stats")).json()["data"]["avg_savings_pct"]
 
         assert stats == api == 12
@@ -297,8 +282,8 @@ class TestStatsPartialAgreesWithApi:
 
         # Stats partial shows total completed somewhere; the value must match API
         assert api == {"complete": 5, "failed": 2, "transcoding": 1}
-        # The "5" for completed should appear in the stats partial output
-        assert "5" in html
+        # The stats partial's completed count must match the API
+        assert read_stat(html, "jobs-completed") == 5
 
 
 class TestWorkerCountConsistency:
@@ -317,7 +302,7 @@ class TestWorkerCountConsistency:
             status, name = state
             await worker_repo.upsert_worker(db, Worker(name=name, host="test", status=status))
 
-        dash = _extract_stat((await client.get("/partials/dashboard-stats")).text, "Workers")
+        dash = read_stat((await client.get("/partials/dashboard-stats")).text, "workers-online")
         stats = (await client.get("/api/stats")).json()["data"]["workers_by_status"]
 
         assert dash == 3, "online (2) + busy (1) = 3 active workers"
@@ -545,3 +530,24 @@ class TestRecentScansSingleSource:
             assert 'hx-get="/partials/scan-history"' in resp.text, (
                 f"{page} does not embed the shared scan-history partial"
             )
+
+
+class TestStatAssertionGuard:
+    """K4: a test that checks a bare digit string is `in` a page passes on
+    a wrong count, because some digit is always on the page. Counts are
+    read by name through tests/helpers.read_stat. This guard fails on any
+    test that goes back to the bare-digit membership check."""
+
+    _BARE_DIGIT_IN = re.compile(r"""assert\s+(["'])\d+\1\s+in\b""")
+
+    def test_no_bare_digit_in_assertions(self):
+        tests_dir = Path(__file__).resolve().parent
+        offenders = [
+            f"{path.relative_to(tests_dir)}:{n}"
+            for path in sorted(tests_dir.rglob("*.py"))
+            for n, line in enumerate(path.read_text().splitlines(), 1)
+            if self._BARE_DIGIT_IN.search(line)
+        ]
+        assert offenders == [], (
+            f"read counts with tests.helpers.read_stat, not a bare digit: {offenders}"
+        )
