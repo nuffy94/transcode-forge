@@ -171,6 +171,12 @@ class HttpWorkerAgent:
                 "cannot run here. Update the worker image to restore it."
             )
 
+        await self.run()
+
+    async def run(self) -> None:
+        """The boot order, after start()'s process shell: deliver the
+        outbox, register, recover, then the loops. Tests drive this
+        directly, so reordering it fails the suite."""
         await self._drain_before_register()
         if self._shutting_down:
             return
