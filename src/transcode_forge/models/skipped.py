@@ -16,6 +16,21 @@ class SkipReason(StrEnum):
     BELOW_VMAF_FLOOR = "below_vmaf_floor"
     STREAM_LOSS = "stream_loss"
 
+    @property
+    def label(self) -> str:
+        return _SKIP_REASON_LABELS[self]
+
+
+_SKIP_REASON_LABELS = {
+    SkipReason.ALREADY_HEVC: "Already HEVC",
+    SkipReason.NOT_H264: "Not H264",
+    SkipReason.SIZE_REGRESSION: "Size regression",
+    SkipReason.BELOW_VMAF_FLOOR: "Below VMAF floor",
+    SkipReason.STREAM_LOSS: "Stream loss",
+    SkipReason.TOO_SMALL: "Too small",
+    SkipReason.MANUAL_SKIP: "Manual skip",
+}
+
 
 class SkippedFile(BaseModel):
     """A file intentionally skipped during scanning or transcoding."""

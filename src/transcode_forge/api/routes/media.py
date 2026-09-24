@@ -9,11 +9,13 @@ from pydantic import BaseModel, Field
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
 from transcode_forge.models.job import Job, JobStatus
+from transcode_forge.models.skipped import SkipReason
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import libraries as lib_repo
 from transcode_forge.repos import media as media_repo
 from transcode_forge.repos import settings as settings_repo
+from transcode_forge.repos import skipped as skip_repo
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +230,7 @@ async def queue_selected_files(
 
 class SkipRequest(BaseModel):
     file_ids: list[str]
-    reason: str = "manual_skip"
+    reason: SkipReason = SkipReason.MANUAL_SKIP
 
 
 @router.post("/media/skip")
@@ -237,12 +239,15 @@ async def skip_selected_files(
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Manually skip selected files."""
-    count = await media_repo.bulk_update_status(
-        db,
-        body.file_ids,
-        transcode_status="skipped",
-        skip_reason=body.reason,
-    )
+    async with db.transaction() as tx:
+        count = await media_repo.bulk_update_status(
+            tx,
+            body.file_ids,
+            transcode_status="skipped",
+            skip_reason=body.reason,
+        )
+        for mf in await media_repo.get_by_ids(tx, body.file_ids):
+            await media_repo.record_skip_from_catalog(tx, mf["file_path"], body.reason)
     return {"skipped": count}
 
 
@@ -252,11 +257,14 @@ async def unskip_selected_files(
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Un-skip selected files (reset to needs_transcode if h264)."""
-    count = await media_repo.bulk_update_status(
-        db,
-        body.file_ids,
-        transcode_status="needs_transcode",
-    )
+    async with db.transaction() as tx:
+        count = await media_repo.bulk_update_status(
+            tx,
+            body.file_ids,
+            transcode_status="needs_transcode",
+        )
+        for mf in await media_repo.get_by_ids(tx, body.file_ids):
+            await skip_repo.unskip(tx, mf["file_path"])
     return {"unskipped": count}
 
 
