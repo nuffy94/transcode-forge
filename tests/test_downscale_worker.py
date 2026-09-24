@@ -198,6 +198,132 @@ async def test_pipeline_refuses_upscale_even_if_job_row_lies(tmp_path):
     assert source.read_bytes() == b"x" * 10000
 
 
+async def test_pipeline_refuses_a_scale_to_the_height_the_source_already_has(tmp_path):
+    """V: "strictly downward" includes the equal case. A 1080 to 1080 job is
+    a no-op scale, refused before the encode with the step and the reason
+    on the error. Mutation sweep 2026-09-20: `<=` could become `<`."""
+    from transcode_forge.worker.pipeline import PipelineError, run_pipeline
+
+    source = tmp_path / "test.mkv"
+    source.write_bytes(b"x" * 10000)
+    encode = AsyncMock(side_effect=_mock_encode_ok)
+
+    with (
+        patch("transcode_forge.worker.pipeline.run_encode", encode),
+        patch(
+            "transcode_forge.worker.pipeline.ffprobe",
+            side_effect=_probe_sequence(make_probe("h264", height=1080)),
+        ),
+        patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+    ):
+        with pytest.raises(PipelineError, match="non-downward scale: source is 1080p") as exc_info:
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="j1",
+                worker_id="w1",
+                target_height=1080,
+            )
+    assert exc_info.value.step == "TRANSCODE"
+    encode.assert_not_awaited()
+    assert source.read_bytes() == b"x" * 10000
+
+
+async def test_pipeline_confirm_rolls_back_a_swapped_file_at_the_wrong_height(tmp_path):
+    """V: CONFIRM re-checks the delivered height on the swapped file, not
+    only VERIFY on the temp. A file that reads back at the wrong height
+    after the swap is rolled back to the original. Mutation sweep
+    2026-09-20: CONFIRM's expected_height could become None unnoticed."""
+    from transcode_forge.worker.pipeline import PipelineError, run_pipeline
+
+    source = tmp_path / "test.mkv"
+    source.write_bytes(b"x" * 10000)
+
+    with (
+        patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
+        patch(
+            "transcode_forge.worker.pipeline.ffprobe",
+            side_effect=_probe_sequence(
+                make_probe("h264", height=2160),  # pre-flight source probe
+                make_probe("hevc", height=1080),  # VERIFY on tmp: correct
+                make_probe("hevc", height=2160),  # CONFIRM post-swap: wrong
+            ),
+        ),
+        patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+    ):
+        with pytest.raises(PipelineError, match="Post-swap verification failed") as exc_info:
+            await run_pipeline(
+                source_path=str(source),
+                codec="hevc",
+                backend="cpu",
+                quality=21,
+                source_duration=3600.0,
+                job_id="j1",
+                worker_id="w1",
+                target_height=1080,
+            )
+    assert exc_info.value.step == "CONFIRM"
+    assert source.read_bytes() == b"x" * 10000  # rolled back to the original
+
+
+async def test_pipeline_tells_the_crf_search_both_heights(tmp_path):
+    """W: the search tunes quality at the delivered resolution, so it needs
+    the source height and the target. Mutation sweep 2026-09-20: either
+    could become None at the pipeline's call and no test noticed (the
+    search's own test starts below this call)."""
+    from transcode_forge.worker.pipeline import run_pipeline
+    from transcode_forge.worker.vmaf import QualitySearchResult, VmafScore
+
+    source = tmp_path / "test.mkv"
+    source.write_bytes(b"x" * 10000)
+    search = AsyncMock(
+        return_value=QualitySearchResult(quality=18, predicted_mean=97.1, predicted_perc5=95.3)
+    )
+
+    async def fake_gauge(src, enc, **kwargs):
+        return VmafScore(mean=98.0, perc5=97.0, min=96.0)
+
+    with (
+        patch("transcode_forge.worker.pipeline.run_encode", side_effect=_mock_encode_ok),
+        patch(
+            "transcode_forge.worker.pipeline.ffprobe",
+            side_effect=_probe_sequence(
+                make_probe("h264", height=2160),
+                make_probe("hevc", height=1080),
+                make_probe("hevc", height=1080),
+            ),
+        ),
+        patch("transcode_forge.worker.pipeline._decode_check"),
+        patch("transcode_forge.worker.pipeline.stream_inventory", return_value=()),
+        patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=True)),
+        patch("transcode_forge.worker.pipeline.measure_vmaf", side_effect=fake_gauge),
+        patch("transcode_forge.worker.pipeline.find_quality_for_target", search),
+    ):
+        await run_pipeline(
+            source_path=str(source),
+            codec="hevc",
+            backend="cpu",
+            quality=21,
+            source_duration=3600.0,
+            job_id="j1",
+            worker_id="w1",
+            target_vmaf=97.0,
+            target_height=1080,
+            crf_search=True,
+        )
+
+    assert search.await_args.args == (source, "hevc", "cpu")
+    kwargs = search.await_args.kwargs
+    assert kwargs["height"] == 2160
+    assert kwargs["target_height"] == 1080
+    assert kwargs["duration"] == 3600.0
+
+
 async def test_pipeline_fails_closed_when_source_height_unknowable(tmp_path):
     """V: with a downscale requested, a failed pre-flight probe must fail
     CLOSED. Proceeding would run the upscale guard on nothing — and an

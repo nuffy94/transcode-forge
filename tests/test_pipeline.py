@@ -9,11 +9,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from transcode_forge.scanner.probe import ProbeResult, StreamInfo
-from transcode_forge.worker.encoder import StreamPlan, plan_streams
+from transcode_forge.worker.encoder import DroppedStream, StreamPlan, plan_streams
 from transcode_forge.worker.pipeline import (
+    DURATION_TOLERANCE,
     PipelineError,
     SizeRegressionError,
     StreamLossError,
+    _check_plan_covers_source,
     _verify_output,
     find_stale_locks,
     run_pipeline,
@@ -1257,6 +1259,130 @@ class TestStreamPlan:
         plan = plan_streams(inventory, target_codec="hevc", drop_sub_streams=[1])
         assert [p.source_index for p in plan.kept] == [0, 1]
         assert [d.source_index for d in plan.dropped] == [2]
+
+
+class TestVerifyOutputRefusals:
+    """Each way VERIFY says no, by step name and message. Mutation sweep
+    2026-09-20: the empty-file check and the duration boundary could both
+    move and no test noticed."""
+
+    @staticmethod
+    def _probe(**overrides) -> ProbeResult:
+        fields = dict(
+            video_codec="hevc",
+            width=1920,
+            height=1080,
+            bitrate=5_000_000,
+            duration=3600.0,
+            file_size=1000,
+        )
+        return ProbeResult(**{**fields, **overrides})
+
+    async def _verify(self, path: Path, probe: ProbeResult, **kwargs) -> None:
+        with patch("transcode_forge.worker.pipeline.ffprobe", return_value=probe):
+            await _verify_output(path, expected_duration=3600.0, deep_check=False, **kwargs)
+
+    async def test_a_missing_output_is_refused(self, tmp_path):
+        with pytest.raises(PipelineError, match="does not exist") as exc_info:
+            await self._verify(tmp_path / "never-written.mkv", self._probe())
+        assert exc_info.value.step == "VERIFY"
+
+    async def test_an_empty_output_is_refused_before_the_probe(self, tmp_path):
+        out = tmp_path / "empty.mkv"
+        out.write_bytes(b"")
+        with pytest.raises(PipelineError, match="is empty") as exc_info:
+            await self._verify(out, self._probe())
+        assert exc_info.value.step == "VERIFY"
+
+    async def test_a_one_byte_output_is_not_called_empty(self, tmp_path):
+        out = tmp_path / "tiny.mkv"
+        out.write_bytes(b"x")
+        await self._verify(out, self._probe())
+
+    async def test_the_wrong_codec_is_refused(self, tmp_path):
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 1000)
+        with pytest.raises(PipelineError, match="codec is 'h264', expected 'hevc'") as exc_info:
+            await self._verify(out, self._probe(video_codec="h264"))
+        assert exc_info.value.step == "VERIFY"
+
+    async def test_the_wrong_height_is_refused_on_a_downscale_job(self, tmp_path):
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 1000)
+        with pytest.raises(PipelineError, match=r"height is 1080, expected .* 720") as exc_info:
+            await self._verify(out, self._probe(), expected_height=720)
+        assert exc_info.value.step == "VERIFY"
+
+    async def test_duration_drift_of_exactly_the_tolerance_passes(self, tmp_path):
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 1000)
+        await self._verify(out, self._probe(duration=3600.0 + DURATION_TOLERANCE))
+
+    async def test_duration_drift_past_the_tolerance_is_refused(self, tmp_path):
+        out = tmp_path / "x.mkv"
+        out.write_bytes(b"x" * 1000)
+        with pytest.raises(PipelineError, match="Duration mismatch") as exc_info:
+            await self._verify(out, self._probe(duration=3600.0 + DURATION_TOLERANCE + 0.5))
+        assert exc_info.value.step == "VERIFY"
+
+
+class TestPlanCoversSource:
+    """The check that runs before ffmpeg does: every source index is spoken
+    for exactly once. Mutation sweep 2026-09-20: the whole malformed-plan
+    refusal could be deleted and no test noticed."""
+
+    INVENTORY = (
+        _stream(0, "video", "h264"),
+        _stream(1, "audio", "aac", language="eng"),
+        _stream(2, "subtitle", "subrip", language="eng"),
+    )
+
+    def _honest(self) -> StreamPlan:
+        return plan_streams(self.INVENTORY, target_codec="hevc")
+
+    def test_an_honest_plan_passes(self):
+        _check_plan_covers_source(self.INVENTORY, self._honest(), resolved_crf=21, backend="cpu")
+
+    def test_a_stream_the_plan_leaves_out_is_named_with_the_diagnostics(self):
+        honest = self._honest()
+        forgetful = StreamPlan(kept=honest.kept[:-1], dropped=honest.dropped)
+
+        with pytest.raises(StreamLossError) as exc_info:
+            _check_plan_covers_source(self.INVENTORY, forgetful, resolved_crf=21, backend="cpu")
+
+        e = exc_info.value
+        assert e.step == "TRANSCODE"
+        assert e.missing == ("#2 subtitle subrip [eng]",)
+        assert "#2 subtitle subrip [eng]" in e.message
+        assert e.resolved_crf == 21
+        assert e.backend == "cpu"
+
+    def test_a_source_stream_counted_twice_is_refused(self):
+        """Carried AND named as dropped: the index exists, so only the
+        count can catch it."""
+        honest = self._honest()
+        double = StreamPlan(
+            kept=honest.kept,
+            dropped=(*honest.dropped, DroppedStream(source_index=1, reason="test")),
+        )
+
+        with pytest.raises(PipelineError, match=r"malformed.*\[1\]") as exc_info:
+            _check_plan_covers_source(self.INVENTORY, double, resolved_crf=21, backend="cpu")
+
+        assert exc_info.value.step == "TRANSCODE"
+        assert not isinstance(exc_info.value, StreamLossError)
+
+    def test_a_stream_the_source_does_not_have_is_refused(self):
+        """Counted once, but the source has no index 9: only the
+        membership half of the check can catch it."""
+        honest = self._honest()
+        invented = StreamPlan(
+            kept=honest.kept,
+            dropped=(*honest.dropped, DroppedStream(source_index=9, reason="test")),
+        )
+
+        with pytest.raises(PipelineError, match=r"malformed.*\[9\]"):
+            _check_plan_covers_source(self.INVENTORY, invented, resolved_crf=21, backend="cpu")
 
 
 class TestDecodeCheckDeadline:
