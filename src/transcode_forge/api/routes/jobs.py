@@ -139,9 +139,11 @@ async def resume_queue(db: DBConnection = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/queue/status")
 async def queue_status(db: DBConnection = Depends(get_db)) -> dict[str, Any]:
-    """Get queue pause state."""
-    paused = await system_repo.is_queue_paused(db)
-    return {"paused": paused}
+    """Get queue pause state, with its two causes apart: the button owns
+    only the hand-set pause, the schedule window is changed in Settings."""
+    by_hand = await system_repo.is_paused_by_hand(db)
+    closed = await system_repo.is_schedule_closed(db)
+    return {"paused": by_hand or closed, "paused_by_hand": by_hand, "schedule_closed": closed}
 
 
 @router.post("/jobs/cancel-all")
