@@ -65,7 +65,9 @@ export function initLiveProgress() {
             // At 0% the server renders "starting" — don't fight it with "0%".
             if (pctEl && pct > 0) pctEl.textContent = pct + '%';
             // Phase transitions move the station highlight between polls;
-            // label colors and readout copy catch up on the next 3s morph.
+            // label colors and the phase sentence catch up on the next morph.
+            // Every station carries its own fill and readout slot, shown
+            // only while active (forge.css), so moving classes is enough.
             if (data.phase && row.dataset.phase !== data.phase) {
                 row.dataset.phase = data.phase;
                 const order = ['search', 'encode', 'verify', 'gauge', 'swap'];
@@ -80,24 +82,22 @@ export function initLiveProgress() {
                         'forge-station--timed'
                     );
                     if (i < cur) st.classList.add('forge-station--done');
-                    else if (i === cur) {
-                        st.classList.add('forge-station--active');
-                        if (data.phase !== 'encode') st.classList.add('forge-station--timed');
-                    } else st.classList.add('forge-station--todo');
+                    else if (i === cur) st.classList.add('forge-station--active');
+                    else st.classList.add('forge-station--todo');
                 });
             }
-            // Within-phase progress on the active timed station (gauge %,
-            // search probe count). The span is server-rendered empty, so
-            // there's always a target; query AFTER the class move above.
-            if (data.phase && data.phase !== 'encode') {
-                const detailEl = row.querySelector('.forge-station--active [data-phase-detail]');
-                if (detailEl) {
-                    if (typeof data.phase_pct === 'number') {
-                        detailEl.textContent = Math.round(data.phase_pct * 100) + '%';
-                    } else if (data.phase_detail) {
-                        detailEl.textContent = data.phase_detail;
-                    }
-                }
+            // One rule for the active station: phase_pct (the server copies
+            // Encode's progress into it) draws a fill; no number breathes
+            // and the readout shows the probe label, if any.
+            const active = data.phase && row.querySelector('.forge-station--active');
+            if (active) {
+                const known = typeof data.phase_pct === 'number';
+                const stationPct = known ? Math.round(data.phase_pct * 100) : null;
+                active.classList.toggle('forge-station--timed', !known);
+                const fillEl = active.querySelector('[data-station-fill]');
+                if (fillEl && known) fillEl.style.width = stationPct + '%';
+                const detailEl = active.querySelector('[data-phase-detail]');
+                if (detailEl) detailEl.textContent = known ? stationPct + '%' : data.phase_detail || '';
             }
         };
         ws.onclose = () => setTimeout(connect, 5000);

@@ -820,6 +820,49 @@ class TestStationPhaseDetail:
         assert resp.status_code == 200
         assert "data-phase-detail>42%" in resp.text
 
+    async def test_known_pct_draws_a_fill_not_a_breath(self, client: AsyncClient, app):
+        """A station with a known percentage fills to it; only a station
+        without one breathes. A Gauge at 42% used to breathe full width
+        (read as done) while its label said 42%."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/GaugeFill.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=1.0, phase="gauge", phase_pct=0.42
+        )
+        for partial in ("/partials/active-transcodes", "/partials/jobs?status=transcoding"):
+            resp = await client.get(partial)
+            assert resp.status_code == 200
+            assert "forge-station--timed" not in resp.text, partial
+            assert 'data-station-fill style="width: 42%;"' in resp.text, partial
+
+    async def test_every_station_carries_fill_and_readout_slot(self, client: AsyncClient, app):
+        """A live phase change only moves state classes, so every station
+        needs its own fill and readout slot for ops.js to target."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Slots.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=0.6, phase="encode", phase_pct=0.6
+        )
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert resp.text.count("data-station-fill") == 5
+        assert resp.text.count("data-phase-detail") == 5
+        assert "data-phase-detail>60%" in resp.text
+
     async def test_search_probe_label_renders_on_dashboard(self, client: AsyncClient, app):
         db = app.state.db
         job = Job(
