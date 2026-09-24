@@ -462,14 +462,14 @@ ABANDONED_GRACE_SECONDS = 120
 # pair below. A worker heartbeating THE job's id never matches, regardless
 # of how stale the job row is — a multi-hour VMAF gauge sends no progress,
 # but its heartbeat names the job the whole time (the long-gauge safety
-# property). current_job_changed_at IS NOT NULL keeps pre-migration rows
-# (no transition observed yet) out of the sweep. j.updated_at is checked
-# too: a claim bumps it, so a just-claimed job is safe even though the
-# worker's previous mismatch (e.g. NULL since its last job) is old.
+# property). Registration stamps current_job_changed_at, so every worker
+# that has registered since migration 0013 has a start time for its
+# mismatch. j.updated_at is checked too: a claim bumps it, so a
+# just-claimed job is safe even though the worker's previous mismatch
+# (e.g. NULL since its last job or its registration) is old.
 _ABANDONED_CONDITION = (
     "  AND w.status IN ({alive})"
     "  AND (w.current_job_id IS NULL OR w.current_job_id != j.id)"
-    "  AND w.current_job_changed_at IS NOT NULL"
     "  AND w.current_job_changed_at < ?"
     "  AND j.updated_at < ?"
 )
