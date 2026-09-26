@@ -398,12 +398,10 @@ def test_target_resolution_rule_has_one_home():
 
     # Both call sites use the helper, not a re-implementation.
     from transcode_forge.api.routes import worker_api
-    from transcode_forge.worker import http_agent
+    from transcode_forge.models import derivative
 
     assert "target_resolution_for" in inspect.getsource(worker_api.register_derivative)
-    assert "target_resolution_for" in inspect.getsource(
-        http_agent.HttpWorkerAgent._derivative_key_for
-    )
+    assert "target_resolution_for" in inspect.getsource(derivative.derivative_key_for_job)
 
 
 def test_derivative_key_forks_by_target_height():
