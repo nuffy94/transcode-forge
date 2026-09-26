@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -31,6 +31,9 @@ from transcode_forge.db import DBConnection
 from transcode_forge.s3compat import s3_client_config
 from transcode_forge.worker.storage.base import CommitResult
 from transcode_forge.worker.storage.scratch import ScratchManager
+
+if TYPE_CHECKING:
+    from transcode_forge.models.job import Job
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +190,7 @@ class S3Backend:
         self,
         local_output: Path,
         source: str,
-        job: Any,
+        job: Job,
         space_saved: int = 0,
     ) -> CommitResult:
         """Upload a transcoded output as a derivative.
@@ -292,15 +295,14 @@ class S3Backend:
             db=self.db,
         )
 
-    async def cleanup(self, job: Any) -> None:
+    async def cleanup(self, job: Job) -> None:
         """Clean up temporary resources after a job.
 
         Releases scratch space and orphaned S3 parts.
 
         Args:
-            job: Job model or dict with id (the agent passes the Pydantic
-                Job model; assuming a dict here crashed the job loop).
+            job: The job to clean up after.
         """
-        job_id = job.id if hasattr(job, "id") else job.get("id", "")
+        job_id = job.id
         logger.info("Cleaning up S3 job %s", job_id)
         await self.scratch_manager.release(job_id=job_id)
