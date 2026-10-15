@@ -341,6 +341,12 @@ async def completed_by_library(db: DBConnection) -> list[tuple[str | None, str, 
         return [(r[0], r[1], r[2], r[3]) for r in await cur.fetchall()]
 
 
+async def count_by_status(db: DBConnection) -> dict[str, int]:
+    """Job counts keyed by status value. Statuses with no jobs are absent."""
+    async with db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status") as cur:
+        return {row[0]: row[1] for row in await cur.fetchall()}
+
+
 async def count_queued_jobs(db: DBConnection) -> int:
     """Count jobs waiting for a worker to claim them.
 

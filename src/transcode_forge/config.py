@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     # admin session cookie carries the Secure flag.
     session_secure: bool = False
 
+    # MCP endpoint (docs/MCP.md). public_url is the origin clients use, for
+    # example https://forge.example.com; it is the audience every MCP token
+    # is minted for and the URL the metadata documents advertise, so it is
+    # configured, never read from a request header. Empty = /mcp is not
+    # mounted.
+    public_url: str = ""
+    mcp_rate_limit_per_minute: int = Field(default=120, ge=1)
+
     # S3-compatible object storage — optional, for S3-library backend.
     # Credentials injected via environment (1Password on production).
     s3_endpoint_url: str = ""
@@ -119,6 +127,11 @@ class Settings(BaseSettings):
     # compose files ship a named volume) so delivery also survives
     # container recreation, not just process restarts.
     worker_state_dir: str = ""
+
+    @property
+    def mcp_resource_url(self) -> str:
+        """Canonical resource identifier of the MCP endpoint (RFC 8707), no trailing slash."""
+        return f"{self.public_url.rstrip('/')}/mcp"
 
     @model_validator(mode="after")
     def _validate_vmaf_floor_pair(self) -> "Settings":

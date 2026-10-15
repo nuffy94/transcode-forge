@@ -101,6 +101,7 @@ def test_settings(tmp_db_path: str, tmp_path: Path) -> Settings:
         library_movies=str(tmp_path / "movies"),
         library_tv=str(tmp_path / "tv"),
         library_anime=str(tmp_path / "anime"),
+        public_url="http://test",
     )
 
 
