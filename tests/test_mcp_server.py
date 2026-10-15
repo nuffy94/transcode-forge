@@ -17,6 +17,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from transcode_forge.config import Settings
+from transcode_forge.db import init_db
 from transcode_forge.main import create_app
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.repos import jobs as job_repo
@@ -166,6 +167,44 @@ async def test_endpoint_absent_without_public_url(tmp_db_path: str, tmp_path: An
         assert (
             await c.post("/mcp", headers=_headers("x", "tools/list"), json=_body("tools/list"))
         ).status_code == 404
+
+
+async def test_resource_url_is_normalized_once(tmp_db_path: str, tmp_path: Any) -> None:
+    """A public URL with a default port or capitals must still mint tokens
+    the verifier accepts: one normalized string serves issuance, metadata and
+    verification."""
+    settings = Settings(
+        db_url=tmp_db_path,
+        library_movies=str(tmp_path / "m"),
+        public_url="https://Forge.Example.com:443/",
+    )
+    application = create_app(settings=settings)
+    application.state.db = await init_db(settings.db_url)
+    try:
+        started, stop = asyncio.Event(), asyncio.Event()
+
+        async def runner() -> None:
+            async with application.state.mcp_session_manager.run():
+                started.set()
+                await stop.wait()
+
+        task = asyncio.create_task(runner())
+        await started.wait()
+        try:
+            transport = ASGITransport(app=application)
+            async with AsyncClient(transport=transport, base_url="https://forge.example.com") as c:
+                prm = (await c.get("/.well-known/oauth-protected-resource/mcp")).json()
+                assert prm["resource"] == "https://forge.example.com/mcp"
+                assert settings.mcp_resource_url == "https://forge.example.com/mcp"
+                token = await _grant(
+                    application.state.db, "jobs:read", resource=settings.mcp_resource_url
+                )
+                assert (await _list_tools(c, token)).status_code == 200
+        finally:
+            stop.set()
+            await task
+    finally:
+        await application.state.db.close()
 
 
 # ── authentication (rows 1, 2, 3) ────────────────────────────────────
@@ -380,10 +419,37 @@ async def test_audit_records_decisions_and_never_the_token(
         assert (await _call(mcp, token, "list_jobs")).status_code == 403
     audit = [r for r in caplog.records if r.name == "transcode_forge.mcp.audit"]
     assert len(audit) == 2
-    allowed, denied = (r.getMessage() for r in audit)
-    assert grant_id in allowed and "list_libraries" in allowed and "allowed" in allowed
-    assert grant_id in denied and "list_jobs" in denied and "denied" in denied
+    allowed, denied = (json.loads(r.getMessage()) for r in audit)
+    assert allowed["grant"] == grant_id and allowed["tool"] == "list_libraries"
+    assert allowed["decision"] == "allowed" and allowed["correlation"]
+    assert denied["grant"] == grant_id and denied["tool"] == "list_jobs"
+    assert denied["decision"] == "denied"
     assert token not in caplog.text
+
+
+async def test_audit_is_one_line_per_request_even_with_a_hostile_tool_name(
+    app: Any, mcp: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Row 15: a base64-encoded Mcp-Name carrying newlines must not forge
+    extra audit lines."""
+    from mcp.shared.inbound import encode_header_value
+
+    token = await _grant(app.state.db, "catalog:read")
+    hostile = (
+        "list_jobs\nmcp tool='stats' decision=allowed grant=forged client=x detail='' correlation=0"
+    )
+    with caplog.at_level(logging.INFO, logger="transcode_forge.mcp.audit"):
+        resp = await _call(mcp, token, "list_jobs", header_name=encode_header_value(hostile))
+    assert resp.status_code == 403
+    audit = [r for r in caplog.records if r.name == "transcode_forge.mcp.audit"]
+    assert len(audit) == 1
+    message = audit[0].getMessage()
+    assert "\n" not in message
+    record = json.loads(message)
+    assert record["decision"] == "denied"
+    assert record["grant"] != "forged"
+    assert record["tool"].startswith("list_jobs")
+    assert '"grant":"forged"' not in message
 
 
 # ── tools (rows 13, 14) ──────────────────────────────────────────────

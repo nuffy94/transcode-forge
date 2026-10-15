@@ -4,7 +4,7 @@ import hashlib
 import secrets
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, AnyHttpUrl, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -130,8 +130,13 @@ class Settings(BaseSettings):
 
     @property
     def mcp_resource_url(self) -> str:
-        """Canonical resource identifier of the MCP endpoint (RFC 8707), no trailing slash."""
-        return f"{self.public_url.rstrip('/')}/mcp"
+        """Canonical resource identifier of the MCP endpoint (RFC 8707).
+
+        Normalized once here (lowercase scheme and host, default port
+        dropped) and used for issuance, metadata and verification alike, so
+        a token can never be minted for a spelling the verifier rejects.
+        """
+        return str(AnyHttpUrl(f"{self.public_url.rstrip('/')}/mcp"))
 
     @model_validator(mode="after")
     def _validate_vmaf_floor_pair(self) -> "Settings":

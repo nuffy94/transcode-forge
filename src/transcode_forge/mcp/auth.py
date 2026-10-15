@@ -253,15 +253,19 @@ class Gate:
     def _audit(
         grant_id: str, client_id: str, tool: str, decision: str, detail: str, correlation: str
     ) -> None:
-        audit_log.info(
-            "mcp tool=%s decision=%s grant=%s client=%s detail=%r correlation=%s",
-            tool,
-            decision,
-            grant_id,
-            client_id,
-            detail,
-            correlation,
-        )
+        """One JSON object per tool call. JSON escaping keeps a hostile tool
+        name from reading as extra fields or extra lines (threat-model row 15).
+        Never carries the token."""
+        record = {
+            "event": "mcp_tool_call",
+            "tool": tool[:128],
+            "decision": decision,
+            "grant": grant_id,
+            "client": client_id,
+            "detail": detail,
+            "correlation": correlation,
+        }
+        audit_log.info("%s", json.dumps(record, separators=(",", ":")))
 
 
 def challenge_for_scope(scope_text: str, resource_metadata_url: str) -> dict[str, Any]:

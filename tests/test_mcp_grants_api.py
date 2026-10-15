@@ -81,13 +81,16 @@ async def test_issue_list_use_revoke(client: AsyncClient, app: Any, mcp_running:
     assert row["id"] == issued["grant_id"]
     assert row["label"] == "laptop"
     assert row["revoked_at"] is None
+    assert row["status"] == "active"
     assert token not in str(listing)
 
     # Revoke: the token stops working at its next check.
     resp = await client.delete(f"/api/mcp/grants/{issued['grant_id']}")
     assert resp.status_code == 200
     assert (await _tools_list(client, token)).status_code == 401
-    assert (await client.get("/api/mcp/grants")).json()["data"][0]["revoked_at"] is not None
+    after = (await client.get("/api/mcp/grants")).json()["data"][0]
+    assert after["revoked_at"] is not None
+    assert after["status"] == "revoked"
     # A second revoke of the same grant is a 404, not a silent success.
     assert (await client.delete(f"/api/mcp/grants/{issued['grant_id']}")).status_code == 404
 

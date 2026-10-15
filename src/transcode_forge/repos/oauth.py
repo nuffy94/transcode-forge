@@ -177,7 +177,19 @@ async def list_grants(db: DBConnection) -> list[dict[str, Any]]:
         "ORDER BY g.created_at DESC, g.id"
     ) as cur:
         rows = await cur.fetchall()
-    return [{**dict(row), "scopes": dict(row)["scopes"].split()} for row in rows]
+    now = _now()
+    return [_grant_view(dict(row), now) for row in rows]
+
+
+def _grant_view(row: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """One derivation of a grant's state for every view of the list."""
+    if row["revoked_at"] is not None:
+        status = "revoked"
+    elif _parse(row["expires_at"]) <= now:
+        status = "expired"
+    else:
+        status = "active"
+    return {**row, "scopes": row["scopes"].split(), "status": status}
 
 
 # ── Tokens ───────────────────────────────────────────────────────────
