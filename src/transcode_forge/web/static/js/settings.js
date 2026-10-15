@@ -441,3 +441,70 @@ loadLibraries();
 loadTuning();
 loadSystemInfo();
 refreshScheduleStatus();
+
+/* ---- Connected apps: grants for the MCP endpoint (docs/MCP.md) ---- */
+
+function mcpJoinCommand(resource, token) {
+    // resource is the canonical MCP URL the token was minted for (TF_PUBLIC_URL + /mcp),
+    // not the address this page happens to be open on.
+    return `claude mcp add --transport http forge ${resource} --header "Authorization: Bearer ${token}"`;
+}
+
+async function issueMcpGrant() {
+    const label = document.getElementById('mcp-grant-label').value.trim();
+    const scopes = [...document.querySelectorAll('.mcp-scope:checked')].map((el) => el.value);
+    const days = parseInt(document.getElementById('mcp-grant-days').value, 10);
+    if (!label) {
+        showToast('Label required', 'error');
+        return;
+    }
+    if (scopes.length === 0) {
+        showToast('Pick at least one scope', 'error');
+        return;
+    }
+    try {
+        const r = await fetch('/api/mcp/grants', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, scopes, expires_in_days: days }),
+        });
+        if (!r.ok) {
+            showToast(detailText(await r.json().catch(() => ({})), 'Failed to issue grant'), 'error');
+            return;
+        }
+        const data = await r.json();
+        document.getElementById('mcp-grant-token').textContent = data.token;
+        document.getElementById('mcp-grant-command').textContent = mcpJoinCommand(data.resource, data.token);
+        document.getElementById('mcp-grant-reveal').classList.remove('hidden');
+        document.getElementById('mcp-grant-label').value = '';
+        showToast('Grant issued', 'success');
+        htmx.trigger('#mcp-grants-list', 'refresh');
+    } catch (e) {
+        showToast('Issue failed: ' + e.message, 'error');
+    }
+}
+
+async function revokeMcpGrant(grantId) {
+    if (!confirm('Revoke this grant? The client using it is cut off at its next request.')) return;
+    try {
+        const r = await fetch('/api/mcp/grants/' + encodeURIComponent(grantId), { method: 'DELETE' });
+        if (!r.ok) {
+            showToast('Failed to revoke grant', 'error');
+            return;
+        }
+        showToast('Grant revoked', 'warning');
+        htmx.trigger('#mcp-grants-list', 'refresh');
+    } catch (e) {
+        showToast('Revoke failed: ' + e.message, 'error');
+    }
+}
+window.revokeMcpGrant = revokeMcpGrant; // the grants partial calls it inline
+
+on('mcp-grant-issue-btn', 'click', issueMcpGrant);
+on('mcp-grant-copy-btn', 'click', () => {
+    const token = document.getElementById('mcp-grant-token').textContent;
+    navigator.clipboard
+        .writeText(token)
+        .then(() => showToast('Copied to clipboard', 'success'))
+        .catch(() => showToast('Copy failed. Select the token and copy it by hand', 'error'));
+});

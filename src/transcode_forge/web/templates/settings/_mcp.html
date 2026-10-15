@@ -1,0 +1,68 @@
+{% from "partials/_icons.html" import icon %}
+<!-- Connected apps: grants for the MCP endpoint (docs/MCP.md) -->
+<section id="tab-mcp" class="col-span-12 forge-panel">
+    <div class="forge-panel-hd">
+        <h2 class="forge-panel-title">Connected apps</h2>
+        {% if mcp.enabled %}
+        <span class="forge-pill forge-pill--complete ml-auto">Endpoint on</span>
+        {% else %}
+        <span class="forge-pill forge-pill--queued ml-auto">Endpoint off</span>
+        {% endif %}
+    </div>
+    <div class="p-3.5">
+        <p class="font-mono text-2xs text-forge-mute mb-3 leading-relaxed">
+            AI clients such as Claude Code reach this installation through the MCP endpoint
+            {% if mcp.enabled %}
+            at <code class="text-forge-ember">{{ mcp.resource_url }}</code>.
+            {% else %}
+            once <code class="text-forge-ember">TF_PUBLIC_URL</code> is set to the HTTPS origin clients use.
+            {% endif %}
+            Each grant is one client with its own scopes. Revoke it and that client is cut off at its next request.
+        </p>
+
+        {% if mcp.enabled %}
+        <div class="forge-panel p-3 mb-3">
+            <p class="forge-stat-label mb-2.5">New grant</p>
+            <div class="flex flex-wrap items-end gap-2.5">
+                <div class="flex-1 min-w-[200px]">
+                    <label for="mcp-grant-label" class="forge-stat-label block mb-1">Label</label>
+                    <input id="mcp-grant-label" type="text" placeholder="e.g. laptop, claude.ai" class="forge-input w-full">
+                </div>
+                <fieldset class="flex flex-col">
+                    <legend class="forge-stat-label block mb-1">Scopes</legend>
+                    <div class="flex gap-3 pt-1">
+                        <label for="mcp-scope-catalog" class="flex items-center gap-1.5 font-mono text-2xs text-forge-paper">
+                            <input id="mcp-scope-catalog" type="checkbox" class="mcp-scope" value="catalog:read" checked>
+                            catalog:read
+                        </label>
+                        <label for="mcp-scope-jobs" class="flex items-center gap-1.5 font-mono text-2xs text-forge-paper">
+                            <input id="mcp-scope-jobs" type="checkbox" class="mcp-scope" value="jobs:read" checked>
+                            jobs:read
+                        </label>
+                    </div>
+                </fieldset>
+                <div>
+                    <label for="mcp-grant-days" class="forge-stat-label block mb-1">Expires in days</label>
+                    <input id="mcp-grant-days" type="number" min="1" max="365" value="90" class="forge-input w-20 tabular-nums">
+                </div>
+                <button id="mcp-grant-issue-btn" class="forge-btn forge-btn--ember">
+                    {{ icon('key', 'forge-icon--sm') }}
+                    <span>Issue grant</span>
+                </button>
+            </div>
+
+            <div id="mcp-grant-reveal" class="forge-panel forge-panel--ember p-3.5 mt-3 hidden">
+                <p class="forge-stat-label mb-1.5">Copy now. It is shown only once</p>
+                <div class="flex items-center gap-2">
+                    <code id="mcp-grant-token" class="font-mono text-xs text-forge-paper bg-forge-well px-3 py-2 break-all flex-1"></code>
+                    <button id="mcp-grant-copy-btn" class="forge-btn" type="button">Copy</button>
+                </div>
+                <p class="forge-stat-label mt-3 mb-1.5">Register it in Claude Code</p>
+                <pre id="mcp-grant-command" class="font-mono text-xs text-forge-paper bg-forge-well px-3 py-2 whitespace-pre-wrap break-all"></pre>
+            </div>
+        </div>
+        {% endif %}
+
+        <div id="mcp-grants-list" hx-get="/partials/mcp-grants" hx-trigger="load, refresh" hx-swap="innerHTML"></div>
+    </div>
+</section>
