@@ -146,6 +146,7 @@ admin UI (libraries, schedules, exclusions, worker tokens).
 | `TF_LOG_LEVEL` | Log verbosity: `debug` / `info` / `warning` / `error` (default `info`) |
 | `TF_SESSION_SECURE` | Set `true` when serving over HTTPS so the session cookie is Secure-only |
 | `TF_AUTH_SECRET` | Cookie-signing secret. Pinning makes sessions survive restarts |
+| `TF_PUBLIC_URL` | The HTTPS origin clients use (for example `https://forge.example.com`). Setting it turns on the MCP endpoint at `/mcp`; see [docs/MCP.md](docs/MCP.md) |
 
 **Guides:** [Getting Started](docs/GETTING-STARTED.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md) · [Backup](docs/BACKUP.md) ·
@@ -170,6 +171,10 @@ Single-admin, built for a network you control.
 - **Workers** hold only the scheduler URL + a revocable bearer token — never
   DB or Redis credentials. Tokens are stored hashed (HMAC-SHA256), not in the
   clear.
+- **MCP clients** (Claude Code, claude.ai and other Model Context Protocol
+  clients) authenticate with a bearer token bound to a revocable grant and
+  scoped per tool. Off until `TF_PUBLIC_URL` is set. Design and threat model:
+  [docs/MCP.md](docs/MCP.md).
 
 **Reverse proxy with automatic HTTPS (Caddy).** Front the app with this
 `Caddyfile` and Caddy provisions and renews the TLS cert for you:

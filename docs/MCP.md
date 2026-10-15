@@ -236,6 +236,26 @@ server, the scope gate, the registry and the audit log are identical in both.
 - Clients have to speak the 2026-07-28 revision. Claude Code's current runtime
   does; a session pinned to the older runtime cannot connect.
 
+## Connecting a client (Phase 1)
+
+1. Set `TF_PUBLIC_URL` to the HTTPS origin the client will use and restart.
+2. In Settings, or with `POST /api/mcp/grants`, issue a grant with a label
+   and the scopes it needs. The token is shown once.
+3. Register the server in the client with that token as a bearer header.
+   For Claude Code:
+
+   ```bash
+   claude mcp add --transport http forge https://forge.example.com/mcp --header "Authorization: Bearer <token>"
+   ```
+
+   The client has to speak the 2026-07-28 revision; Claude Code's current
+   runtime does (`MCP_SDK_GENERATION=v2` forces it).
+4. Revoke the grant from the same place when the client is retired. The
+   token stops working at its next request.
+
+Phase 2 replaces step 2 and 3 with the browser flow: the client is given
+only the URL and obtains its own token through consent.
+
 ## Phases
 
 | Phase | Delivers | Done when |
