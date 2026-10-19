@@ -35,8 +35,9 @@ async def _seed_catalog_job(
     from transcode_forge.repos import media as media_repo
 
     db = app.state.db
-    # Unique name/path per call — libraries.path carries a UNIQUE constraint.
-    suffix = uuid4().hex[:6]
+    # Unique name/path per call: libraries.path carries a UNIQUE constraint, and a
+    # six-character prefix collided about once in twenty-five runs of the 1203-row test.
+    suffix = uuid4().hex
     lib_name = f"movies-{suffix}"
     if s3:
         lib_id = await lib_repo.create_library(
