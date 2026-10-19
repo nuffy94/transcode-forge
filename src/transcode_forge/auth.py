@@ -8,6 +8,8 @@ Public path policy:
 - /static/*             — assets
 - /login                — the auth page itself
 - /partials/health      — the sidebar dot polls this; cheap + read-only
+- /mcp                  — bearer token (grant) auth inside its own stack, docs/MCP.md
+- /.well-known/*        — OAuth metadata documents, public by definition
 
 Anything else in /api/* requires an authenticated session and returns
 401 if absent. HTML routes redirect to /login (or /setup if no admin
@@ -33,8 +35,11 @@ PUBLIC_PREFIXES = (
     "/metrics",
     "/static/",
     "/partials/health",
+    "/.well-known/",  # OAuth metadata documents (RFC 9728, RFC 8414)
 )
-PUBLIC_PATHS = {"/login", "/favicon.ico"}
+# /mcp authenticates with a bearer token inside its own middleware stack
+# (docs/MCP.md, "Authentication classes"); the session cookie never counts there.
+PUBLIC_PATHS = {"/login", "/favicon.ico", "/mcp"}
 
 
 def _is_public(path: str) -> bool:
@@ -72,7 +77,7 @@ def _csrf_check(scope: dict[str, Any]) -> Response | None:
         return None
 
     path = scope.get("path", "")
-    if path.startswith("/api/worker/"):  # bearer auth, not cookie
+    if path.startswith("/api/worker/") or path == "/mcp":  # bearer auth, not cookie
         return None
     if path in CSRF_EXEMPT_PATHS:
         return None

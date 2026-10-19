@@ -475,3 +475,39 @@ class TestRecentScansSingleSource:
             assert 'hx-get="/partials/scan-history"' in resp.text, (
                 f"{page} does not embed the shared scan-history partial"
             )
+
+
+class TestMcpGrantsViews:
+    """The grants list is one derivation: the API `status` and the Settings
+    partial's pill come from the same repo field (docs/MCP.md)."""
+
+    async def test_api_status_matches_partial_pill(self, client, app) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from transcode_forge.repos import oauth as oauth_repo
+
+        db = app.state.db
+        resource = "http://test/mcp"
+        await oauth_repo.create_manual_grant(
+            db, label="g-active", scopes={"jobs:read"}, resource=resource, user_id="u"
+        )
+        revoked, _ = await oauth_repo.create_manual_grant(
+            db, label="g-revoked", scopes={"jobs:read"}, resource=resource, user_id="u"
+        )
+        await oauth_repo.revoke_grant(db, revoked)
+        past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        await oauth_repo.create_manual_grant(
+            db,
+            label="g-expired",
+            scopes={"jobs:read"},
+            resource=resource,
+            user_id="u",
+            expires_at=past,
+        )
+        rows = (await client.get("/api/mcp/grants")).json()["data"]
+        api = {row["label"]: row["status"] for row in rows}
+        assert api == {"g-active": "active", "g-revoked": "revoked", "g-expired": "expired"}
+        html = (await client.get("/partials/mcp-grants")).text
+        for label, status in api.items():
+            row_html = html.split(label, 1)[1].split("</tr>", 1)[0]
+            assert status.capitalize() in row_html, (label, status)

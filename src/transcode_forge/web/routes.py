@@ -146,7 +146,18 @@ async def stats_page(request: Request) -> Response:
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> Response:
-    return _render(request, "settings.html", {"active_page": "settings"})
+    settings = request.app.state.settings
+    return _render(
+        request,
+        "settings.html",
+        {
+            "active_page": "settings",
+            "mcp": {
+                "enabled": bool(settings.public_url),
+                "resource_url": settings.mcp_resource_url if settings.public_url else "",
+            },
+        },
+    )
 
 
 # -- HTMX partials --
@@ -567,6 +578,17 @@ async def schedules_partial(
 ) -> Response:
     schedules = await sched_repo.list_schedules(db)
     return _render(request, "partials/schedules.html", {"schedules": schedules})
+
+
+@router.get("/partials/mcp-grants", response_class=HTMLResponse)
+async def mcp_grants_partial(
+    request: Request,
+    db: DBConnection = Depends(get_db),
+) -> Response:
+    from transcode_forge.repos import oauth as oauth_repo
+
+    grants = await oauth_repo.list_grants(db)
+    return _render(request, "partials/mcp_grants.html", {"grants": grants})
 
 
 @router.get("/partials/worker-tokens", response_class=HTMLResponse)

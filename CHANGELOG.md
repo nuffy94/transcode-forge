@@ -4,6 +4,17 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **MCP endpoint.** `/mcp` serves the Model Context Protocol (2026-07-28
+  revision, Streamable HTTP) as an OAuth 2.1 resource server. Six read-only
+  tools over libraries, media, jobs and stats. A bearer token resolves to a
+  revocable grant with per-tool scopes; grants are issued, listed and
+  revoked at `/api/mcp/grants`. Mounted only when `TF_PUBLIC_URL` is set.
+  Migration 0019 adds `oauth_clients`, `oauth_grants` and `oauth_tokens`.
+  Design: `docs/MCP.md`; threat model: `docs/MCP-THREAT-MODEL.md`.
+
 ## [0.16.0] - 2026-09-16
 
 One change, scheduler only. Migration 0018 runs at boot. Workers need

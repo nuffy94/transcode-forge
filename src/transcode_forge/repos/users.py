@@ -58,6 +58,15 @@ async def has_admin(db: DBConnection) -> bool:
         return (await cur.fetchone()) is not None
 
 
+async def get_admin_id(db: DBConnection) -> str | None:
+    """The admin's user id, or None before first-run setup."""
+    async with db.execute(
+        "SELECT id FROM users WHERE username = ? LIMIT 1", (ADMIN_USERNAME,)
+    ) as cur:
+        row = await cur.fetchone()
+    return str(row[0]) if row else None
+
+
 async def create_admin(db: DBConnection, password: str) -> str:
     """Create the admin user. Errors if one already exists."""
     if await has_admin(db):

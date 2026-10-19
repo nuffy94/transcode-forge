@@ -29,11 +29,12 @@ async def _by_library(db: DBConnection) -> dict[str, dict[str, Any]]:
     }
 
 
-@router.get("/stats")
-async def get_stats(
-    db: DBConnection = Depends(get_db),
-) -> dict[str, Any]:
-    """Aggregate stats: total jobs, space saved, per-library breakdown."""
+async def collect_stats(db: DBConnection) -> dict[str, Any]:
+    """Aggregate stats: total jobs, space saved, per-library breakdown.
+
+    Shared by the REST route and the MCP ``stats`` tool, so both views
+    report the same numbers.
+    """
     stats: dict[str, Any] = {}
 
     # Overall counts by status
@@ -70,4 +71,12 @@ async def get_stats(
     async with db.execute("SELECT status, COUNT(*) FROM workers GROUP BY status") as cursor:
         stats["workers_by_status"] = {row[0]: row[1] for row in await cursor.fetchall()}
 
-    return {"data": stats}
+    return stats
+
+
+@router.get("/stats")
+async def get_stats(
+    db: DBConnection = Depends(get_db),
+) -> dict[str, Any]:
+    """Aggregate stats: total jobs, space saved, per-library breakdown."""
+    return {"data": await collect_stats(db)}
