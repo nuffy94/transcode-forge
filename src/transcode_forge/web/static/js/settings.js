@@ -501,10 +501,13 @@ async function revokeMcpGrant(grantId) {
 window.revokeMcpGrant = revokeMcpGrant; // the grants partial calls it inline
 
 on('mcp-grant-issue-btn', 'click', issueMcpGrant);
-on('mcp-grant-copy-btn', 'click', () => {
-    const token = document.getElementById('mcp-grant-token').textContent;
+function copyMcpField(sourceId, what) {
+    const text = document.getElementById(sourceId).textContent;
     navigator.clipboard
-        .writeText(token)
+        .writeText(text)
         .then(() => showToast('Copied to clipboard', 'success'))
-        .catch(() => showToast('Copy failed. Select the token and copy it by hand', 'error'));
-});
+        .catch(() => showToast(`Copy failed. Select the ${what} and copy it by hand`, 'error'));
+}
+
+on('mcp-grant-copy-btn', 'click', () => copyMcpField('mcp-grant-token', 'token'));
+on('mcp-grant-copy-command-btn', 'click', () => copyMcpField('mcp-grant-command', 'command'));

@@ -20,6 +20,9 @@ async def test_settings_page_shows_connected_apps(client: AsyncClient) -> None:
     assert "Connected apps" in resp.text
     assert "http://test/mcp" in resp.text
     assert 'id="mcp-grant-issue-btn"' in resp.text
+    # The token and the full join command each have their own Copy button.
+    assert 'id="mcp-grant-copy-btn"' in resp.text
+    assert 'id="mcp-grant-copy-command-btn"' in resp.text
 
 
 async def test_settings_page_explains_how_to_turn_it_on(client: AsyncClient, app: Any) -> None:
