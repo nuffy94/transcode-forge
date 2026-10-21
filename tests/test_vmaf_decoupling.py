@@ -26,7 +26,13 @@ from transcode_forge.worker.pipeline import (
     VmafGateError,
     run_pipeline,
 )
-from transcode_forge.worker.vmaf import QualitySearchResult, VmafScore, _pool
+from transcode_forge.worker.vmaf import (
+    QualitySearchResult,
+    VmafError,
+    VmafScore,
+    VmafUnavailableError,
+    _pool,
+)
 
 
 def _mock_encode(output_bytes: int):
@@ -149,6 +155,104 @@ class TestFloorsOnlyGate:
 
         assert exc_info.value.perc5_floor == 86.0
 
+    async def test_a_score_exactly_on_both_floors_is_kept(self, tmp_path):
+        """The floors are "refuse below", not "refuse at or below": an
+        encode that measures exactly 91.5 / 86 clears the gate and swaps.
+        Mutation sweep 2026-09-20: `<` could become `<=` on either
+        comparison and no test noticed."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        with _pipeline_patches(measured=(91.5, 86.0)):
+            result = await _run(source, target_vmaf=97.0)
+
+        assert result["vmaf_mean"] == 91.5
+        assert result["vmaf_perc5"] == 86.0
+        assert source.read_bytes() == b"y" * 5000  # swap happened
+
+    @pytest.mark.parametrize("measured", [(91.49, 95.0), (95.0, 85.99)])
+    async def test_a_score_just_under_either_floor_is_refused(self, tmp_path, measured):
+        """The other side of the same boundary, one floor at a time."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        with _pipeline_patches(measured=measured):
+            with pytest.raises(VmafGateError):
+                await _run(source, target_vmaf=97.0)
+
+        assert source.read_bytes() == b"x" * 10000
+
+    async def test_an_output_the_size_of_the_source_is_a_size_regression(self, tmp_path):
+        """An encode that saves nothing is not worth a swap: equal size is
+        refused, not only larger. Mutation sweep 2026-09-20: `>=` could
+        become `>` unnoticed."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+
+        with _pipeline_patches(encode_bytes=10000):
+            with pytest.raises(SizeRegressionError) as exc_info:
+                await _run(source)
+
+        assert exc_info.value.source_size == exc_info.value.output_size == 10000
+        assert source.read_bytes() == b"x" * 10000
+
+    async def test_a_worker_without_libvmaf_encodes_with_neither_search_nor_gate(self, tmp_path):
+        """Documented behavior (CLAUDE.md, TF_VMAF_FFMPEG): missing libvmaf
+        means the gate is skipped with a loud warning and the job still
+        completes. The search and the gauge are never started, because
+        both would only fail the same way."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+        search = _search_mock()
+
+        with _pipeline_patches(search=search) as stack:
+            stack.enter_context(
+                patch("transcode_forge.worker.pipeline.has_libvmaf", AsyncMock(return_value=False))
+            )
+            measure = stack.enter_context(
+                patch("transcode_forge.worker.pipeline.measure_vmaf", AsyncMock())
+            )
+            result = await _run(source, target_vmaf=97.0, crf_search=True)
+
+        search.assert_not_awaited()
+        measure.assert_not_awaited()
+        assert result["vmaf_mean"] is None
+        assert result["resolved_crf"] == 21  # the fixed preset, untouched
+        assert source.read_bytes() == b"y" * 5000  # swap happened
+
+    async def test_libvmaf_vanishing_mid_search_disables_the_gauge_as_well(self, tmp_path):
+        """The search finding out the hard way counts the same as the
+        capability check: fixed preset, no gauge, job completes."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+        search = AsyncMock(side_effect=VmafUnavailableError("ffmpeg is not built with libvmaf"))
+
+        with _pipeline_patches(search=search) as stack:
+            measure = stack.enter_context(
+                patch("transcode_forge.worker.pipeline.measure_vmaf", AsyncMock())
+            )
+            result = await _run(source, target_vmaf=97.0, crf_search=True)
+
+        search.assert_awaited_once()
+        measure.assert_not_awaited()
+        assert result["resolved_crf"] == 21
+        assert source.read_bytes() == b"y" * 5000
+
+    async def test_an_ordinary_search_failure_keeps_the_gate(self, tmp_path):
+        """A search that fails for any other reason falls back to the fixed
+        preset, and the full-file gate still has the final word."""
+        source = tmp_path / "ep.mkv"
+        source.write_bytes(b"x" * 10000)
+        search = AsyncMock(side_effect=VmafError("Sample encode failed"))
+
+        with _pipeline_patches(measured=(89.0, 88.0), search=search):
+            with pytest.raises(VmafGateError) as exc_info:
+                await _run(source, target_vmaf=97.0, crf_search=True)
+
+        assert exc_info.value.resolved_crf == 21  # the fixed preset was what got measured
+        assert exc_info.value.predicted_vmaf_mean is None
+        assert source.read_bytes() == b"x" * 10000
+
     async def test_a_nonfinite_measurement_never_swaps(self, tmp_path):
         """Codex full review 2026-09-12, finding F2. A NaN frame score in
         the libvmaf log pooled into a NaN mean and perc5, and both floor
@@ -222,6 +326,9 @@ class TestSearchUnchangedAndPredictionsPersist:
                 await _run(source, target_vmaf=97.0, crf_search=True)
 
         e = exc_info.value
+        assert e.step == "COMPARE"
+        assert e.vmaf_mean == 88.0
+        assert e.vmaf_perc5 == 80.0
         assert e.predicted_vmaf_mean == 97.1
         assert e.predicted_vmaf_perc5 == 95.3
         assert e.resolved_crf == 18
@@ -239,7 +346,10 @@ class TestSearchUnchangedAndPredictionsPersist:
                 await _run(source, target_vmaf=97.0, crf_search=True)
 
         e = exc_info.value
+        assert e.step == "COMPARE"
+        assert "larger than source" in e.message
         assert e.predicted_vmaf_mean == 97.1
+        assert e.predicted_vmaf_perc5 == 95.3
         assert e.resolved_crf == 18
         assert e.backend == "cpu"
 

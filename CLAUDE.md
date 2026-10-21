@@ -54,7 +54,10 @@ CI (`.github/workflows/tests.yml`) runs five jobs on every push and PR:
   `publish.yml`), and `scripts/check_image_lock.py` run inside the
   result must find every installed distribution pinned in `uv.lock` at
   the same version. The image installs from the lock export, so the
-  suite tests what the fleet runs.
+  suite tests what the fleet runs. It then copies the static libvmaf
+  ffmpeg out of that image and runs `tests/test_vmaf_integration.py`
+  through it with `TF_REQUIRE_LIBVMAF=1`: the only place a real VMAF
+  measurement runs under pytest (everywhere else the file self-skips).
 
 A formatting drift, type error, dialect regression, or CSS drift will
 fail the build — always run `ruff format`, `mypy src/`, and rebuild the

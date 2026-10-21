@@ -176,3 +176,28 @@ jobs:
         run: >-
           docker run --rm -v "$PWD/scripts:/scripts:ro" transcode-forge:ci
           python /scripts/check_image_lock.py
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --dev
+
+      - name: Real VMAF measurement with the image's own ffmpeg
+        # Every other VMAF test fakes the subprocess. This copies the static
+        # libvmaf build out of the image just built (one pin, the binary the
+        # fleet runs) and drives measure_vmaf through it for real.
+        # TF_REQUIRE_LIBVMAF=1 makes "cannot measure here" a failure, not a
+        # skip: a broken binary must not turn this lane green.
+        run: |
+          cid=$(docker create transcode-forge:ci)
+          docker cp "$cid:/opt/ffmpeg-vmaf/ffmpeg" "$RUNNER_TEMP/ffmpeg-vmaf"
+          docker rm "$cid" >/dev/null
+          chmod +x "$RUNNER_TEMP/ffmpeg-vmaf"
+          TF_VMAF_FFMPEG="$RUNNER_TEMP/ffmpeg-vmaf" TF_REQUIRE_LIBVMAF=1 \
+            uv run pytest tests/test_vmaf_integration.py
