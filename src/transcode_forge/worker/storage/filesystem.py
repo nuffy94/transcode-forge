@@ -20,9 +20,12 @@ import stat
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from transcode_forge.worker.storage.base import CommitResult
+
+if TYPE_CHECKING:
+    from transcode_forge.models.job import Job
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +107,7 @@ class FilesystemBackend:
         self,
         local_output: Path,
         source: str,
-        job: Any,
+        job: Job,
         space_saved: int = 0,
     ) -> CommitResult:
         """Commit the transcoded output.
@@ -121,15 +124,13 @@ class FilesystemBackend:
         Args:
             local_output: Path to the transcoded file (now at original location).
             source: Source path identifier (unused for filesystem backend).
-            job: Job object (Pydantic model or dict) with id, source_path, etc.
-                Used only for logging. Can be either type.
+            job: The job being committed; used only for logging.
             space_saved: Bytes reclaimed from the swap (passed from the pipeline result).
 
         Returns:
             CommitResult with output_size and space_saved.
         """
-        # Extract job_id for logging (support both Pydantic models and dicts).
-        job_id = job.id if hasattr(job, "id") else job.get("id", "unknown")
+        job_id = job.id
 
         # The output file is now at the original location (after the
         # swap inside run_pipeline). Just report the sizes.
@@ -165,14 +166,14 @@ class FilesystemBackend:
         # is a no-op because the scheduler calls the scanner directly.
         return []
 
-    async def cleanup(self, job: Any) -> None:
+    async def cleanup(self, job: Job) -> None:
         """Clean up temporary resources after a job.
 
         For filesystem backend, the pipeline's owned transaction already
         deletes .tf_tmp and .tf_lock at its exit, so this is a no-op.
 
         Args:
-            job: Job dict (unused).
+            job: The job (unused).
         """
         pass
 

@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from transcode_forge.config import Settings
+from transcode_forge.models.derivative import derivative_key_for_job
 from transcode_forge.models.job import Job, JobPhase
 from transcode_forge.models.library import StorageBackendType
 from transcode_forge.worker.hardware import HardwareCapabilities, detect_capabilities
@@ -630,7 +631,7 @@ class HttpWorkerAgent:
             # contract; appending both preserves it — the drain stops a
             # job's chain on a retryable failure and never reorders.
             if is_s3:
-                derivative_key = self._derivative_key_for(job, source_path_local)
+                derivative_key = derivative_key_for_job(job, source_path_local)
                 await self._deliver(
                     job.id,
                     "register_derivative",
@@ -1078,30 +1079,6 @@ class HttpWorkerAgent:
                 return path.replace(linux_prefix, local_prefix, 1)
         return path
 
-    def _derivative_key_for(self, job: Job, local_output: Path | str) -> str:
-        """Goal-keyed derivative key for a job (D6): source identity +
-        target codec/resolution/audio + target VMAF. Recipe details
-        (backend/crf/preset) deliberately don't participate — any worker's
-        gate-passing encode satisfies the same goal."""
-        from transcode_forge.models.derivative import (
-            compute_derivative_key,
-            target_resolution_for,
-        )
-
-        return compute_derivative_key(
-            source_path=job.source_path,
-            source_resolution=job.source_resolution or "",
-            source_audio_codec=getattr(job, "source_audio_codec", "") or "",
-            # Height-keyed for downscale jobs (shared rule — the scheduler's
-            # register-derivative row uses the same helper). Audio streams
-            # are always copied.
-            target_resolution=target_resolution_for(job.target_height, job.source_resolution),
-            target_audio_codec=getattr(job, "target_audio_codec", "") or "copy",
-            target_codec=job.target_codec or "hevc",
-            target_vmaf=job.target_vmaf,
-            local_output=Path(local_output),
-        )
-
     async def _try_dedup(self, job: Job, backend: Any) -> dict[str, Any] | None:
         """Check for a reusable derivative (S3 only).
 
@@ -1116,7 +1093,7 @@ class HttpWorkerAgent:
         Returns:
             A dict with output_size and derivative_key if found, None otherwise.
         """
-        derivative_key = self._derivative_key_for(job, Path(job.source_path))
+        derivative_key = derivative_key_for_job(job, job.source_path)
 
         logger.debug("Checking for derivative: %s", derivative_key)
 

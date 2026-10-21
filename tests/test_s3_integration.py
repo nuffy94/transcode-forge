@@ -12,7 +12,6 @@ The test will skip if MinIO is not reachable.
 
 import logging
 import tempfile
-from hashlib import blake2b
 from pathlib import Path
 from uuid import uuid4
 
@@ -206,6 +205,7 @@ class TestS3Integration:
         2. Creates an identical second job.
         3. Verifies the second job is marked COMPLETE via dedup lookup.
         """
+        from transcode_forge.models.derivative import derivative_key_for_job
         from transcode_forge.models.job import Job
         from transcode_forge.repos import derivatives as deriv_repo
         from transcode_forge.worker.storage.s3 import S3Backend
@@ -279,14 +279,9 @@ class TestS3Integration:
             job2.target_audio_codec = "aac"  # type: ignore
             job2.crf = 23  # type: ignore
 
-            # Compute the derivative key (same as job1).
-            hash_input = (
-                f"{job2.source_path}|{job2.source_resolution}|{job2.source_audio_codec}"
-                f"|{job2.target_resolution}|{job2.target_audio_codec}|"
-                f"{job2.encoder}|{job2.quality_value}|{job2.preset}"
-            )
-            key_hash = blake2b(hash_input.encode(), digest_size=16).hexdigest()
-            derivative_key = f"{key_hash}_{job2.encoder}-crf{job2.quality_value}.mkv"
+            # Same goal as job1, so the same key: the one function the agent
+            # and S3Backend.commit both name derivatives with.
+            derivative_key = derivative_key_for_job(job2, transcoded_file)
 
             # Look up the derivative.
             existing = await deriv_repo.lookup_by_key(db, derivative_key)

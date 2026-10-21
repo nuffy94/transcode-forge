@@ -287,7 +287,7 @@ class TestS3BackendErrorContracts:
         # The per-fetch scratch reservation must not leak on failure.
         assert list(scratch.scratch_root.iterdir()) == []
 
-    async def test_cleanup_accepts_job_model_and_dict(self, s3_settings: Settings, tmp_path: Path):
+    async def test_cleanup_accepts_the_job_model(self, s3_settings: Settings, tmp_path: Path):
         """_process_job passes a Pydantic Job model to cleanup() — it must
         not assume a dict (job.get raised AttributeError, escaping the
         job loop from the finally block)."""
@@ -300,4 +300,3 @@ class TestS3BackendErrorContracts:
             bucket="test-bucket",
         )
         await backend.cleanup(_make_s3_job())
-        await backend.cleanup({"id": "dict-job"})

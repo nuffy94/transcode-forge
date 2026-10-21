@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from transcode_forge.models.job import Job
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,7 @@ class StorageBackend(Protocol):
         self,
         local_output: Path,
         source: str,
-        job: Any,
+        job: Job,
         space_saved: int = 0,
     ) -> CommitResult:
         """Commit a transcoded output.
@@ -100,7 +103,7 @@ class StorageBackend(Protocol):
         Args:
             local_output: Path to the transcoded file (local filesystem).
             source: Source identifier (path or S3 key).
-            job: Job dict with id, source_path, quality_value, etc.
+            job: The job being committed.
             space_saved: For filesystem backend, the bytes reclaimed from swap.
                 For S3 backend, ignored (always 0).
 
@@ -123,13 +126,13 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def cleanup(self, job: Any) -> None:
+    async def cleanup(self, job: Job) -> None:
         """Clean up temporary resources for a job.
 
         Filesystem backend: a no-op (the pipeline cleans up .tf_* files).
         S3 backend: release scratch space and orphaned parts.
 
         Args:
-            job: Job dict.
+            job: The job to clean up after.
         """
         ...
