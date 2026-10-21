@@ -57,7 +57,7 @@
             <td class="col-mono text-xs text-forge-ink tabular-nums">{{ job.duration }}</td>
             <td class="col-mono text-xs text-forge-mute tabular-nums" data-visual-volatile>{{ job.completed_at[:10] if job.completed_at else '—' }}</td>
             <td class="text-right">
-                {% if job.status == 'failed' %}
+                {% if job.status in retryable_job_statuses %}
                 <span class="flex justify-end gap-1.5">
                     <button class="forge-iconbtn"
                             title="Retry this job"
@@ -67,6 +67,7 @@
                             hx-on::after-request="htmx.trigger('#outcomes-container', 'refresh')">
                         {{ icon('refresh', 'forge-icon--sm') }}
                     </button>
+                    {% if job.status == 'failed' %}
                     <button class="forge-iconbtn forge-iconbtn--danger"
                             title="Don't try this file again"
                             aria-label="Exclude permanently"
@@ -75,6 +76,7 @@
                             onclick="excludeFile(this.dataset.path, this.dataset.reason, 'outcomes-container'); return false;">
                         {{ icon('ban', 'forge-icon--sm') }}
                     </button>
+                    {% endif %}
                 </span>
                 {% endif %}
             </td>
