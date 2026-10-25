@@ -14,7 +14,10 @@ from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
+from transcode_forge.api.routes.jobs import cancel_waiting_job
+from transcode_forge.api.routes.media import queue_files
 from transcode_forge.api.routes.stats import collect_stats
+from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.mcp.registry import ToolSpec, check_policy
 from transcode_forge.models.job import Job, JobStatus
@@ -98,9 +101,11 @@ def _check_status(status: str | None) -> None:
         raise ToolError(f"Unknown status: {', '.join(unknown)[:MAX_TEXT]}")
 
 
-def build_tools(get_db: Callable[[], DBConnection]) -> list[ToolSpec]:
+def build_tools(get_db: Callable[[], DBConnection], settings: Settings) -> list[ToolSpec]:
     """The tool functions, bound to the database getter. Each function's
-    signature is the tool's input schema."""
+    signature is the tool's input schema. The two write tools call the same
+    functions the REST handlers call, so there is one queue rule and one
+    cancel rule."""
 
     async def list_libraries() -> dict[str, Any]:
         rows = await lib_repo.list_libraries(get_db())
@@ -153,7 +158,32 @@ def build_tools(get_db: Callable[[], DBConnection]) -> list[ToolSpec]:
     async def stats() -> dict[str, Any]:
         return await collect_stats(get_db())
 
+    async def cancel_job(job_id: str) -> dict[str, Any]:
+        try:
+            job = await cancel_waiting_job(get_db(), job_id)
+        except (LookupError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+        return {"job": _job_row(job, JOB_LIST_FIELDS)}
+
+    async def queue_file(
+        file_id: str, codec: str | None = None, target_height: int | None = None
+    ) -> dict[str, Any]:
+        if codec not in (None, "hevc", "av1"):
+            raise ToolError("codec must be hevc or av1")
+        if target_height not in (None, 1080, 720):
+            raise ToolError("target_height must be 1080 or 720")
+        result = await queue_files(
+            get_db(), settings, file_ids=[file_id], codec=codec, target_height=target_height
+        )
+        return {"queued": result["queued"], "skipped": result["skipped"]}
+
     specs = [
+        ToolSpec(
+            "cancel_job",
+            "Cancel a job that is still waiting (pending or queued). A job a worker "
+            "already holds cannot be cancelled here.",
+            cancel_job,
+        ),
         ToolSpec(
             "get_job",
             "One job in full: source and output details, quality numbers, status and timing.",
@@ -178,6 +208,14 @@ def build_tools(get_db: Callable[[], DBConnection]) -> list[ToolSpec]:
             "status. Filter by library id, transcode status or a filename search. "
             "limit is 1 to 200.",
             list_media,
+        ),
+        ToolSpec(
+            "queue_file",
+            "Queue one catalog file for transcoding by its file id. Optional codec "
+            "(hevc or av1; the default codec otherwise) and target_height (1080 or 720) "
+            "for a downscale. The same eligibility rules as the queue page apply; "
+            "'skipped' is 1 when the file was not eligible.",
+            queue_file,
         ),
         ToolSpec(
             "queue_summary",

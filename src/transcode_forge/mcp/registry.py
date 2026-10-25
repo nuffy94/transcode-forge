@@ -15,10 +15,12 @@ from typing import Any
 from transcode_forge.repos.oauth import SCOPES
 
 TOOL_SCOPES: dict[str, frozenset[str]] = {
+    "cancel_job": frozenset({"jobs:write"}),
     "get_job": frozenset({"jobs:read"}),
     "list_jobs": frozenset({"jobs:read"}),
     "list_libraries": frozenset({"catalog:read"}),
     "list_media": frozenset({"catalog:read"}),
+    "queue_file": frozenset({"jobs:write"}),
     "queue_summary": frozenset({"jobs:read"}),
     "stats": frozenset({"jobs:read"}),
 }
