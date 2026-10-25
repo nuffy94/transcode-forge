@@ -14,6 +14,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   revoked at `/api/mcp/grants`. Mounted only when `TF_PUBLIC_URL` is set.
   Migration 0019 adds `oauth_clients`, `oauth_grants` and `oauth_tokens`.
   Design: `docs/MCP.md`; threat model: `docs/MCP-THREAT-MODEL.md`.
+- **Sign-in for MCP clients.** The scheduler is its own OAuth 2.1
+  authorization server: `/oauth/authorize`, a consent page under the admin
+  login, `/oauth/token`, `/oauth/revoke` and the RFC 8414 metadata document.
+  Claude Code and claude.ai connect with nothing but the URL, identify
+  themselves with their client metadata document, and get a grant on your
+  consent; refresh tokens rotate, a replayed code or refresh token revokes
+  the grant, and the `resource` is checked at both ends. Clients are
+  managed under Settings, Connected apps: the Claude Code document is
+  allowed when the endpoint is on, other document URLs and hand-registered
+  clients are added there. Migration 0020 adds `oauth_transactions` and
+  `oauth_clients.metadata_fetched_at`.
+- **Write tools.** `queue_file` and `cancel_job` under the `jobs:write`
+  scope, obtained only through a step-up consent. They call the same
+  functions the REST routes call.
+- **Login returns to the page asked for.** An unauthenticated page request
+  now redirects to `/login?next=...`; after login the browser goes back to
+  that local path (the consent page, most of all).
 
 ## [0.16.0] - 2026-09-16
 

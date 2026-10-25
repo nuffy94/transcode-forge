@@ -2,8 +2,8 @@
 
 Transcode Forge exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 endpoint at `/mcp` so an AI client (Claude Code, Claude Desktop, claude.ai, or
-any other MCP client) can read the catalog and the queue and, from Phase 2,
-queue or cancel work. The endpoint speaks the 2026-07-28 protocol revision
+any other MCP client) can read the catalog and the queue and, with the write
+scope, queue or cancel work. The endpoint speaks the 2026-07-28 protocol revision
 over Streamable HTTP and follows the
 [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization):
 the server is an OAuth 2.1 resource server, every request carries a bearer
@@ -55,14 +55,15 @@ Components:
 - **Protected resource metadata.** RFC 9728 document at
   `/.well-known/oauth-protected-resource/mcp` naming the canonical resource URL,
   the authorization server and the initial scope set.
-- **Authorization server (Phase 2).** `/oauth/authorize`, `/oauth/token`,
-  `/oauth/revoke` and the RFC 8414 metadata document. The SDK supplies the
-  protocol handlers; Transcode Forge supplies client lookup, the consent page,
-  grant storage and token minting.
-- **Grant store.** Three tables, described below.
+- **Authorization server.** `/oauth/authorize`, `/oauth/consent`,
+  `/oauth/token`, `/oauth/revoke` and the RFC 8414 metadata document, all in
+  `mcp/authz.py`. Transcode Forge owns every check; the SDK supplies the
+  request and metadata models and the redirect builder.
+- **Grant store.** Four tables, described below.
 - **Settings page.** A "Connected apps" section listing grants with a revoke
-  action. In Phase 1 it also issues a manual grant for clients that configure
-  a bearer header instead of running the browser flow.
+  action and the clients allowed to sign in. It also issues a manual grant
+  for clients that configure a bearer header instead of running the browser
+  flow.
 - **Audit log.** One structured record per tool call.
 
 ## Authentication classes
@@ -76,7 +77,8 @@ token never satisfies an admin route.
 | `/mcp` | Bearer token resolving to a live grant | No (bearer, not cookie) |
 | `/.well-known/oauth-protected-resource/*`, `/.well-known/oauth-authorization-server` | None (public metadata) | No |
 | `/oauth/token`, `/oauth/revoke` | OAuth protocol rules (PKCE, registered client) | No |
-| `/oauth/authorize`, the consent form | Admin session cookie | Yes, plus a consent nonce |
+| `/oauth/authorize` | None: it validates and parks the request, nothing is granted | No (GET) |
+| `/oauth/consent`, page and decision | Admin session cookie | Yes, plus a consent nonce |
 | `/api/mcp/*` (Settings) | Admin session cookie | Yes |
 
 The auth middleware's public-prefix list is the single place this split is
@@ -111,7 +113,7 @@ once at issue time and is never written to the database or a log.
 |------|----------|-------|
 | Access | 1 hour | Verified on every request by one lookup |
 | Refresh | 30 days from authorization | Rotated on use; a replayed refresh token revokes the whole grant |
-| Code | 10 minutes | Single use; consumed atomically with issuance |
+| Code | 10 minutes | Single use; lives on its authorization transaction; consumed by one conditional update, and a reuse revokes the grant |
 
 Verification is one query: token digest, then the grant, then the client. The
 token must be the expected kind and unexpired, the grant unrevoked and inside
@@ -122,9 +124,10 @@ canonical resource, and the grant's scopes a superset of what the tool needs.
 
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
-| `oauth_clients` | Known clients | `id` (the client id), `kind` (`cimd` or `admin`), `name`, `redirect_uris` (JSON list), `metadata_url`, `disabled_at` |
+| `oauth_clients` | Known clients | `id` (the client id), `kind` (`cimd` or `admin`), `name`, `redirect_uris` (JSON list), `metadata_url`, `metadata_fetched_at`, `disabled_at` |
 | `oauth_grants` | Consent decisions | `id`, `client_id`, `user_id`, `scopes` (space separated), `resource`, `label`, `created_at`, `expires_at`, `revoked_at` |
-| `oauth_tokens` | Credentials under a grant | `token_hash` (primary key), `grant_id`, `kind`, `created_at`, `expires_at`, `consumed_at` |
+| `oauth_tokens` | Access and refresh tokens under a grant | `token_hash` (primary key), `grant_id`, `kind`, `created_at`, `expires_at`, `consumed_at` |
+| `oauth_transactions` | One authorization request from start to finish | `id`, `client_id`, `redirect_uri`, `code_challenge`, `scopes`, `resource`, `state`, `nonce_hash`, `expires_at`, `approved_at`, `grant_id`, `code_hash`, `consumed_at` |
 
 ## Scopes
 
@@ -132,7 +135,7 @@ canonical resource, and the grant's scopes a superset of what the tool needs.
 |-------|--------|-------|
 | `catalog:read` | Libraries and the media catalog | `list_libraries`, `list_media` |
 | `jobs:read` | Jobs, queue state, statistics | `list_jobs`, `get_job`, `queue_summary`, `stats` |
-| `jobs:write` | Queueing and cancelling work (Phase 2) | `queue_file`, `cancel_job` |
+| `jobs:write` | Queueing and cancelling work | `queue_file`, `cancel_job` |
 
 The metadata document advertises `catalog:read jobs:read` as the initial set.
 A write scope is only ever obtained through a step-up consent triggered by a
@@ -178,40 +181,70 @@ No repository call happens before step 4 succeeds.
   decision and reason, outcome, duration and a correlation id. Tokens and
   tool arguments are never logged.
 
-## Authorization server (Phase 2)
+## Authorization server
 
-The SDK's handlers provide the `/authorize`, `/token` and `/revoke` endpoints
-and the metadata document, and already enforce PKCE with `S256`, exact
-`redirect_uri` matching, authorization code expiry and the `resource`
-parameter's plumbing. Transcode Forge owns the rest:
+Every endpoint of the authorization server is Transcode Forge code in one
+module, `mcp/authz.py`, mounted by the same `TF_PUBLIC_URL` switch as
+`/mcp`. The SDK's own authorization handlers are not used. In the pinned
+SDK they drop the token request's `resource`, load a code in one call and
+redeem it in another, match redirect URIs exactly, build metadata without
+the two flags the Claude clients check, and send error redirects without
+`iss`. Owning the four endpoints means a reviewer finds PKCE, the resource
+check and the replay rule in this repository, and an SDK upgrade cannot move
+them. The SDK still supplies the request and metadata models, the redirect
+builder and the CORS wrapper.
 
-- **Client registration.** Two kinds. A `cimd` client identifies itself with
-  an HTTPS URL that serves its metadata document; the document is fetched with
-  an SSRF guard (HTTPS only, public addresses only, redirects not followed,
-  size and time bounds) and accepted only when the URL is on an allowlist the
-  operator edits in Settings, seeded with the Claude clients. An `admin`
-  client is created by the operator in Settings with a name and exact redirect
-  URIs. Both are public clients: PKCE is mandatory and no client secret exists.
-  Dynamic client registration is not offered; the metadata advertises
-  `client_id_metadata_document_supported` and `none` as the token endpoint
-  authentication method so clients that support metadata documents choose
-  them.
-- **Redirect URIs.** Exact string match, with one exception from RFC 8252
-  section 7.3: a registered loopback URI matches any port, because native
-  clients bind an ephemeral port. Scheme, host and path still have to match.
-- **Consent.** The authorize endpoint validates the request, stores a
-  short-lived transaction (client, redirect URI, PKCE challenge, scopes,
-  resource) and renders the consent page to the logged-in administrator.
-  Approval requires the admin session and a nonce bound to that transaction.
-  Being logged in is not consent. Approval creates the grant and the code in
-  one transaction.
-- **Token endpoint.** The `resource` parameter is required at both
-  authorization and token time and must equal the canonical resource; the SDK
-  parses it but does not validate it, so that check is Transcode Forge's.
-  Codes are consumed atomically with issuance. Refresh tokens rotate on use;
-  a consumed refresh token presented again revokes the grant.
-- **Responses.** The `iss` parameter is included on authorization responses,
-  including error redirects, and the metadata advertises it.
+- **One transaction row per request.** `/oauth/authorize` validates the
+  request (a registered client, a registered redirect URI, S256 PKCE, known
+  scopes, the canonical `resource`) and stores it in `oauth_transactions`,
+  then sends the browser to `/oauth/consent`. Rendering the consent page
+  arms the row with a nonce; approving it records `approved_at`, creates the
+  grant and stores the code's digest on the same row; redeeming the code
+  sets `consumed_at`. That one column is the single conditional update that
+  makes a code single use. An unauthenticated administrator is sent to
+  `/login` and returned to the consent page afterwards.
+- **Client registration.** Two kinds, both rows of `oauth_clients`, both
+  public clients (PKCE always, no secret). A `cimd` client is identified by
+  the HTTPS URL of its metadata document; allowing the URL in Settings is
+  the whole registration, and the Claude Code document is allowed on every
+  installation that turns the endpoint on. The document is fetched at
+  authorization time by `mcp/cimd.py` with the guard the threat model
+  describes (HTTPS only, public addresses only, the connection pinned to the
+  vetted address, no redirects, size and time bounds, the document's own
+  `client_id` equal to its URL), then cached on the row for an hour. An
+  `admin` client is created in Settings with a name and exact redirect URIs,
+  for clients that publish no document. Dynamic client registration is not
+  offered; the metadata advertises `client_id_metadata_document_supported`
+  and `none` as the token endpoint authentication method, which is what the
+  Claude clients require before they use their document.
+- **Redirect URIs.** Exact string match of scheme, host, path and query,
+  with one exception from RFC 8252 section 7.3: a registered loopback URI
+  (`localhost`, `127.0.0.1`, `[::1]`) matches any port, because native
+  clients bind an ephemeral port and Claude Code declares both loopback
+  names. An unregistered redirect URI gets a direct `400`, never a redirect.
+- **Consent.** The page names the client by the host of its document URL
+  first (a document is self-asserted), the scopes in words, and the host the
+  browser returns to, with a warning when that host is a loopback address.
+  Approval needs the admin session, the nonce the page carried, and a
+  same-origin POST; the page is served with `frame-ancestors 'none'`. Being
+  logged in is not consent: a crafted authorize link grants nothing until
+  the form is posted. Denying sends `access_denied`.
+- **Token endpoint.** `resource` is required at the code exchange and must
+  equal the canonical resource; on a refresh it is checked when present.
+  The code is consumed before anything else is checked, so a wrong verifier
+  or a wrong client burns it, and a second redemption revokes the grant the
+  code created. Refresh tokens rotate on use, inherit the grant's deadline,
+  and a consumed one presented again revokes the grant. A refresh may ask
+  for a narrower scope and never a wider one. The response is never
+  cacheable.
+- **Revocation endpoint.** RFC 7009: a client revokes a grant by either of
+  its tokens; a token that belongs to another client, or to nobody, is
+  answered `200` without effect.
+- **Responses.** The `iss` parameter is on every authorization response,
+  success and error, and the metadata advertises it.
+- **Audit.** Consent decisions, token issuance, replays and revocations are
+  JSON records on the `transcode_forge.mcp.audit` logger, never carrying a
+  code, a verifier or a token.
 
 ## External issuer mode (Phase 3)
 
@@ -236,25 +269,39 @@ server, the scope gate, the registry and the audit log are identical in both.
 - Clients have to speak the 2026-07-28 revision. Claude Code's current runtime
   does; a session pinned to the older runtime cannot connect.
 
-## Connecting a client (Phase 1)
+## Connecting a client
 
 1. Set `TF_PUBLIC_URL` to the HTTPS origin the client will use and restart.
-2. In Settings, or with `POST /api/mcp/grants`, issue a grant with a label
-   and the scopes it needs. The token is shown once.
-3. Register the server in the client with that token as a bearer header.
-   For Claude Code:
+   The Claude Code client document is allowed at that moment; disable it
+   under Settings, Connected apps, if you do not want it.
+2. Give the client the URL. For Claude Code:
 
    ```bash
-   claude mcp add --transport http forge https://forge.example.com/mcp --header "Authorization: Bearer <token>"
+   claude mcp add --transport http forge https://forge.example.com/mcp
    ```
 
-   The client has to speak the 2026-07-28 revision; Claude Code's current
-   runtime does (`MCP_SDK_GENERATION=v2` forces it).
-4. Revoke the grant from the same place when the client is retired. The
-   token stops working at its next request.
+   then run `/mcp` inside Claude Code to sign in. The browser opens on the
+   consent page (after the login page, if needed), you allow the scopes, and
+   the client holds its own token from then on. For claude.ai, add the URL
+   under Customize, Connectors, Add custom connector, with "Use Claude's
+   published identity". If the authorize step refuses a client that is not
+   allowed yet, the error names the document URL; allow it under Settings.
+3. A tool that needs a scope the grant does not hold answers `403` with the
+   scope; the client asks you to re-authorize and retries. A write grant
+   is only ever obtained this way.
+4. Revoke the grant under Settings, Connected apps, when the client is
+   retired; the token stops working at its next request. Disabling a
+   client cuts off every grant it holds.
 
-Phase 2 replaces step 2 and 3 with the browser flow: the client is given
-only the URL and obtains its own token through consent.
+A client that cannot run the browser flow still gets a manual grant from
+the same page and sends it as a bearer header:
+
+```bash
+claude mcp add --transport http forge https://forge.example.com/mcp --header "Authorization: Bearer <token>"
+```
+
+The client has to speak the 2026-07-28 revision; Claude Code's current
+runtime does (`MCP_SDK_GENERATION=v2` forces it).
 
 ## Phases
 
@@ -274,6 +321,7 @@ run commands or fetch arbitrary URLs, and worker-side use of MCP.
 ## Dependencies
 
 The official `mcp` package, pinned in `uv.lock`. Its transport, bearer
-authentication middleware, authorization handlers and header validation are
-used as published; the version is bumped deliberately and the tests in the
-threat model are the regression gate.
+authentication middleware and header validation are used as published; its
+authorization handlers are not (see "Authorization server"). The version is
+bumped deliberately and the tests in the threat model are the regression
+gate.

@@ -222,6 +222,23 @@ revocation). Every tool needs an entry in `TOOL_SCOPES`; `check_policy`
 fails the build otherwise. Audit records go to the
 `transcode_forge.mcp.audit` logger and never contain a token.
 
+The authorization server is `mcp/authz.py`: `/oauth/authorize` validates a
+request and parks it as one `oauth_transactions` row (migration 0020),
+`/oauth/consent` is the admin-session page whose nonce the decision must
+carry, `/oauth/token` redeems codes and rotates refresh tokens, and
+`/oauth/revoke` is RFC 7009. The SDK's authorization handlers are
+deliberately not mounted (they drop the token-time `resource`, split load
+from redeem, match redirects exactly and omit the metadata flags Claude
+needs); only its models and redirect builder are used. Clients are rows of
+`oauth_clients`: a `cimd` row's id is its metadata document URL, fetched by
+`mcp/cimd.py` behind an SSRF guard and cached on the row; an `admin` row is
+registered in Settings with exact redirect URIs. A registered loopback
+redirect matches any port. `redeem_code` and `redeem_refresh_token` in
+`repos/oauth.py` are each one conditional UPDATE; a replay revokes the
+grant. Everything under `/mcp`, `/oauth` and `/.well-known` is mounted only
+when `TF_PUBLIC_URL` is set, and `tests/test_mcp_authz.py` walks the route
+table to prove it.
+
 ### Web UI
 
 Jinja2 templates with HTMX for partials. "Forge Console" design — warm
@@ -247,7 +264,8 @@ src/transcode_forge/
 │                        # encoder.py, hardware.py, storage/
 ├── scanner/             # scanner.py, probe.py
 ├── migrations/          # numbered .sql files + runner
-├── mcp/                 # the /mcp resource server: registry, tools, gate, app
+├── mcp/                 # /mcp: registry, tools, gate, app; authz + cimd = the
+│                        # OAuth authorization server and the client-document fetch
 └── web/                 # routes.py, websocket.py, templates/, static/
 ```
 
