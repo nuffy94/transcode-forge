@@ -1,0 +1,29 @@
+{% from "partials/_icons.html" import icon %}
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    {% include "partials/_head.html" %}
+    <title>Sign-in request · Transcode Forge</title>
+</head>
+<body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
+    <div class="forge-seam" aria-hidden="true"></div>
+
+    <div class="w-full max-w-md relative z-10">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <span class="forge-brand-mark">{{ icon('flame', 'forge-icon--lg') }}</span>
+            <span>
+                <span class="forge-brand-eyebrow">Transcode</span>
+                <span class="forge-brand-word font-display !text-3xl">FORGE</span>
+            </span>
+        </div>
+
+        <div class="forge-panel">
+            <div class="forge-panel-hd"><h1 class="forge-panel-title">Sign-in request</h1></div>
+            <div class="p-4 space-y-4">
+                <p class="text-sm leading-relaxed" role="alert">{{ message }}</p>
+                <a href="/" class="forge-btn inline-flex">Back to the dashboard</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

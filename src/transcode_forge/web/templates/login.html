@@ -50,7 +50,7 @@
                 body: JSON.stringify({password: pwd}),
             });
             if (r.ok) {
-                window.location.href = '/';
+                window.location.href = {{ next_url | tojson }};
             } else {
                 err.textContent = 'Invalid password';
                 err.classList.remove('hidden');

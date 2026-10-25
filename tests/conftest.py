@@ -147,3 +147,24 @@ async def unauthed_client(app: Any) -> AsyncClient:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest_asyncio.fixture
+async def mcp_running(app: Any) -> AsyncIterator[None]:
+    """The MCP transport's session manager, running as the lifespan would run
+    it (the app fixture skips the lifespan). Entered and left in one dedicated
+    task: its task group refuses to exit from another."""
+    import asyncio
+
+    started, stop = asyncio.Event(), asyncio.Event()
+
+    async def runner() -> None:
+        async with app.state.mcp_session_manager.run():
+            started.set()
+            await stop.wait()
+
+    task = asyncio.create_task(runner())
+    await started.wait()
+    yield
+    stop.set()
+    await task

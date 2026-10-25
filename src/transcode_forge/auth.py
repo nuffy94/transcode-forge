@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -37,9 +38,15 @@ PUBLIC_PREFIXES = (
     "/partials/health",
     "/.well-known/",  # OAuth metadata documents (RFC 9728, RFC 8414)
 )
-# /mcp authenticates with a bearer token inside its own middleware stack
-# (docs/MCP.md, "Authentication classes"); the session cookie never counts there.
-PUBLIC_PATHS = {"/login", "/favicon.ico", "/mcp"}
+# Paths that authenticate by protocol rules of their own, never the session
+# cookie (docs/MCP.md, "Authentication classes"): /mcp takes a bearer token
+# inside its own middleware stack; the token and revocation endpoints take a
+# registered public client with PKCE. They are public to the session check
+# and exempt from the CSRF check, which is a cookie-attack class.
+PROTOCOL_PATHS = frozenset({"/mcp", "/oauth/token", "/oauth/revoke"})
+# /oauth/authorize validates and parks a request without granting anything;
+# the consent page that follows it is NOT public: it needs the admin session.
+PUBLIC_PATHS = {"/login", "/favicon.ico", "/oauth/authorize", *PROTOCOL_PATHS}
 
 
 def _is_public(path: str) -> bool:
@@ -77,7 +84,7 @@ def _csrf_check(scope: dict[str, Any]) -> Response | None:
         return None
 
     path = scope.get("path", "")
-    if path.startswith("/api/worker/") or path == "/mcp":  # bearer auth, not cookie
+    if path.startswith("/api/worker/") or path in PROTOCOL_PATHS:  # bearer auth, not cookie
         return None
     if path in CSRF_EXEMPT_PATHS:
         return None
@@ -158,9 +165,12 @@ class AuthMiddleware:
         elif _is_api(path):
             resp = JSONResponse(status_code=401, content={"detail": "Not authenticated"})
         else:
-            # We can't know yet whether setup is required without DB access here;
-            # the /login page itself bounces to /setup if needed.
-            resp = RedirectResponse(url="/login", status_code=302)
+            # Carry the page asked for, so login returns there (the consent
+            # page of an authorization request, most of all). The login route
+            # keeps only a local path.
+            query = scope.get("query_string", b"").decode()
+            wanted = path + (f"?{query}" if query else "")
+            resp = RedirectResponse(url=f"/login?{urlencode({'next': wanted})}", status_code=302)
         await resp(scope, receive, send)
 
 
