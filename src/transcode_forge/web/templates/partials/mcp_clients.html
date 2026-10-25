@@ -1,0 +1,56 @@
+{% from "partials/_icons.html" import icon %}
+{% if clients %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            <th>Client</th>
+            <th>Identity</th>
+            <th>Redirects to</th>
+            <th>Status</th>
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in clients %}
+        <tr>
+            <td>
+                <span class="text-forge-paper">{{ c.name or '(unnamed)' }}</span>
+                <span class="block font-mono text-2xs text-forge-mute">{% if c.kind == 'cimd' %}metadata document{% else %}registered here{% endif %}</span>
+            </td>
+            <td class="col-mono text-forge-mute break-all">{{ c.id }}</td>
+            <td class="col-mono text-forge-mute">
+                {% if c.redirect_uris %}
+                {% for uri in c.redirect_uris %}<span class="block break-all">{{ uri }}</span>{% endfor %}
+                {% else %}
+                <span class="text-forge-mute">read at first sign-in</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if c.status == "disabled" %}
+                <span class="forge-pill forge-pill--cancelled">Disabled</span>
+                {% else %}
+                <span class="forge-pill forge-pill--complete">Active</span>
+                {% endif %}
+            </td>
+            <td class="text-right">
+                {% if c.status != "disabled" %}
+                <button class="forge-iconbtn forge-iconbtn--danger"
+                        title="Disable this client"
+                        aria-label="Disable client {{ c.name or c.id }}"
+                        data-client="{{ c.id }}"
+                        onclick="disableMcpClient(this.dataset.client); return false;">
+                    {{ icon('ban', 'forge-icon--sm') }}
+                </button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="forge-empty py-6">
+    {{ icon('key') }}
+    <p class="forge-empty-title">No clients</p>
+    <p class="forge-empty-hint">Allow a client above. The Claude clients are allowed when the endpoint is on.</p>
+</div>
+{% endif %}

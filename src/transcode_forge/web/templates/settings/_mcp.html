@@ -67,5 +67,42 @@
         {% endif %}
 
         <div id="mcp-grants-list" hx-get="/partials/mcp-grants" hx-trigger="load, refresh" hx-swap="innerHTML"></div>
+
+        {% if mcp.enabled %}
+        <div class="forge-panel p-3 mt-4 mb-3">
+            <p class="forge-stat-label mb-1">Clients</p>
+            <p class="font-mono text-2xs text-forge-mute mb-3 leading-relaxed">
+                A client signs in through the browser and gets its own grant on your consent.
+                Claude Code and claude.ai identify themselves with a metadata document URL;
+                any other client is registered here with the exact addresses it returns to.
+            </p>
+            <div class="flex flex-wrap items-end gap-2.5">
+                <div>
+                    <label for="mcp-client-kind" class="forge-stat-label block mb-1">Kind</label>
+                    <select id="mcp-client-kind" class="forge-input">
+                        <option value="cimd">Metadata document URL</option>
+                        <option value="admin">Registered here</option>
+                    </select>
+                </div>
+                <div class="flex-1 min-w-[220px]" data-client-kind="cimd">
+                    <label for="mcp-client-url" class="forge-stat-label block mb-1">Document URL</label>
+                    <input id="mcp-client-url" type="url" placeholder="https://claude.ai/oauth/..." class="forge-input w-full">
+                </div>
+                <div class="flex-1 min-w-[160px] hidden" data-client-kind="admin">
+                    <label for="mcp-client-name" class="forge-stat-label block mb-1">Name</label>
+                    <input id="mcp-client-name" type="text" placeholder="e.g. MCP Inspector" class="forge-input w-full">
+                </div>
+                <div class="flex-1 min-w-[220px] hidden" data-client-kind="admin">
+                    <label for="mcp-client-redirects" class="forge-stat-label block mb-1">Redirect URIs, one per line</label>
+                    <textarea id="mcp-client-redirects" rows="2" placeholder="http://localhost/callback" class="forge-input w-full"></textarea>
+                </div>
+                <button id="mcp-client-allow-btn" class="forge-btn forge-btn--ember">
+                    {{ icon('key', 'forge-icon--sm') }}
+                    <span>Allow client</span>
+                </button>
+            </div>
+        </div>
+        <div id="mcp-clients-list" hx-get="/partials/mcp-clients" hx-trigger="load, refresh" hx-swap="innerHTML"></div>
+        {% endif %}
     </div>
 </section>
