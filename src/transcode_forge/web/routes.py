@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, Response
@@ -86,12 +87,20 @@ def _render(request: Request, name: str, context: dict[str, Any] | None = None) 
 
 def safe_next(value: str) -> str:
     """The page to return to after login: a local path, or the dashboard.
-    Anything that could leave this origin (a scheme, a protocol-relative
-    ``//host``) is dropped, so a crafted login link cannot send the
-    administrator elsewhere."""
-    if value.startswith("/") and not value.startswith(("//", "/\\")):
-        return value
-    return "/"
+
+    Anything that could leave this origin is dropped, so a crafted login
+    link cannot send the administrator elsewhere: a scheme, a
+    protocol-relative ``//host``, a backslash (browsers read it as a slash)
+    and any control character or space (browsers strip tabs and newlines
+    before parsing, so ``/\\n/host`` would become ``//host``). What remains
+    is rebuilt from its parsed path and query, never echoed as received.
+    """
+    if any(ord(ch) < 33 or ch == "\\" for ch in value):
+        return "/"
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc or not parts.path.startswith("/"):
+        return "/"
+    return urlunsplit(("", "", parts.path, parts.query, ""))
 
 
 @router.get("/login", response_class=HTMLResponse)

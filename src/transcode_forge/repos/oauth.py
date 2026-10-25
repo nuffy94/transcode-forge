@@ -502,21 +502,46 @@ async def deny_transaction(db: DBConnection, txn_id: str, *, nonce: str) -> bool
     return bool(cur.rowcount)
 
 
+async def _consume(
+    db: DBConnection, table: str, key_column: str, key: str, *, extra_where: str = ""
+) -> bool:
+    """The one conditional update that spends a credential.
+
+    Stamps ``consumed_at`` and a marker only this call knows, commits, then
+    reads the marker back. The read-back is what makes it safe on SQLite's
+    shared connection: another request's rollback between the update and
+    the commit erases the stamp while the cursor still reports a row
+    changed. True only when this call spent the credential and the stamp
+    persisted. The table and column names are module constants, never input.
+    """
+    marker = secrets.token_hex(16)
+    cur = await db.execute(
+        f"UPDATE {table} SET consumed_at = ?, consumed_by = ? "
+        f"WHERE {key_column} = ? AND consumed_at IS NULL{extra_where}",
+        (_now().isoformat(), marker, key),
+    )
+    await db.commit()
+    if not cur.rowcount:
+        return False
+    async with db.execute(
+        f"SELECT consumed_by FROM {table} WHERE {key_column} = ?", (key,)
+    ) as check:
+        row = await check.fetchone()
+    return row is not None and row["consumed_by"] == marker
+
+
 async def redeem_code(db: DBConnection, code: str) -> dict[str, Any] | None:
     """Consume an authorization code: one conditional update.
 
     Returns the transaction (client, redirect URI, PKCE challenge, grant)
-    on the first redemption and None for an unknown or expired code. A
+    on the first redemption and None for an unknown or expired code, or
+    for a consumption that did not persist (the client may retry). A
     second redemption raises ``ReplayError`` and revokes the grant the code
     created, because a reused code means it leaked.
     """
     code_hash = hash_token("code", code)
     now = _now()
-    cur = await db.execute(
-        "UPDATE oauth_transactions SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL",
-        (now.isoformat(), code_hash),
-    )
-    await db.commit()
+    spent = await _consume(db, "oauth_transactions", "code_hash", code_hash)
     async with db.execute(
         "SELECT * FROM oauth_transactions WHERE code_hash = ?", (code_hash,)
     ) as lookup:
@@ -524,7 +549,9 @@ async def redeem_code(db: DBConnection, code: str) -> dict[str, Any] | None:
     if row is None:
         return None
     r = dict(row)
-    if not cur.rowcount:
+    if not spent:
+        if r["consumed_at"] is None:
+            return None  # our stamp was rolled back from under us: refuse, no replay
         if r["grant_id"]:
             await revoke_grant(db, r["grant_id"])
         raise ReplayError()
@@ -618,13 +645,15 @@ async def redeem_refresh_token(
     scopes = r["scopes"].split()
     if requested_scopes is not None and not requested_scopes <= set(scopes):
         raise ScopeError("scope is wider than the grant")
-    cur = await db.execute(
-        "UPDATE oauth_tokens SET consumed_at = ? "
-        "WHERE token_hash = ? AND kind = 'refresh' AND consumed_at IS NULL",
-        (now.isoformat(), token_hash),
-    )
-    await db.commit()
-    if not cur.rowcount:
+    if not await _consume(
+        db, "oauth_tokens", "token_hash", token_hash, extra_where=" AND kind = 'refresh'"
+    ):
+        async with db.execute(
+            "SELECT consumed_at FROM oauth_tokens WHERE token_hash = ?", (token_hash,)
+        ) as check:
+            after = await check.fetchone()
+        if after is not None and after["consumed_at"] is None:
+            return None  # our stamp was rolled back from under us: refuse, no replay
         await revoke_grant(db, r["id"])
         raise ReplayError()
     return {**r, "scopes": scopes}

@@ -369,6 +369,10 @@ async def test_login_returns_to_a_local_page_only(client: AsyncClient) -> None:
         "https://evil.example",
         "/\\evil.example",
         "javascript:alert(1)",
+        "/\n/evil.example/x",
+        "/\t/evil.example/x",
+        "/\r/evil.example/x",
+        "/ /evil.example/x",
     ):
         assert safe_next(hostile) == "/", hostile
         page = await client.get("/login", params={"next": hostile})
@@ -772,3 +776,63 @@ def test_redirect_matches_rule() -> None:
         "https://claude.ai/api/mcp/auth_callback", "https://claude.ai/api/mcp/auth_callback"
     )
     assert not authz.redirect_matches("https://a.example/cb?x=1", "https://a.example/cb?x=2")
+
+
+# ── review findings (2026-10-25) ─────────────────────────────────────
+
+
+async def test_startup_seeding_keeps_a_disabled_client_disabled(
+    anon: AsyncClient, client: AsyncClient, mcp_running: Any, app: Any
+) -> None:
+    """Seeding creates the Claude documents on first boot and never undoes
+    an operator's decision: a disabled client stays disabled across restarts,
+    and the tokens it held stay dead."""
+    from urllib.parse import quote
+
+    tokens = await obtain_tokens(anon, client)
+    disabled = await client.delete(f"/api/mcp/clients/{quote(CLAUDE_CODE, safe='')}")
+    assert disabled.status_code == 200
+    await authz.seed_clients(app.state.db)  # what the next scheduler start does
+    rows = (await client.get("/api/mcp/clients")).json()["data"]
+    assert next(r for r in rows if r["id"] == CLAUDE_CODE)["status"] == "disabled"
+    assert (await mcp_list(anon, tokens["access_token"])).status_code == 401
+    assert (await refresh(anon, tokens["refresh_token"])).status_code == 401
+    assert (await authorize(anon))[0].status_code == 400
+
+
+@pytest.mark.parametrize(
+    "registered",
+    [
+        "https://client.example",
+        "https://client.example:443/cb",
+        "https://CLIENT.example/cb",
+        "http://localhost:80/callback",
+    ],
+)
+async def test_redirect_uri_is_compared_as_the_client_spelled_it(
+    anon: AsyncClient, client: AsyncClient, mcp_running: Any, registered: str
+) -> None:
+    """A parsed URL re-serializes differently (default port dropped, host
+    lowercased, a bare origin gains a slash); the exchange has to accept the
+    exact string the authorization request carried."""
+    created = await client.post(
+        "/api/mcp/clients",
+        json={"kind": "admin", "name": "Spelled", "redirect_uris": [registered]},
+    )
+    assert created.status_code == 200, created.text
+    tokens = await obtain_tokens(
+        anon, client, client_id=created.json()["id"], redirect_uri=registered
+    )
+    assert (await mcp_list(anon, tokens["access_token"])).status_code == 200
+
+
+async def test_public_endpoints_share_a_per_address_budget(anon: AsyncClient, app: Any) -> None:
+    app.state.settings.mcp_rate_limit_per_minute = 3
+    statuses = [(await authorize(anon))[0].status_code for _ in range(4)]
+    assert statuses == [302, 302, 302, 429], statuses
+    throttled = await anon.post(
+        "/oauth/token",
+        data={"grant_type": "refresh_token", "refresh_token": "x", "client_id": CLAUDE_CODE},
+    )
+    assert throttled.status_code == 429
+    assert int(throttled.headers["retry-after"]) >= 1

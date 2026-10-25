@@ -92,7 +92,19 @@ async def fetch_document(
     One resolution, every address checked, one connection to the first
     vetted address with TLS and the Host header still naming the hostname.
     Anything other than a 200 with a valid document is a ``DocumentError``.
+    ``TIMEOUT_SECONDS`` bounds the whole thing, resolution and a slowly
+    dripped body included, not each network operation on its own.
     """
+    try:
+        async with asyncio.timeout(TIMEOUT_SECONDS):
+            return await _fetch_document(url, resolver=resolver, transport=transport)
+    except TimeoutError as exc:
+        raise DocumentError("document fetch exceeded the time limit") from exc
+
+
+async def _fetch_document(
+    url: str, *, resolver: Resolver, transport: httpx.AsyncBaseTransport | None
+) -> ClientDocument:
     parts = check_url(url)
     host = parts.hostname or ""
     try:

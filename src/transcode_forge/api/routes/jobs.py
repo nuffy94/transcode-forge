@@ -108,17 +108,21 @@ async def cancel_waiting_job(db: DBConnection, job_id: str) -> Job:
     """Cancel a job that is still waiting and hand its file back to the catalog.
 
     Shared by the REST route and the MCP ``cancel_job`` tool, so there is one
-    cancel rule. Raises ``LookupError`` for an unknown job and ``ValueError``
-    for one a worker already holds or that has finished.
+    cancel rule: the waiting check and the status write are one conditional
+    update, so a worker's claim that lands first keeps its job. Raises
+    ``LookupError`` for an unknown job and ``ValueError`` for one a worker
+    already holds or that has finished.
     """
-    job = await job_repo.get_job(db, job_id)
-    if not job:
-        raise LookupError("Job not found")
-    if job.status not in WAITING_JOB_STATUSES:
+    if not await job_repo.cancel_if_waiting(db, job_id):
+        job = await job_repo.get_job(db, job_id)
+        if not job:
+            raise LookupError("Job not found")
         raise ValueError(f"Cannot cancel job with status '{job.status}'")
-    updated = await job_repo.update_job(db, job_id, status=JobStatus.CANCELLED)
     await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
-    return updated or job
+    cancelled = await job_repo.get_job(db, job_id)
+    if cancelled is None:  # pragma: no cover - the row was just updated
+        raise LookupError("Job not found")
+    return cancelled
 
 
 @router.post("/jobs/{job_id}/cancel")

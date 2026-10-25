@@ -59,6 +59,7 @@ from starlette.types import ASGIApp
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.mcp import cimd
+from transcode_forge.mcp.auth import RateLimiter
 from transcode_forge.repos import oauth as oauth_repo
 from transcode_forge.repos import users as user_repo
 from transcode_forge.web.routes import templates
@@ -180,9 +181,11 @@ def _client_label(client: dict[str, Any]) -> str:
 
 
 async def seed_clients(db: DBConnection) -> None:
-    """Allow the Claude client documents. Runs at startup when the endpoint is on."""
+    """Allow the Claude client documents on first boot. Runs at every startup
+    when the endpoint is on, but only creates rows that do not exist: an
+    operator who disabled one keeps it disabled across restarts."""
     for url, name in SEEDED_CLIENT_DOCUMENTS.items():
-        await oauth_repo.allow_cimd_client(db, url, name=name)
+        await oauth_repo.ensure_client(db, url, kind="cimd", name=name, metadata_url=url)
 
 
 # ── the server ───────────────────────────────────────────────────────
@@ -195,6 +198,21 @@ class AuthorizationServer:
         self._issuer = settings.public_url.rstrip("/")
         self._resource = settings.mcp_resource_url
         self._metadata = build_metadata(settings)
+        self._limiter = RateLimiter()
+
+    def _throttled(self, request: Request) -> Response | None:
+        """The public endpoints share the per-minute budget /mcp applies per
+        grant, keyed by the caller's address: an authorize request creates a
+        row, a token request costs a lookup, and neither has a grant yet."""
+        key = request.client.host if request.client else "unknown"
+        wait = self._limiter.allow(key, self._settings.mcp_rate_limit_per_minute)
+        if not wait:
+            return None
+        return JSONResponse(
+            {"error": "rate_limited", "error_description": "too many requests from this address"},
+            status_code=429,
+            headers={**NO_STORE, "Retry-After": str(wait)},
+        )
 
     # -- client resolution --
 
@@ -233,6 +251,8 @@ class AuthorizationServer:
         return JSONResponse(self._metadata)
 
     async def authorize(self, request: Request) -> Response:
+        if throttled := self._throttled(request):
+            return throttled
         params = dict(request.query_params)
         state = params.get("state")
         try:
@@ -361,6 +381,8 @@ class AuthorizationServer:
         )
 
     async def token(self, request: Request) -> Response:
+        if throttled := self._throttled(request):
+            return throttled
         form = dict(await request.form())
         client_id = str(form.get("client_id") or "")
         client = await oauth_repo.get_client(self._get_db(), client_id) if client_id else None
@@ -371,13 +393,19 @@ class AuthorizationServer:
         except ValidationError as exc:
             return _error_json("invalid_request", stringify_pydantic_error(exc))
         if isinstance(req, AuthorizationCodeRequest):
-            return await self._exchange_code(client, req)
+            # The redirect URI is compared as the client spelled it, never as a
+            # parsed URL re-serializes it (default ports, case, a bare origin's
+            # trailing slash all change under normalization).
+            raw_redirect = form.get("redirect_uri")
+            return await self._exchange_code(
+                client, req, raw_redirect if isinstance(raw_redirect, str) else None
+            )
         if isinstance(req, RefreshTokenRequest):
             return await self._refresh(client, req)
         return _error_json("unsupported_grant_type", "only authorization_code and refresh_token")
 
     async def _exchange_code(
-        self, client: dict[str, Any], req: AuthorizationCodeRequest
+        self, client: dict[str, Any], req: AuthorizationCodeRequest, redirect_uri: str | None
     ) -> Response:
         problem = self._check_resource(req.resource)
         if problem:
@@ -394,7 +422,7 @@ class AuthorizationServer:
             return _error_json("invalid_grant", "authorization code is unknown or expired")
         if txn["client_id"] != client["id"]:
             return _error_json("invalid_grant", "authorization code belongs to another client")
-        if req.redirect_uri is not None and str(req.redirect_uri) != txn["redirect_uri"]:
+        if redirect_uri is not None and redirect_uri != txn["redirect_uri"]:
             return _error_json(
                 "invalid_grant", "redirect_uri differs from the authorization request"
             )
@@ -438,6 +466,8 @@ class AuthorizationServer:
         return JSONResponse(body.model_dump(mode="json", exclude_none=True), headers=NO_STORE)
 
     async def revoke(self, request: Request) -> Response:
+        if throttled := self._throttled(request):
+            return throttled
         form = await request.form()
         client_id = str(form.get("client_id") or "")
         token = str(form.get("token") or "")

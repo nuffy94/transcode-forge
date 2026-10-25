@@ -148,3 +148,24 @@ async def test_rest_cancel_route_is_unchanged(client: AsyncClient, app: Any) -> 
     assert resp.json()["data"]["status"] == "cancelled"
     assert (await client.post(f"/api/jobs/{waiting.id}/cancel")).status_code == 400
     assert (await client.post("/api/jobs/no-such-job/cancel")).status_code == 404
+
+
+async def test_cancel_refuses_a_job_a_worker_already_holds(app: Any, mcp_running: Any) -> None:
+    """The waiting check and the write are one statement: a claim that landed
+    first keeps its job, its worker and its claim token."""
+    db = app.state.db
+    token = await _grant(db, "jobs:write")
+    job = await _queued_job(db, "claimed")
+    await job_repo.update_job(
+        db, job.id, status=JobStatus.ASSIGNED, worker_id="w-1", claim_token="t-1"
+    )
+    assert await job_repo.cancel_if_waiting(db, job.id) is False
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        result = _result(await _call(c, token, "cancel_job", {"job_id": job.id}))
+        assert result["isError"] is True
+        assert "assigned" in result["content"][0]["text"]
+    held = await job_repo.get_job(db, job.id)
+    assert held is not None
+    assert held.status == JobStatus.ASSIGNED
+    assert held.worker_id == "w-1"
+    assert held.claim_token == "t-1"

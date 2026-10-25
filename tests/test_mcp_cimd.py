@@ -7,6 +7,7 @@ about what the guard refuses and how many requests leave the process.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -196,3 +197,35 @@ def test_document_name_is_optional_and_bounded() -> None:
 )
 def test_is_public_address(address: str, public: bool) -> None:
     assert cimd.is_public_address(address) is public
+
+
+# ── the deadline is total (review finding, 2026-10-25) ───────────────
+
+
+async def test_slow_resolution_counts_against_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cimd, "TIMEOUT_SECONDS", 0.05)
+
+    async def slow(host: str) -> list[str]:
+        await asyncio.sleep(0.3)
+        return [PUBLIC_IP]
+
+    transport, seen = _transport(_serve(json.dumps(DOCUMENT).encode()))
+    with pytest.raises(cimd.DocumentError):
+        await cimd.fetch_document(URL, resolver=slow, transport=transport)
+    assert seen == []
+
+
+async def test_a_dripped_body_counts_against_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cimd, "TIMEOUT_SECONDS", 0.1)
+
+    class Drip(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            for _ in range(30):
+                await asyncio.sleep(0.02)
+                yield b"x"
+
+    transport, _ = _transport(lambda request: httpx.Response(200, stream=Drip()))
+    with pytest.raises(cimd.DocumentError):
+        await cimd.fetch_document(URL, resolver=public_resolver, transport=transport)

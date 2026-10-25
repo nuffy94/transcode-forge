@@ -20,8 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code and claude.ai connect with nothing but the URL, identify
   themselves with their client metadata document, and get a grant on your
   consent; refresh tokens rotate, a replayed code or refresh token revokes
-  the grant, and the `resource` is checked at both ends. Clients are
-  managed under Settings, Connected apps: the Claude Code document is
+  the grant, the `resource` is checked at both ends, and the public
+  endpoints share the per-address request budget. Clients are managed
+  under Settings, Connected apps: the Claude Code document is
   allowed when the endpoint is on, other document URLs and hand-registered
   clients are added there. Migration 0020 adds `oauth_transactions` and
   `oauth_clients.metadata_fetched_at`.

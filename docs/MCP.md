@@ -231,12 +231,21 @@ builder and the CORS wrapper.
   the form is posted. Denying sends `access_denied`.
 - **Token endpoint.** `resource` is required at the code exchange and must
   equal the canonical resource; on a refresh it is checked when present.
-  The code is consumed before anything else is checked, so a wrong verifier
-  or a wrong client burns it, and a second redemption revokes the grant the
-  code created. Refresh tokens rotate on use, inherit the grant's deadline,
-  and a consumed one presented again revokes the grant. A refresh may ask
-  for a narrower scope and never a wider one. The response is never
-  cacheable.
+  The code is consumed before anything else is checked, by one conditional
+  update whose marker is read back after the commit (on SQLite every
+  request shares one connection, and another request's rollback between
+  the update and the commit would otherwise erase a consumption the cursor
+  had already reported), so a wrong verifier or a wrong client burns it,
+  and a second redemption revokes the grant the code created. Consumption
+  and issuance are two commits: a crash between them fails closed, the code
+  is spent and the client authorizes again. Refresh tokens rotate on use,
+  inherit the grant's deadline, and a consumed one presented again revokes
+  the grant. A refresh asking for more than its grant holds is refused; the
+  grant's full scope is what is issued and reported either way. Expired
+  transactions are purged, so a code older than its ten minutes is refused
+  without naming a grant to revoke. The public endpoints share the
+  per-minute budget `/mcp` applies, keyed by the caller's address. The
+  response is never cacheable.
 - **Revocation endpoint.** RFC 7009: a client revokes a grant by either of
   its tokens; a token that belongs to another client, or to nobody, is
   answered `200` without effect.

@@ -234,8 +234,9 @@ needs); only its models and redirect builder are used. Clients are rows of
 `mcp/cimd.py` behind an SSRF guard and cached on the row; an `admin` row is
 registered in Settings with exact redirect URIs. A registered loopback
 redirect matches any port. `redeem_code` and `redeem_refresh_token` in
-`repos/oauth.py` are each one conditional UPDATE; a replay revokes the
-grant. Everything under `/mcp`, `/oauth` and `/.well-known` is mounted only
+`repos/oauth.py` are each one conditional UPDATE whose marker is read back
+after the commit (SQLite's shared connection can lose an uncommitted update
+to another request's rollback); a replay revokes the grant. Everything under `/mcp`, `/oauth` and `/.well-known` is mounted only
 when `TF_PUBLIC_URL` is set, and `tests/test_mcp_authz.py` walks the route
 table to prove it.
 
