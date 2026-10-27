@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-27
+
+Scheduler only. Migrations 0019 and 0020 run at boot; workers need
+nothing. Everything new is inert until `TF_PUBLIC_URL` is set to the
+HTTPS origin clients use. Compose installs that keep their own compose
+file add `TF_PUBLIC_URL: "${TF_PUBLIC_URL:-}"` to the scheduler
+environment (the shipped files carry it); StackScript deploys take it
+from the domain.
+
 ### Added
 - **MCP endpoint.** `/mcp` serves the Model Context Protocol (2026-07-28
   revision, Streamable HTTP) as an OAuth 2.1 resource server. Six read-only
