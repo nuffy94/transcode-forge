@@ -221,6 +221,8 @@ class TestSchedulerRender:
         assert env["TF_S3_ENDPOINT_URL"] == "https://us-ord-1.linodeobjects.com"
         assert env["TF_S3_REGION"] == "us-ord-1"
         assert env["TF_SESSION_SECURE"] == "true"
+        # The domain is the origin MCP clients sign in to (docs/MCP.md).
+        assert env["TF_PUBLIC_URL"] == "https://forge.example.com"
         assert 1 <= int(env["TF_WORKER_MAX_CONCURRENT"]) <= 4
 
         caddyfile = (tmp_path / "render" / "Caddyfile").read_text()
@@ -241,7 +243,7 @@ class TestSchedulerRender:
             else " ".join(scheduler_env)
         )
 
-        for key in ("TF_ADMIN_PASSWORD", "TF_AUTH_SECRET", "TF_DB_URL"):
+        for key in ("TF_ADMIN_PASSWORD", "TF_AUTH_SECRET", "TF_DB_URL", "TF_PUBLIC_URL"):
             assert env.get(key), f"{key} is missing from the rendered .env"
             assert f"${{{key}}}" in passed_through, (
                 f"{key} is written into .env but the scheduler container never receives it"
@@ -256,6 +258,8 @@ class TestSchedulerRender:
 
         env = _env_file(tmp_path)
         assert env["TF_SESSION_SECURE"] == "false"
+        # No domain, no origin: the MCP endpoint stays unmounted.
+        assert env["TF_PUBLIC_URL"] == ""
         assert env["TF_S3_ENDPOINT_URL"] == ""
         assert env["TF_DB_URL"].startswith("postgresql://tf:")
 

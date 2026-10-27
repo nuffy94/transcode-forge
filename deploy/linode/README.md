@@ -204,6 +204,12 @@ Then **Settings → Add library**:
 
 Scan the library, then queue files from the Movies/TV pages.
 
+A domain deploy also serves the MCP endpoint at `https://<domain>/mcp`
+(the StackScript sets `TF_PUBLIC_URL` from the domain). Claude Code and
+claude.ai connect with that URL and sign in through the admin login; see
+[docs/MCP.md](../../docs/MCP.md), "Connecting a client". A localhost-only
+deploy has no stable origin, so the endpoint stays off there.
+
 ### 7. (Optional) join the scheduler's own CPU as a worker
 
 Workers page → Issue token, then on the instance:

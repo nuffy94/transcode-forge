@@ -32,6 +32,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Login returns to the page asked for.** An unauthenticated page request
   now redirects to `/login?next=...`; after login the browser goes back to
   that local path (the consent page, most of all).
+- **Linode StackScript sets `TF_PUBLIC_URL`.** A scheduler deployed with a
+  domain gets `https://<domain>` as its public URL, so the MCP endpoint and
+  its sign-in are on from first boot. A localhost-only deploy leaves it
+  empty and the endpoint stays unmounted.
 
 ## [0.16.0] - 2026-09-16
 

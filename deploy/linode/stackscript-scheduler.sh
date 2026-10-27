@@ -134,6 +134,10 @@ fi
 
 SESSION_SECURE="false"
 [[ -n "$DOMAIN" ]] && SESSION_SECURE="true"
+# The domain is the origin MCP clients sign in to; without one there is no
+# stable origin, the value stays empty and the endpoint is not mounted.
+PUBLIC_URL=""
+[[ -n "$DOMAIN" ]] && PUBLIC_URL="https://$DOMAIN"
 
 # .env holds every dynamic value; the compose file stays static and reads
 # ${VARS} from here at up-time. Never printed to stdout.
@@ -147,6 +151,7 @@ SESSION_SECURE="false"
     printf 'TF_SESSION_SECURE=%s\n' "$SESSION_SECURE"
     printf 'TF_LOG_LEVEL=info\n'
     printf 'TF_DOMAIN=%s\n' "$DOMAIN"
+    printf 'TF_PUBLIC_URL=%s\n' "$PUBLIC_URL"
     printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_DNS_TOKEN_PASSWORD"
     printf 'TF_S3_ENDPOINT_URL=%s\n' "$S3_ENDPOINT"
     printf 'TF_S3_REGION=%s\n' "$S3_REGION"
@@ -210,6 +215,7 @@ cat >> "$APP_DIR/docker-compose.yml" <<'EOF'
       TF_AUTH_SECRET: ${TF_AUTH_SECRET}
       TF_ADMIN_PASSWORD: ${TF_ADMIN_PASSWORD}
       TF_SESSION_SECURE: ${TF_SESSION_SECURE}
+      TF_PUBLIC_URL: ${TF_PUBLIC_URL}
       TF_LOG_LEVEL: ${TF_LOG_LEVEL:-info}
       TF_LIBRARY_MOVIES: "/media/movies"
       TF_LIBRARY_TV: "/media/tv"
