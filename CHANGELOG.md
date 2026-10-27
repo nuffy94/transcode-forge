@@ -8,7 +8,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **HTTPS with no domain on Linode.** The scheduler StackScript gains a
-  `linode_name` UDF: with no domain given and `yes` selected, it serves
+  `assigned_name` UDF: with no domain given and `yes` selected, it serves
   on the name Linode already assigns the instance
   (`<ip-with-dashes>.ip.linodeusercontent.com`), which resolves on its
   own and is its own domain for Let's Encrypt, so there is no DNS step

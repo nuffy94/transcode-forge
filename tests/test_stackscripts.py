@@ -10,6 +10,7 @@ no working bash is on PATH.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -114,6 +115,18 @@ class TestPublishable:
             for i, ch, line in offenders
         )
         assert not offenders, f"the Linode API will refuse to publish this: {detail}"
+
+    @pytest.mark.parametrize("script", [SCHEDULER, WORKER], ids=["scheduler", "worker"])
+    def test_udf_names_avoid_the_reserved_namespace(self, script: Path):
+        """The API also refuses a UDF whose name is PATH, TERM or starts with
+        LINODE_ (it owns that namespace). Render mode never asks the API, so
+        the 28 tests of #158 passed while the publish was refused."""
+        names = re.findall(r'<UDF name="([^"]+)"', script.read_text(encoding="utf-8"))
+        assert names, f"{script.name} declares no UDFs"
+        reserved = [
+            n for n in names if n.upper() in {"PATH", "TERM"} or n.upper().startswith("LINODE_")
+        ]
+        assert not reserved, f"the Linode API will refuse these UDF names: {reserved}"
 
 
 class TestFailsLoudly:
@@ -276,7 +289,9 @@ class TestSchedulerRender:
         """A deployer with no domain opts into the name every Linode already
         has; it resolves on its own and is its own registrable domain for
         Let's Encrypt, so HTTPS needs no DNS step and no credential."""
-        _render(SCHEDULER, tmp_path, {"LINODE_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"})
+        _render(
+            SCHEDULER, tmp_path, {"ASSIGNED_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"}
+        )
         env = _env_file(tmp_path)
         name = "172-236-111-170.ip.linodeusercontent.com"
         assert env["TF_DOMAIN"] == name
@@ -301,7 +316,7 @@ class TestSchedulerRender:
             SCHEDULER,
             tmp_path,
             {
-                "LINODE_NAME": "yes",
+                "ASSIGNED_NAME": "yes",
                 "TF_SS_PUBLIC_IPV4": "172.236.111.170",
                 "CLOUDFLARE_DNS_TOKEN_PASSWORD": "cf-sentinel-token",
             },
@@ -313,7 +328,7 @@ class TestSchedulerRender:
 
     def test_a_typed_domain_beats_the_assigned_name(self, tmp_path: Path):
         # No TF_SS_PUBLIC_IPV4: a typed domain must not even ask for it.
-        _render(SCHEDULER, tmp_path, {**SCHEDULER_FULL_ENV, "LINODE_NAME": "yes"})
+        _render(SCHEDULER, tmp_path, {**SCHEDULER_FULL_ENV, "ASSIGNED_NAME": "yes"})
         assert _env_file(tmp_path)["TF_DOMAIN"] == "forge.example.com"
 
     def test_render_mode_never_asks_the_metadata_service(self, tmp_path: Path):
@@ -328,7 +343,7 @@ class TestSchedulerRender:
                 **os.environ,
                 "DOMAIN": "",
                 "TF_SS_PUBLIC_IPV4": "",
-                "LINODE_NAME": "yes",
+                "ASSIGNED_NAME": "yes",
                 "TF_SS_RENDER_DIR": str(out).replace("\\", "/"),
             },
             capture_output=True,
