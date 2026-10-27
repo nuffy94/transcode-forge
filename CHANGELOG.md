@@ -35,7 +35,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Linode StackScript sets `TF_PUBLIC_URL`.** A scheduler deployed with a
   domain gets `https://<domain>` as its public URL, so the MCP endpoint and
   its sign-in are on from first boot. A localhost-only deploy leaves it
-  empty and the endpoint stays unmounted.
+  empty and the endpoint stays unmounted. The two quickstart compose
+  files pass the variable through from `.env` as well.
+
+### Fixed
+- **One spelling of the issuer.** A `TF_PUBLIC_URL` written with capitals
+  or an explicit default port (`https://Forge.Example.com:443/`) is
+  normalized once, and the metadata document, the `iss` on every redirect
+  and the resource identifier all read that one string. Before, the
+  metadata and the redirects carried the raw spelling while the resource
+  was normalized, and a client comparing the two refused the sign-in.
 
 ## [0.16.0] - 2026-09-16
 

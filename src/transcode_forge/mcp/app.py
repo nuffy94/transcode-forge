@@ -51,7 +51,7 @@ def build_mcp(
 ) -> tuple[list[BaseRoute], StreamableHTTPSessionManager]:
     """Routes for /mcp and its metadata document, plus the session manager
     the app lifespan has to run."""
-    issuer = settings.public_url.rstrip("/")
+    issuer = settings.mcp_issuer
     # AuthSettings validates the URLs with pydantic's empty-path preservation,
     # so a path-less issuer stays "https://host" (RFC 8414 issuer comparison
     # is exact) instead of gaining a trailing slash.

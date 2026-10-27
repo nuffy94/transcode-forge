@@ -23,6 +23,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from transcode_forge.config import Settings
+from transcode_forge.db import init_db
 from transcode_forge.main import create_app
 from transcode_forge.mcp import authz, cimd
 from transcode_forge.models.job import Job, JobStatus
@@ -245,6 +246,40 @@ async def test_nothing_is_mounted_without_public_url(tmp_db_path: str, tmp_path:
     paths = [getattr(route, "path", "") for route in application.routes]
     offenders = [p for p in paths if p.startswith(("/mcp", "/oauth", "/.well-known"))]
     assert offenders == []
+
+
+async def test_issuer_is_normalized_once(
+    tmp_db_path: str, tmp_path: Any, claude_document: dict[str, int]
+) -> None:
+    """A public URL spelled with capitals or a default port names one
+    issuer everywhere: the metadata document, the iss on every redirect
+    and the resource the client is told to ask for. RFC 8414 comparison
+    is exact, and the Claude clients refuse a redirect whose iss differs
+    from the issuer they discovered."""
+    settings = Settings(
+        db_url=tmp_db_path,
+        library_movies=str(tmp_path / "m"),
+        public_url="https://Forge.Example.com:443/",
+    )
+    application = create_app(settings=settings)
+    application.state.db = await init_db(settings.db_url)
+    try:
+        await authz.seed_clients(application.state.db)
+        transport = ASGITransport(app=application)
+        async with AsyncClient(transport=transport, base_url="https://forge.example.com") as c:
+            meta = (await c.get("/.well-known/oauth-authorization-server")).json()
+            assert meta["issuer"] == "https://forge.example.com"
+            assert meta["token_endpoint"] == "https://forge.example.com/oauth/token"
+
+            resp, _ = await authorize(c, resource="https://forge.example.com/other")
+            assert resp.status_code == 302
+            assert _query(resp.headers["location"])["iss"] == "https://forge.example.com"
+
+            resp, _ = await authorize(c, resource="https://forge.example.com/mcp")
+            assert resp.status_code == 302
+            assert resp.headers["location"].startswith("/oauth/consent?")
+    finally:
+        await application.state.db.close()
 
 
 # ── authorize (row 9) ────────────────────────────────────────────────
