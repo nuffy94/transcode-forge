@@ -15,6 +15,7 @@
 # volume for media/scratch, point DNS at the instance, log in, token issuance.
 #
 # <UDF name="domain" label="HTTPS domain for the web UI (blank = localhost-only, no TLS edge)" default="" example="forge.example.com" />
+# <UDF name="linode_name" label="No domain? yes = serve HTTPS on the name Linode assigns this instance (no DNS to set up); no = localhost-only" default="no" oneof="yes,no" />
 # <UDF name="cloudflare_dns_token_password" label="Cloudflare API token for DNS-01 certificates (blank = HTTP-01 on port 80)" default="" />
 # <UDF name="s3_endpoint" label="Object Storage endpoint URL (blank = local media on the instance)" default="" example="https://us-ord-1.linodeobjects.com" />
 # <UDF name="s3_bucket" label="Object Storage bucket holding your media" default="" example="forge-media" />
@@ -27,6 +28,7 @@ set -euo pipefail
 # UDF env vars are absent (not just empty) outside Linode -- normalize so the
 # script also runs by hand / in render-only test mode.
 DOMAIN="${DOMAIN:-}"
+LINODE_NAME="${LINODE_NAME:-no}"
 CLOUDFLARE_DNS_TOKEN_PASSWORD="${CLOUDFLARE_DNS_TOKEN_PASSWORD:-}"
 S3_ENDPOINT="${S3_ENDPOINT:-}"
 S3_BUCKET="${S3_BUCKET:-}"
@@ -132,11 +134,42 @@ else
     DB_URL="postgresql://tf:${PG_PASSWORD}@postgres:5432/transcode_forge"
 fi
 
+# Every Linode already has a public name, <ip-with-dashes>.ip.linodeusercontent.com,
+# that resolves on its own and sits on the Public Suffix List, so Let's
+# Encrypt treats each instance as its own domain. A deployer with no domain
+# of their own can serve HTTPS on it with no DNS step and no credential.
+# The address comes from the metadata service; render mode has no such
+# service and takes TF_SS_PUBLIC_IPV4 instead.
+assigned_name() {
+    local ip="${TF_SS_PUBLIC_IPV4:-}"
+    if [[ -z "$ip" && -n "$RENDER_DIR" ]]; then
+        deploy_failed "render mode cannot ask the metadata service; set TF_SS_PUBLIC_IPV4"
+    fi
+    if [[ -z "$ip" ]]; then
+        local token
+        token=$(curl -sf -m 10 -X PUT -H "Metadata-Token-Expiry-Seconds: 300" \
+            http://169.254.169.254/v1/token) \
+            || deploy_failed "metadata service gave no token; cannot learn the public IPv4"
+        ip=$(curl -sf -m 10 -H "Metadata-Token: $token" -H "Accept: application/json" \
+            http://169.254.169.254/v1/network \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["ipv4"]["public"][0].split("/")[0])') \
+            || deploy_failed "metadata service gave no public IPv4"
+    fi
+    DOMAIN="${ip//./-}.ip.linodeusercontent.com"
+}
+# Called in the main shell, not a substitution, so a failure inside it
+# reaches the log and the DEPLOY-FAILED.txt artifact like every other.
+if [[ -z "$DOMAIN" && "$LINODE_NAME" == "yes" ]]; then
+    assigned_name
+    log "No domain given: serving on the Linode-assigned name ${DOMAIN}"
+fi
+
 SESSION_SECURE="false"
 [[ -n "$DOMAIN" ]] && SESSION_SECURE="true"
-# The domain is the origin MCP clients sign in to; without one there is no
-# stable origin, the value stays empty and the endpoint is not mounted.
-PUBLIC_URL=""
+# The origin MCP clients sign in to. With a domain it is that name over
+# HTTPS; without one the only way in is the SSH tunnel from the README, and
+# its loopback address is the one place clients accept plain HTTP.
+PUBLIC_URL="http://localhost:8000"
 [[ -n "$DOMAIN" ]] && PUBLIC_URL="https://$DOMAIN"
 
 # .env holds every dynamic value; the compose file stays static and reads
@@ -384,8 +417,13 @@ chmod +x "$APP_DIR/join-local-worker.sh"
 {
     echo "Transcode Forge -- next steps"
     echo "============================"
-    if [[ -n "$DOMAIN" ]]; then
+    if [[ "$DOMAIN" == *.ip.linodeusercontent.com ]]; then
+        echo "1. No DNS to set up: ${DOMAIN} already resolves to this instance."
+        echo "   Caddy fetches the certificate on the first request; give it a minute."
+    elif [[ -n "$DOMAIN" ]]; then
         echo "1. Point DNS: an A record for ${DOMAIN} -> this instance's public IP."
+        echo "   Caddy retries the certificate until the name resolves; watch it with"
+        echo "   docker compose -f ${APP_DIR}/docker-compose.yml logs -f caddy"
         echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
         echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
         echo "   Open https://${DOMAIN} and log in as 'admin'."

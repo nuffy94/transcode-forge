@@ -266,10 +266,55 @@ class TestSchedulerRender:
 
         env = _env_file(tmp_path)
         assert env["TF_SESSION_SECURE"] == "false"
-        # No domain, no origin: the MCP endpoint stays unmounted.
-        assert env["TF_PUBLIC_URL"] == ""
+        # No domain: the origin is the SSH tunnel's loopback address, the one
+        # place MCP clients accept plain HTTP.
+        assert env["TF_PUBLIC_URL"] == "http://localhost:8000"
         assert env["TF_S3_ENDPOINT_URL"] == ""
         assert env["TF_DB_URL"].startswith("postgresql://tf:")
+
+    def test_linode_assigned_name_when_no_domain(self, tmp_path: Path):
+        """A deployer with no domain opts into the name every Linode already
+        has; it resolves on its own and is its own registrable domain for
+        Let's Encrypt, so HTTPS needs no DNS step and no credential."""
+        _render(SCHEDULER, tmp_path, {"LINODE_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"})
+        env = _env_file(tmp_path)
+        name = "172-236-111-170.ip.linodeusercontent.com"
+        assert env["TF_DOMAIN"] == name
+        assert env["TF_PUBLIC_URL"] == f"https://{name}"
+        assert env["TF_SESSION_SECURE"] == "true"
+        # No token, so the stock Caddy image and HTTP-01.
+        compose = _compose(tmp_path)
+        assert "caddy" in compose["services"]
+        assert "build" not in compose["services"]["caddy"]
+        assert "dns cloudflare" not in (tmp_path / "render" / "Caddyfile").read_text()
+
+    def test_a_typed_domain_beats_the_assigned_name(self, tmp_path: Path):
+        _render(
+            SCHEDULER,
+            tmp_path,
+            {**SCHEDULER_FULL_ENV, "LINODE_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"},
+        )
+        assert _env_file(tmp_path)["TF_DOMAIN"] == "forge.example.com"
+
+    def test_render_mode_never_asks_the_metadata_service(self, tmp_path: Path):
+        """Outside a Linode the metadata address does not exist; a render
+        that would need it fails at once with the reason, instead of hanging
+        on a link-local address."""
+        out = tmp_path / "render"
+        out.mkdir(exist_ok=True)
+        result = subprocess.run(
+            [BASH, str(SCHEDULER)],
+            env={
+                **os.environ,
+                "LINODE_NAME": "yes",
+                "TF_SS_RENDER_DIR": str(out).replace("\\", "/"),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode != 0
+        assert "TF_SS_PUBLIC_IPV4" in result.stdout + result.stderr
 
     def test_managed_db_drops_postgres(self, tmp_path: Path):
         url = "postgresql://tf:pw@db.example.com:5432/forge?sslmode=require"
