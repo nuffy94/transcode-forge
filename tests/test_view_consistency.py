@@ -511,3 +511,23 @@ class TestMcpGrantsViews:
         for label, status in api.items():
             row_html = html.split(label, 1)[1].split("</tr>", 1)[0]
             assert status.capitalize() in row_html, (label, status)
+
+
+class TestMcpClientsViews:
+    """The clients list is one derivation: the API `status` and the Settings
+    partial's pill come from the same repo field (docs/MCP.md)."""
+
+    async def test_api_status_matches_partial_pill(self, client, app) -> None:
+        from transcode_forge.repos import oauth as oauth_repo
+
+        db = app.state.db
+        await oauth_repo.allow_cimd_client(db, "https://a.example/doc", name="c-active")
+        await oauth_repo.allow_cimd_client(db, "https://b.example/doc", name="c-disabled")
+        await oauth_repo.disable_client(db, "https://b.example/doc")
+        rows = (await client.get("/api/mcp/clients")).json()["data"]
+        api = {row["name"]: row["status"] for row in rows}
+        assert api == {"c-active": "active", "c-disabled": "disabled"}
+        html = (await client.get("/partials/mcp-clients")).text
+        for name, status in api.items():
+            row_html = html.split(name, 1)[1].split("</tr>", 1)[0]
+            assert status.capitalize() in row_html, (name, status)

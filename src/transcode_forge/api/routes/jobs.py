@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import WAITING_JOB_STATUSES, JobStatus
+from transcode_forge.models.job import WAITING_JOB_STATUSES, Job, JobStatus
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
@@ -104,6 +104,27 @@ async def retry_job(
     return {"data": updated.model_dump(mode="json") if updated else None}
 
 
+async def cancel_waiting_job(db: DBConnection, job_id: str) -> Job:
+    """Cancel a job that is still waiting and hand its file back to the catalog.
+
+    Shared by the REST route and the MCP ``cancel_job`` tool, so there is one
+    cancel rule: the waiting check and the status write are one conditional
+    update, so a worker's claim that lands first keeps its job. Raises
+    ``LookupError`` for an unknown job and ``ValueError`` for one a worker
+    already holds or that has finished.
+    """
+    if not await job_repo.cancel_if_waiting(db, job_id):
+        job = await job_repo.get_job(db, job_id)
+        if not job:
+            raise LookupError("Job not found")
+        raise ValueError(f"Cannot cancel job with status '{job.status}'")
+    await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
+    cancelled = await job_repo.get_job(db, job_id)
+    if cancelled is None:  # pragma: no cover - the row was just updated
+        raise LookupError("Job not found")
+    return cancelled
+
+
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(
     job_id: str,
@@ -111,16 +132,14 @@ async def cancel_job(
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """Cancel a pending or queued job."""
-    job = await job_repo.get_job(db, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in WAITING_JOB_STATUSES:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{job.status}'")
-
-    updated = await job_repo.update_job(db, job_id, status=JobStatus.CANCELLED)
-    await media_repo.update_status_by_job(db, job_id, transcode_status="needs_transcode")
+    try:
+        updated = await cancel_waiting_job(db, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     _toast(response, "Job cancelled", "warning")
-    return {"data": updated.model_dump(mode="json") if updated else None}
+    return {"data": updated.model_dump(mode="json")}
 
 
 @router.post("/queue/pause")

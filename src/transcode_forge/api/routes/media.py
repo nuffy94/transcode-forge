@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from transcode_forge.api.deps import get_db
+from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.models.job import Job, JobStatus
 from transcode_forge.repos import exclusions as excl_repo
@@ -140,30 +141,48 @@ async def queue_selected_files(
     Creates jobs in the DB — workers pick them up via claim polling.
     Deduplication: skips files that already have an active job.
     """
+    settings = getattr(request.app.state, "settings", None)
+    return await queue_files(
+        db, settings, file_ids=body.file_ids, codec=body.codec, target_height=body.target_height
+    )
+
+
+async def queue_files(
+    db: DBConnection,
+    settings: Settings | None,
+    *,
+    file_ids: list[str],
+    codec: str | None,
+    target_height: int | None,
+) -> dict[str, Any]:
+    """The queue rule: which of ``file_ids`` become jobs, and with what.
+
+    Shared by the REST route and the MCP ``queue_file`` tool, so the
+    eligibility matrix exists once. Returns ``{"queued": n, "skipped": n}``.
+    """
     queued = 0
     skipped = 0
 
-    settings = getattr(request.app.state, "settings", None)
-    target_codec = body.codec or await settings_repo.effective(db, "default_codec", settings)
+    target_codec = codec or await settings_repo.effective(db, "default_codec", settings)
     # Snapshot the quality goal on the job (one source of truth) — the
     # worker's VMAF gate and CRF search read it from there.
     target_vmaf = float(await settings_repo.effective(db, "target_vmaf", settings))
 
     # Batch the lookups up front — one query each — instead of ~4 per file.
-    by_id = {m["id"]: m for m in await media_repo.get_by_ids(db, body.file_ids)}
+    by_id = {m["id"]: m for m in await media_repo.get_by_ids(db, file_ids)}
 
     # First pass: the queue validity matrix — per-file eligibility plus the
     # resolved target codec (a downscale batch can mix h264/hevc/av1
     # sources, each landing on its own codec).
     candidates: list[dict[str, Any]] = []
     resolved_codecs: dict[str, str] = {}
-    for file_id in body.file_ids:
+    for file_id in file_ids:
         mf = by_id.get(file_id)
         if not mf or mf["transcode_status"] in _IN_FLIGHT:
             skipped += 1
             continue
         resolved: str | None
-        if body.target_height is None:
+        if target_height is None:
             # Today's rule, unchanged: h264 sources only; 'complete' blocks.
             if mf["video_codec"] != "h264" or mf["transcode_status"] == "complete":
                 skipped += 1
@@ -172,8 +191,8 @@ async def queue_selected_files(
         else:
             # A downscale must be strictly downward — unknown dimensions
             # can't prove that, and a no-op scale is never queued.
-            resolved = _downscale_codec(mf["video_codec"], body.codec, target_codec)
-            if resolved is None or not mf["height"] or mf["height"] <= body.target_height:
+            resolved = _downscale_codec(mf["video_codec"], codec, target_codec)
+            if resolved is None or not mf["height"] or mf["height"] <= target_height:
                 skipped += 1
                 continue
         resolved_codecs[mf["id"]] = resolved
@@ -212,7 +231,7 @@ async def queue_selected_files(
                 source_duration=mf["duration"],
                 source_size=mf["file_size"],
                 target_codec=resolved_codecs[mf["id"]],
-                target_height=body.target_height,
+                target_height=target_height,
                 quality_value=presets.get(mf["library_id"], 21),
                 target_vmaf=target_vmaf,
                 status=JobStatus.QUEUED,

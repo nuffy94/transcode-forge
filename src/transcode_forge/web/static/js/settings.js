@@ -511,3 +511,73 @@ function copyMcpField(sourceId, what) {
 
 on('mcp-grant-copy-btn', 'click', () => copyMcpField('mcp-grant-token', 'token'));
 on('mcp-grant-copy-command-btn', 'click', () => copyMcpField('mcp-grant-command', 'command'));
+
+/* ---- Clients of the authorization server ---- */
+
+function showClientFields() {
+    const kind = document.getElementById('mcp-client-kind').value;
+    for (const el of document.querySelectorAll('[data-client-kind]')) {
+        el.classList.toggle('hidden', el.dataset.clientKind !== kind);
+    }
+}
+
+async function allowMcpClient() {
+    const kind = document.getElementById('mcp-client-kind').value;
+    const body = { kind };
+    if (kind === 'cimd') {
+        body.url = document.getElementById('mcp-client-url').value.trim();
+        if (!body.url) {
+            showToast('Document URL required', 'error');
+            return;
+        }
+    } else {
+        body.name = document.getElementById('mcp-client-name').value.trim();
+        body.redirect_uris = document
+            .getElementById('mcp-client-redirects')
+            .value.split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        if (!body.name || body.redirect_uris.length === 0) {
+            showToast('Name and at least one redirect URI required', 'error');
+            return;
+        }
+    }
+    try {
+        const r = await fetch('/api/mcp/clients', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+            showToast(detailText(await r.json().catch(() => ({})), 'Failed to allow client'), 'error');
+            return;
+        }
+        document.getElementById('mcp-client-url').value = '';
+        document.getElementById('mcp-client-name').value = '';
+        document.getElementById('mcp-client-redirects').value = '';
+        showToast('Client allowed', 'success');
+        htmx.trigger('#mcp-clients-list', 'refresh');
+    } catch (e) {
+        showToast('Allow failed: ' + e.message, 'error');
+    }
+}
+
+async function disableMcpClient(clientId) {
+    if (!confirm('Disable this client? Its grants stop working at their next request.')) return;
+    try {
+        const r = await fetch('/api/mcp/clients/' + encodeURIComponent(clientId), { method: 'DELETE' });
+        if (!r.ok) {
+            showToast('Failed to disable client', 'error');
+            return;
+        }
+        showToast('Client disabled', 'warning');
+        htmx.trigger('#mcp-clients-list', 'refresh');
+        htmx.trigger('#mcp-grants-list', 'refresh');
+    } catch (e) {
+        showToast('Disable failed: ' + e.message, 'error');
+    }
+}
+window.disableMcpClient = disableMcpClient; // the clients partial calls it inline
+
+on('mcp-client-kind', 'change', showClientFields);
+on('mcp-client-allow-btn', 'click', allowMcpClient);

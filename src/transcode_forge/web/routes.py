@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, Response
@@ -84,11 +85,29 @@ def _render(request: Request, name: str, context: dict[str, Any] | None = None) 
 # -- Full page routes --
 
 
+def safe_next(value: str) -> str:
+    """The page to return to after login: a local path, or the dashboard.
+
+    Anything that could leave this origin is dropped, so a crafted login
+    link cannot send the administrator elsewhere: a scheme, a
+    protocol-relative ``//host``, a backslash (browsers read it as a slash)
+    and any control character or space (browsers strip tabs and newlines
+    before parsing, so ``/\\n/host`` would become ``//host``). What remains
+    is rebuilt from its parsed path and query, never echoed as received.
+    """
+    if any(ord(ch) < 33 or ch == "\\" for ch in value):
+        return "/"
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc or not parts.path.startswith("/"):
+        return "/"
+    return urlunsplit(("", "", parts.path, parts.query, ""))
+
+
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request) -> Response:
+async def login_page(request: Request, next: str = "/") -> Response:
     # An admin always exists by the time this can be reached: startup makes
     # one (R-040). There is nothing to bounce to.
-    return _render(request, "login.html", {})
+    return _render(request, "login.html", {"next_url": safe_next(next)})
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -589,6 +608,17 @@ async def mcp_grants_partial(
 
     grants = await oauth_repo.list_grants(db)
     return _render(request, "partials/mcp_grants.html", {"grants": grants})
+
+
+@router.get("/partials/mcp-clients", response_class=HTMLResponse)
+async def mcp_clients_partial(
+    request: Request,
+    db: DBConnection = Depends(get_db),
+) -> Response:
+    from transcode_forge.repos import oauth as oauth_repo
+
+    clients = await oauth_repo.list_clients(db)
+    return _render(request, "partials/mcp_clients.html", {"clients": clients})
 
 
 @router.get("/partials/worker-tokens", response_class=HTMLResponse)

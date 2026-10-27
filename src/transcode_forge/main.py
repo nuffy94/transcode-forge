@@ -87,6 +87,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if await ensure_admin(app.state.db, settings.admin_password or None):
             logger.info("Admin account created from TF_ADMIN_PASSWORD.")
 
+        if settings.public_url:
+            # The Claude client documents are allowed wherever the endpoint is on
+            # (docs/MCP.md, "Authorization server"); the operator can disable them.
+            from transcode_forge.mcp.authz import seed_clients
+
+            await seed_clients(app.state.db)
+
         # Redis — optional in demo mode
         app.state.redis = None
         if not settings.demo_mode:
@@ -308,6 +315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from transcode_forge.api.routes.health import router as health_router
     from transcode_forge.api.routes.jobs import router as jobs_router
     from transcode_forge.api.routes.libraries import router as libraries_router
+    from transcode_forge.api.routes.mcp_clients import router as mcp_clients_router
     from transcode_forge.api.routes.mcp_grants import router as mcp_grants_router
     from transcode_forge.api.routes.media import router as media_router
     from transcode_forge.api.routes.scan import router as scan_router
@@ -335,6 +343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(worker_api_router, prefix="/api")
     app.include_router(worker_tokens_router, prefix="/api")
     app.include_router(mcp_grants_router, prefix="/api")
+    app.include_router(mcp_clients_router, prefix="/api")
 
     # Prometheus metrics
     from transcode_forge.metrics import router as metrics_router

@@ -33,6 +33,7 @@ from transcode_forge import __version__
 from transcode_forge.config import Settings
 from transcode_forge.db import DBConnection
 from transcode_forge.mcp.auth import Gate, GrantTokenVerifier
+from transcode_forge.mcp.authz import build_authz_routes
 from transcode_forge.mcp.tools import build_tools
 from transcode_forge.repos.oauth import INITIAL_SCOPES
 
@@ -40,7 +41,8 @@ MAX_BODY_BYTES = 1024 * 1024
 
 INSTRUCTIONS = (
     "Transcode Forge re-encodes a media library into HEVC or AV1. These tools "
-    "read the catalog, the job queue and the statistics of one installation."
+    "read the catalog, the job queue and the statistics of one installation, "
+    "and with the jobs:write scope queue a file or cancel a waiting job."
 )
 
 
@@ -63,7 +65,7 @@ def build_mcp(
     prm_url = str(build_resource_metadata_url(resource))
 
     server = MCPServer("Transcode Forge", instructions=INSTRUCTIONS, version=__version__)
-    for spec in build_tools(get_db):
+    for spec in build_tools(get_db, settings):
         server.add_tool(spec.fn, name=spec.name, description=spec.description)
 
     # Creates the session manager with the transport settings; the Starlette
@@ -97,4 +99,6 @@ def build_mcp(
             scopes_supported=list(INITIAL_SCOPES),
         )
     )
+    # The authorization server (docs/MCP.md): the same switch mounts both roles.
+    routes.extend(build_authz_routes(settings, get_db=get_db))
     return routes, session_manager

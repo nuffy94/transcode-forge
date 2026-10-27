@@ -33,7 +33,16 @@ META = {
     "io.modelcontextprotocol/protocolVersion": PV,
     "io.modelcontextprotocol/clientCapabilities": {},
 }
-ALL_TOOLS = ["get_job", "list_jobs", "list_libraries", "list_media", "queue_summary", "stats"]
+ALL_TOOLS = [
+    "cancel_job",
+    "get_job",
+    "list_jobs",
+    "list_libraries",
+    "list_media",
+    "queue_file",
+    "queue_summary",
+    "stats",
+]
 
 
 # ── helpers ──────────────────────────────────────────────────────────

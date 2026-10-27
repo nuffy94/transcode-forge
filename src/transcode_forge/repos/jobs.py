@@ -231,6 +231,22 @@ async def update_job(db: DBConnection, job_id: str, **fields: object) -> Job | N
     return await get_job(db, job_id)
 
 
+async def cancel_if_waiting(db: DBConnection, job_id: str) -> bool:
+    """Move a job to CANCELLED only while it is still waiting.
+
+    One conditional update, so a claim that lands first keeps its job: the
+    status check and the write are the same statement, never a read followed
+    by an unconditional write. True when this call cancelled the job.
+    """
+    placeholders = ", ".join("?" * len(WAITING_JOB_STATUSES))
+    cur = await db.execute(
+        f"UPDATE jobs SET status = ?, updated_at = ? WHERE id = ? AND status IN ({placeholders})",
+        [JobStatus.CANCELLED.value, datetime.now(UTC).isoformat(), job_id, *WAITING_JOB_STATUSES],
+    )
+    await db.commit()
+    return bool(cur.rowcount)
+
+
 def _attempt_fence(claim_token: str | None) -> tuple[str, list[object]]:
     """The `AND claim_token = ?` half of an attempt-scoped statement.
 
