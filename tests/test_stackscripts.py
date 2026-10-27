@@ -287,13 +287,33 @@ class TestSchedulerRender:
         assert "caddy" in compose["services"]
         assert "build" not in compose["services"]["caddy"]
         assert "dns cloudflare" not in (tmp_path / "render" / "Caddyfile").read_text()
+        # The next-steps note still tells the deployer how to log in.
+        note = (tmp_path / "render" / "NEXT-STEPS.txt").read_text()
+        assert "No DNS" in note
+        assert "TF_ADMIN_PASSWORD" in note
+        assert f"https://{name}" in note
 
-    def test_a_typed_domain_beats_the_assigned_name(self, tmp_path: Path):
+    def test_assigned_name_ignores_a_cloudflare_token(self, tmp_path: Path):
+        """The token proves control of the deployer's own zone; the assigned
+        name is in Linode's, so DNS-01 could never succeed there and the
+        stock challenges must stay on."""
         _render(
             SCHEDULER,
             tmp_path,
-            {**SCHEDULER_FULL_ENV, "LINODE_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"},
+            {
+                "LINODE_NAME": "yes",
+                "TF_SS_PUBLIC_IPV4": "172.236.111.170",
+                "CLOUDFLARE_DNS_TOKEN_PASSWORD": "cf-sentinel-token",
+            },
         )
+        compose = _compose(tmp_path)
+        assert "build" not in compose["services"]["caddy"]
+        assert "dns cloudflare" not in (tmp_path / "render" / "Caddyfile").read_text()
+        assert _env_file(tmp_path)["CLOUDFLARE_API_TOKEN"] == ""
+
+    def test_a_typed_domain_beats_the_assigned_name(self, tmp_path: Path):
+        # No TF_SS_PUBLIC_IPV4: a typed domain must not even ask for it.
+        _render(SCHEDULER, tmp_path, {**SCHEDULER_FULL_ENV, "LINODE_NAME": "yes"})
         assert _env_file(tmp_path)["TF_DOMAIN"] == "forge.example.com"
 
     def test_render_mode_never_asks_the_metadata_service(self, tmp_path: Path):
@@ -306,6 +326,8 @@ class TestSchedulerRender:
             [BASH, str(SCHEDULER)],
             env={
                 **os.environ,
+                "DOMAIN": "",
+                "TF_SS_PUBLIC_IPV4": "",
                 "LINODE_NAME": "yes",
                 "TF_SS_RENDER_DIR": str(out).replace("\\", "/"),
             },

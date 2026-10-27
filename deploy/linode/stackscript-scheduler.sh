@@ -14,7 +14,7 @@
 # attach a Cloud Firewall (allow 22/80/443 only), attach a Block Storage
 # volume for media/scratch, point DNS at the instance, log in, token issuance.
 #
-# <UDF name="domain" label="HTTPS domain for the web UI (blank = localhost-only, no TLS edge)" default="" example="forge.example.com" />
+# <UDF name="domain" label="HTTPS domain of your own for the web UI (blank = none; see linode_name)" default="" example="forge.example.com" />
 # <UDF name="linode_name" label="No domain? yes = serve HTTPS on the name Linode assigns this instance (no DNS to set up); no = localhost-only" default="no" oneof="yes,no" />
 # <UDF name="cloudflare_dns_token_password" label="Cloudflare API token for DNS-01 certificates (blank = HTTP-01 on port 80)" default="" />
 # <UDF name="s3_endpoint" label="Object Storage endpoint URL (blank = local media on the instance)" default="" example="https://us-ord-1.linodeobjects.com" />
@@ -162,6 +162,13 @@ assigned_name() {
 if [[ -z "$DOMAIN" && "$LINODE_NAME" == "yes" ]]; then
     assigned_name
     log "No domain given: serving on the Linode-assigned name ${DOMAIN}"
+    # The token proves control of the deployer's own zone. The assigned
+    # name is in Linode's zone, so DNS-01 could never succeed for it and
+    # would switch off the challenges that do; Caddy stays stock.
+    if [[ -n "$CLOUDFLARE_DNS_TOKEN_PASSWORD" ]]; then
+        log "Cloudflare token ignored: the Linode-assigned name is not in your zone"
+        CLOUDFLARE_DNS_TOKEN_PASSWORD=""
+    fi
 fi
 
 SESSION_SECURE="false"
@@ -419,23 +426,20 @@ chmod +x "$APP_DIR/join-local-worker.sh"
     echo "============================"
     if [[ "$DOMAIN" == *.ip.linodeusercontent.com ]]; then
         echo "1. No DNS to set up: ${DOMAIN} already resolves to this instance."
-        echo "   Caddy fetches the certificate on the first request; give it a minute."
+        echo "   Caddy fetches the certificate as it starts; give it a minute."
     elif [[ -n "$DOMAIN" ]]; then
         echo "1. Point DNS: an A record for ${DOMAIN} -> this instance's public IP."
         echo "   Caddy retries the certificate until the name resolves; watch it with"
         echo "   docker compose -f ${APP_DIR}/docker-compose.yml logs -f caddy"
-        echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
-        echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
-        echo "   Open https://${DOMAIN} and log in as 'admin'."
     else
         echo "1. No domain configured -- the UI listens on 127.0.0.1:8000 only."
         echo "   Reach it via an SSH tunnel (ssh -L 8000:127.0.0.1:8000 root@<ip>)"
         echo "   or add a proxy/tunnel before exposing it."
-        echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
-        echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
-        echo "   Open http://localhost:8000 (through the tunnel) and log in"
-        echo "   as 'admin'."
     fi
+    # One login step for every mode: the URL is the origin decided above.
+    echo "2. Your admin password is the TF_ADMIN_PASSWORD line in"
+    echo "     ${APP_DIR}/.env  (root-only, never printed to a log)."
+    echo "   Open ${PUBLIC_URL} and log in as 'admin'."
     if [[ -n "$S3_BUCKET" ]]; then
         echo "3. Settings -> Add library: storage 'S3 Object Storage',"
         echo "   bucket '${S3_BUCKET}', prefix 'masters/movies/'."

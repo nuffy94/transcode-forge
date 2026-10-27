@@ -161,10 +161,11 @@ Cloud Manager → Create → Linode → StackScripts tab → your scheduler scri
   Dedicated CPU plan from the table.
 - Fill the UDFs: `domain` (blank = no domain of your own),
   `linode_name` (`yes` = with no domain, serve HTTPS on the instance's
-  Linode-assigned name; `no` = localhost-only), Cloudflare token (blank =
-  HTTP-01; Cloud Manager shows this field as a bare password box), Object
-  Storage endpoint/bucket/keys (blank = local media), Managed Database URL
-  (blank = built-in Postgres).
+  Linode-assigned name; `no` = localhost-only; a typed domain always
+  wins), Cloudflare token (only for a domain of your own, blank = HTTP-01;
+  on the assigned name it is ignored; Cloud Manager shows this field as a
+  bare password box), Object Storage endpoint/bucket/keys (blank = local
+  media), Managed Database URL (blank = built-in Postgres).
 - Attach the **forge-scheduler** Cloud Firewall and your SSH key (the
   scheduler is the only instance that gets a key).
 - Add a **Block Storage volume** (media/scratch — the script formats and
@@ -183,7 +184,7 @@ Without it, Caddy keeps retrying the HTTP-01 challenge until the name
 resolves to the instance; the site answers nothing on HTTPS until then,
 and the retries show in `docker compose logs -f caddy` under
 `/opt/transcode-forge`. The Linode-assigned name needs no record: it
-resolves already, and the certificate arrives on the first request.
+resolves already, and Caddy fetches the certificate as it starts.
 
 ### 6. Log in
 
@@ -225,8 +226,9 @@ Every deploy serves the MCP endpoint at its origin plus `/mcp`: a domain
 or the Linode-assigned name over HTTPS, or `http://localhost:8000` through
 the tunnel on a localhost-only deploy (the StackScript sets
 `TF_PUBLIC_URL` to match, and MCP clients accept plain HTTP only on
-loopback, which the tunnel is). Claude Code and claude.ai connect with
-that URL and sign in through the admin login; see
+loopback, which the tunnel is). Claude Code on your own machine can use
+any of the three; claude.ai, being hosted, needs one of the two HTTPS
+names. Clients sign in through the admin login; see
 [docs/MCP.md](../../docs/MCP.md), "Connecting a client".
 
 ### 7. (Optional) join the scheduler's own CPU as a worker
