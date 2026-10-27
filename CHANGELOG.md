@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **HTTPS with no domain on Linode.** The scheduler StackScript gains a
+  `linode_name` UDF: with no domain given and `yes` selected, it serves
+  on the name Linode already assigns the instance
+  (`<ip-with-dashes>.ip.linodeusercontent.com`), which resolves on its
+  own and is its own domain for Let's Encrypt, so there is no DNS step
+  and no credential. A typed domain still wins. The next-steps note and
+  the runbook say where to watch Caddy's certificate retries on the
+  own-domain path.
+- **MCP through the SSH tunnel.** A localhost-only StackScript deploy
+  sets `TF_PUBLIC_URL` to `http://localhost:8000`, the tunnel's address,
+  so a client on the tunnel can sign in; clients accept plain HTTP only on
+  loopback, which the tunnel is.
+
+### Changed
+- The Linode runbook's plan table uses the current Cloud Manager plan
+  names and hourly prices.
+
 ## [0.17.0] - 2026-10-27
 
 Scheduler only. Migrations 0019 and 0020 run at boot; workers need

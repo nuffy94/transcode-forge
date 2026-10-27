@@ -42,11 +42,14 @@ Shared CPU plans throttle sustained x265 encode — use Dedicated. Size the
 plan for CPU; store media in Object Storage and scratch on a Block Storage
 volume, not the small root disk.
 
-| Tier   | Plan            | vCPU | ~$/mo |
-| ------ | --------------- | ---- | ----- |
-| Small  | Dedicated 8GB   | 4    | ~$72  |
-| Medium | Dedicated 16GB  | 8    | ~$144 |
-| Large  | Dedicated 32–64GB | 16–32 | ~$288–576 |
+| Tier   | Plan (Cloud Manager name) | vCPU | $/hr  |
+| ------ | ------------------------- | ---- | ----- |
+| Small  | G8 Dedicated 8x4          | 4    | 0.14  |
+| Medium | G8 Dedicated 16x8         | 8    | 0.27  |
+| Large  | G8 Dedicated 32x16        | 16   | 0.54  |
+
+Plan names and prices are as Cloud Manager showed them on 2026-10-27; the
+older "Dedicated 8GB" generation is no longer offered for new instances.
 
 Every worker runs one job at a time; more vCPUs make that one job (and
 its quality measurement) faster. Block Storage scratch: ~2× your largest
@@ -69,9 +72,15 @@ handle on the instance.
 2. **An SSH key pair**, public key handy. It's attached to the
    *scheduler* at creation — the localhost-only path and the local-worker
    join both use SSH. Workers never get one (see step 8).
-3. **Optional but recommended — a domain**, if you want HTTPS on a real
-   name: registered, with its nameservers pointed at a DNS provider
-   where you can add an `A` record.
+3. **Optional — a domain**, if you want HTTPS on a name of your own:
+   registered, with its nameservers pointed at a DNS provider where you
+   can add an `A` record. **No domain? You still get HTTPS.** Every
+   Linode has a public name of the form
+   `172-236-111-170.ip.linodeusercontent.com` that resolves on its own,
+   and Let's Encrypt treats each one as its own domain, so the scheduler
+   can serve on it with no DNS to set up: answer `yes` to the
+   `linode_name` UDF in step 4. The name follows the instance's IP, so a
+   deploy you keep should move to a domain of its own later.
    - **Cloudflare DNS:** also create an API token scoped to
      `Zone / DNS / Edit` for that zone. Certificates issue via DNS-01 —
      no waiting on propagation, no port-80 race.
@@ -150,8 +159,12 @@ Cloud Manager → Create → Linode → StackScripts tab → your scheduler scri
 
 - Image Ubuntu 24.04 LTS, region near your Object Storage bucket, a
   Dedicated CPU plan from the table.
-- Fill the UDFs: `domain` (blank = localhost-only), Cloudflare token
-  (blank = HTTP-01), Object Storage endpoint/bucket/keys (blank = local
+- Fill the UDFs: `domain` (blank = no domain of your own),
+  `linode_name` (`yes` = with no domain, serve HTTPS on the instance's
+  Linode-assigned name; `no` = localhost-only; a typed domain always
+  wins), Cloudflare token (only for a domain of your own, blank = HTTP-01;
+  on the assigned name it is ignored; Cloud Manager shows this field as a
+  bare password box), Object Storage endpoint/bucket/keys (blank = local
   media), Managed Database URL (blank = built-in Postgres).
 - Attach the **forge-scheduler** Cloud Firewall and your SSH key (the
   scheduler is the only instance that gets a key).
@@ -163,10 +176,15 @@ Caddy build adds ~2–4 min). Progress: Lish console or
 `tail -f /root/StackScript.out` over SSH. A `NEXT-STEPS.txt` recap is
 written to `/opt/transcode-forge/`.
 
-### 5. Point DNS
+### 5. Point DNS (own domain only)
 
 An `A` record for your domain → the instance's public IP. With the
 Cloudflare DNS-01 token, certificates issue even before DNS propagates.
+Without it, Caddy keeps retrying the HTTP-01 challenge until the name
+resolves to the instance; the site answers nothing on HTTPS until then,
+and the retries show in `docker compose logs -f caddy` under
+`/opt/transcode-forge`. The Linode-assigned name needs no record: it
+resolves already, and Caddy fetches the certificate as it starts.
 
 ### 6. Log in
 
@@ -178,9 +196,9 @@ the account from it on first boot. Read it on the instance:
 grep TF_ADMIN_PASSWORD /opt/transcode-forge/.env
 ```
 
-Then open `https://<domain>` (no domain: tunnel with
-`ssh -L 8000:127.0.0.1:8000 root@<ip>` and use `http://localhost:8000`)
-and log in as `admin`. Change the password whenever you like:
+Then open `https://<domain>` (the Linode-assigned name counts; no domain
+at all: tunnel with `ssh -L 8000:127.0.0.1:8000 root@<ip>` and use
+`http://localhost:8000`) and log in as `admin`. Change the password whenever you like:
 
 ```bash
 cd /opt/transcode-forge
@@ -204,11 +222,14 @@ Then **Settings → Add library**:
 
 Scan the library, then queue files from the Movies/TV pages.
 
-A domain deploy also serves the MCP endpoint at `https://<domain>/mcp`
-(the StackScript sets `TF_PUBLIC_URL` from the domain). Claude Code and
-claude.ai connect with that URL and sign in through the admin login; see
-[docs/MCP.md](../../docs/MCP.md), "Connecting a client". A localhost-only
-deploy has no stable origin, so the endpoint stays off there.
+Every deploy serves the MCP endpoint at its origin plus `/mcp`: a domain
+or the Linode-assigned name over HTTPS, or `http://localhost:8000` through
+the tunnel on a localhost-only deploy (the StackScript sets
+`TF_PUBLIC_URL` to match, and MCP clients accept plain HTTP only on
+loopback, which the tunnel is). Claude Code on your own machine can use
+any of the three; claude.ai, being hosted, needs one of the two HTTPS
+names. Clients sign in through the admin login; see
+[docs/MCP.md](../../docs/MCP.md), "Connecting a client".
 
 ### 7. (Optional) join the scheduler's own CPU as a worker
 
@@ -248,8 +269,8 @@ the quality gate doing its job).
 
 ## No public exposure at all?
 
-Leave `domain` blank — the scheduler binds `127.0.0.1` only. Documented
-alternatives to the Caddy edge:
+Leave `domain` blank and `linode_name` at `no` — the scheduler binds
+`127.0.0.1` only. Documented alternatives to the Caddy edge:
 
 - **Cloudflare Tunnel:** run `cloudflared` on the instance with a tunnel
   token; no inbound ports at all (drop 80/443 from the firewall).
