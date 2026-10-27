@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main, "redesign/**"]
 
+env:
+  # The ffmpeg the two pytest lanes put on PATH for the real-encode
+  # integration test: the same static build the Dockerfile pins for VMAF
+  # measurement, served from this repository's own mirror release (GitHub
+  # to GitHub, seconds). It used to be Ubuntu's ffmpeg package via apt, and
+  # on 2026-10-27 two runs hit the job timeout while a slow mirror was still
+  # serving that package. Bump this pin together with the Dockerfile's.
+  CI_FFMPEG_URL: https://github.com/nuffy94/transcode-forge/releases/download/ffmpeg-vmaf-n8.1.2-44-g7c533d0f86/ffmpeg-n8.1.2-44-g7c533d0f86-linux64-gpl-8.1.tar.xz
+  CI_FFMPEG_SHA256: 03ccc8a1cb534b97c2bc43f322ddb1b7c23bd325abb7e4c31aa37f4b4c0e648f
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -30,9 +40,15 @@ jobs:
 
       - name: Install ffmpeg
         # Needed by the real-encode pipeline integration test
-        # (tests/test_pipeline_integration.py). Ubuntu's build ships
+        # (tests/test_pipeline_integration.py). The static build ships
         # libx265 + libsvtav1; the test self-skips any missing encoder.
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: |
+          curl -fsSL --retry 3 "$CI_FFMPEG_URL" -o /tmp/ffmpeg.tar.xz
+          echo "$CI_FFMPEG_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/ffmpeg"
+          tar -xJf /tmp/ffmpeg.tar.xz --strip-components=2 -C "$HOME/ffmpeg" --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+          echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
+          "$HOME/ffmpeg/ffmpeg" -hide_banner -encoders | grep -q libx265
 
       - name: Lint
         run: uv run ruff check src/ tests/ qa/ scripts/
@@ -85,8 +101,15 @@ jobs:
         run: uv sync --extra dev --dev
 
       - name: Install ffmpeg
-        # The real-encode pipeline integration test runs here too.
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        # The real-encode pipeline integration test runs here too; same
+        # static build as the test job.
+        run: |
+          curl -fsSL --retry 3 "$CI_FFMPEG_URL" -o /tmp/ffmpeg.tar.xz
+          echo "$CI_FFMPEG_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/ffmpeg"
+          tar -xJf /tmp/ffmpeg.tar.xz --strip-components=2 -C "$HOME/ffmpeg" --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+          echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
+          "$HOME/ffmpeg/ffmpeg" -hide_banner -encoders | grep -q libx265
 
       - name: Test (Postgres)
         env:
