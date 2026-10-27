@@ -103,7 +103,7 @@ CONSENT_HEADERS = {
 def build_metadata(settings: Settings) -> dict[str, Any]:
     """The RFC 8414 document. The two flags Claude checks before it uses a
     client metadata document are both here."""
-    issuer = settings.public_url.rstrip("/")
+    issuer = settings.mcp_issuer
     metadata = OAuthMetadata(
         issuer=issuer,  # type: ignore[arg-type]
         authorization_endpoint=issuer + AUTHORIZE_PATH,  # type: ignore[arg-type]
@@ -195,7 +195,7 @@ class AuthorizationServer:
     def __init__(self, settings: Settings, *, get_db: Callable[[], DBConnection]) -> None:
         self._settings = settings
         self._get_db = get_db
-        self._issuer = settings.public_url.rstrip("/")
+        self._issuer = settings.mcp_issuer
         self._resource = settings.mcp_resource_url
         self._metadata = build_metadata(settings)
         self._limiter = RateLimiter()

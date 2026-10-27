@@ -129,14 +129,21 @@ class Settings(BaseSettings):
     worker_state_dir: str = ""
 
     @property
-    def mcp_resource_url(self) -> str:
-        """Canonical resource identifier of the MCP endpoint (RFC 8707).
-
-        Normalized once here (lowercase scheme and host, default port
-        dropped) and used for issuance, metadata and verification alike, so
-        a token can never be minted for a spelling the verifier rejects.
+    def mcp_issuer(self) -> str:
+        """The OAuth issuer (RFC 8414): the public URL normalized once
+        (lowercase scheme and host, default port dropped, no trailing
+        slash). Every place that names the issuer, the metadata document,
+        the iss on redirects and the resource below, reads this one
+        string, so no spelling of TF_PUBLIC_URL can disagree with itself.
         """
-        return str(AnyHttpUrl(f"{self.public_url.rstrip('/')}/mcp"))
+        return str(AnyHttpUrl(self.public_url)).rstrip("/")
+
+    @property
+    def mcp_resource_url(self) -> str:
+        """Canonical resource identifier of the MCP endpoint (RFC 8707),
+        used for issuance, metadata and verification alike, so a token can
+        never be minted for a spelling the verifier rejects."""
+        return self.mcp_issuer + "/mcp"
 
     @model_validator(mode="after")
     def _validate_vmaf_floor_pair(self) -> "Settings":
