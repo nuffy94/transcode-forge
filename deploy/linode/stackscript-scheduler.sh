@@ -14,8 +14,8 @@
 # attach a Cloud Firewall (allow 22/80/443 only), attach a Block Storage
 # volume for media/scratch, point DNS at the instance, log in, token issuance.
 #
-# <UDF name="domain" label="HTTPS domain of your own for the web UI (blank = none; see linode_name)" default="" example="forge.example.com" />
-# <UDF name="linode_name" label="No domain? yes = serve HTTPS on the name Linode assigns this instance (no DNS to set up); no = localhost-only" default="no" oneof="yes,no" />
+# <UDF name="domain" label="HTTPS domain of your own for the web UI (blank = none; see assigned_name)" default="" example="forge.example.com" />
+# <UDF name="assigned_name" label="No domain? yes = serve HTTPS on the name Linode assigns this instance (no DNS to set up); no = localhost-only" default="no" oneof="yes,no" />
 # <UDF name="cloudflare_dns_token_password" label="Cloudflare API token for DNS-01 certificates (blank = HTTP-01 on port 80)" default="" />
 # <UDF name="s3_endpoint" label="Object Storage endpoint URL (blank = local media on the instance)" default="" example="https://us-ord-1.linodeobjects.com" />
 # <UDF name="s3_bucket" label="Object Storage bucket holding your media" default="" example="forge-media" />
@@ -28,7 +28,7 @@ set -euo pipefail
 # UDF env vars are absent (not just empty) outside Linode -- normalize so the
 # script also runs by hand / in render-only test mode.
 DOMAIN="${DOMAIN:-}"
-LINODE_NAME="${LINODE_NAME:-no}"
+ASSIGNED_NAME="${ASSIGNED_NAME:-no}"
 CLOUDFLARE_DNS_TOKEN_PASSWORD="${CLOUDFLARE_DNS_TOKEN_PASSWORD:-}"
 S3_ENDPOINT="${S3_ENDPOINT:-}"
 S3_BUCKET="${S3_BUCKET:-}"
@@ -159,7 +159,7 @@ assigned_name() {
 }
 # Called in the main shell, not a substitution, so a failure inside it
 # reaches the log and the DEPLOY-FAILED.txt artifact like every other.
-if [[ -z "$DOMAIN" && "$LINODE_NAME" == "yes" ]]; then
+if [[ -z "$DOMAIN" && "$ASSIGNED_NAME" == "yes" ]]; then
     assigned_name
     log "No domain given: serving on the Linode-assigned name ${DOMAIN}"
     # The token proves control of the deployer's own zone. The assigned

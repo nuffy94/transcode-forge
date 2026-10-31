@@ -79,7 +79,7 @@ handle on the instance.
    `172-236-111-170.ip.linodeusercontent.com` that resolves on its own,
    and Let's Encrypt treats each one as its own domain, so the scheduler
    can serve on it with no DNS to set up: answer `yes` to the
-   `linode_name` UDF in step 4. The name follows the instance's IP, so a
+   `assigned_name` UDF in step 4. The name follows the instance's IP, so a
    deploy you keep should move to a domain of its own later.
    - **Cloudflare DNS:** also create an API token scoped to
      `Zone / DNS / Edit` for that zone. Certificates issue via DNS-01 —
@@ -160,7 +160,7 @@ Cloud Manager → Create → Linode → StackScripts tab → your scheduler scri
 - Image Ubuntu 24.04 LTS, region near your Object Storage bucket, a
   Dedicated CPU plan from the table.
 - Fill the UDFs: `domain` (blank = no domain of your own),
-  `linode_name` (`yes` = with no domain, serve HTTPS on the instance's
+  `assigned_name` (`yes` = with no domain, serve HTTPS on the instance's
   Linode-assigned name; `no` = localhost-only; a typed domain always
   wins), Cloudflare token (only for a domain of your own, blank = HTTP-01;
   on the assigned name it is ignored; Cloud Manager shows this field as a
@@ -269,7 +269,7 @@ the quality gate doing its job).
 
 ## No public exposure at all?
 
-Leave `domain` blank and `linode_name` at `no` — the scheduler binds
+Leave `domain` blank and `assigned_name` at `no` — the scheduler binds
 `127.0.0.1` only. Documented alternatives to the Caddy edge:
 
 - **Cloudflare Tunnel:** run `cloudflared` on the instance with a tunnel
