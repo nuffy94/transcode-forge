@@ -1246,6 +1246,62 @@ class TestPhaseProgressDetail:
             )
             assert r.status_code == 422
 
+    async def test_encode_report_stores_progress_as_phase_pct(self, client: AsyncClient, app):
+        """phase_pct means "this station's progress" for every phase: an
+        Encode report (old workers send its number in progress only) stores
+        progress there, and the live event carries the same value."""
+        import json
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        from transcode_forge.repos import jobs as job_repo
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "enc")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.37, "phase": "encode"},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        row = await job_repo.get_job(app.state.db, job.id)
+        assert row is not None
+        assert row.phase_pct == 0.37
+        _channel, payload = app.state.redis.publish.call_args.args
+        assert json.loads(payload)["phase_pct"] == 0.37
+
+    async def test_event_carries_the_percent_a_person_sees(self, client: AsyncClient, app):
+        """The server rounds once (half up) and the event carries the
+        integers, so the browser only displays them. Jinja's round gave
+        12/34 where the browser's Math.round gave 13/35, and the label
+        flipped on every poll."""
+        import json
+
+        from httpx import ASGITransport
+        from httpx import AsyncClient as RawClient
+
+        job = await _seed_pending_job(app)
+        transport = ASGITransport(app=app)
+        async with RawClient(transport=transport, base_url="http://test") as c:
+            headers, worker_id = await _register_worker(client, c, "pct")
+            await c.post("/api/worker/claim-job", json={"worker_id": worker_id}, headers=headers)
+            r = await c.post(
+                f"/api/worker/job/{job.id}/progress",
+                json={"progress": 0.125, "phase": "gauge", "phase_pct": 0.345},
+                headers=headers,
+            )
+            assert r.status_code == 204
+
+        _channel, payload = app.state.redis.publish.call_args.args
+        event = json.loads(payload)
+        assert event["percent"] == 13
+        assert event["phase_percent"] == 35
+
 
 class TestAttemptIdentity:
     """R-020 + R-012: a report is judged by the ATTEMPT it names, not by
