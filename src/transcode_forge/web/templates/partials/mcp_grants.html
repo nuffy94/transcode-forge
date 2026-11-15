@@ -1,0 +1,53 @@
+{% from "partials/_icons.html" import icon %}
+{% if grants %}
+<table class="forge-table">
+    <thead>
+        <tr>
+            <th>Label</th>
+            <th>Client</th>
+            <th>Scopes</th>
+            <th>Expires</th>
+            <th>Last used</th>
+            <th>Status</th>
+            <th class="text-right">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for g in grants %}
+        <tr>
+            <td><span class="text-forge-paper">{{ g.label or g.client_name }}</span></td>
+            <td class="text-forge-mute">{{ g.client_name }}</td>
+            <td class="col-mono text-forge-mute">{{ g.scopes | join(' ') }}</td>
+            <td class="col-mono text-forge-ink tabular-nums">{{ (g.expires_at or '—')[:10] }}</td>
+            <td class="col-mono text-forge-ink tabular-nums">{{ (g.last_used_at or '—')[:19].replace('T', ' ') }}</td>
+            <td>
+                {% if g.status == "revoked" %}
+                <span class="forge-pill forge-pill--cancelled">Revoked</span>
+                {% elif g.status == "expired" %}
+                <span class="forge-pill forge-pill--queued">Expired</span>
+                {% else %}
+                <span class="forge-pill forge-pill--complete">Active</span>
+                {% endif %}
+            </td>
+            <td class="text-right">
+                {% if g.status != "revoked" %}
+                <button class="forge-iconbtn forge-iconbtn--danger"
+                        title="Revoke this grant"
+                        aria-label="Revoke grant {{ g.label or g.client_name }}"
+                        data-grant="{{ g.id }}"
+                        onclick="revokeMcpGrant(this.dataset.grant); return false;">
+                    {{ icon('ban', 'forge-icon--sm') }}
+                </button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="forge-empty py-6">
+    {{ icon('key') }}
+    <p class="forge-empty-title">No connected apps</p>
+    <p class="forge-empty-hint">Issue a grant above and register its token in the client. Each client gets its own grant.</p>
+</div>
+{% endif %}

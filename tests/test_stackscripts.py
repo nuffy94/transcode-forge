@@ -10,6 +10,7 @@ no working bash is on PATH.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -115,6 +116,18 @@ class TestPublishable:
         )
         assert not offenders, f"the Linode API will refuse to publish this: {detail}"
 
+    @pytest.mark.parametrize("script", [SCHEDULER, WORKER], ids=["scheduler", "worker"])
+    def test_udf_names_avoid_the_reserved_namespace(self, script: Path):
+        """The API also refuses a UDF whose name is PATH, TERM or starts with
+        LINODE_ (it owns that namespace). Render mode never asks the API, so
+        the 28 tests of #158 passed while the publish was refused."""
+        names = re.findall(r'<UDF name="([^"]+)"', script.read_text(encoding="utf-8"))
+        assert names, f"{script.name} declares no UDFs"
+        reserved = [
+            n for n in names if n.upper() in {"PATH", "TERM"} or n.upper().startswith("LINODE_")
+        ]
+        assert not reserved, f"the Linode API will refuse these UDF names: {reserved}"
+
 
 class TestFailsLoudly:
     """A deploy that dies must not leave a success artifact behind.
@@ -200,6 +213,19 @@ class TestRegistryOverIpv4:
         assert "for attempt in 1 2 3" in body
 
 
+class TestQuickstartCompose:
+    """The two compose files at the repository root read .env the same way
+    the StackScript's generated file does, and drop any key they do not
+    name. TF_PUBLIC_URL is the switch for the MCP endpoint, so a value
+    set in .env has to reach the scheduler container."""
+
+    @pytest.mark.parametrize("compose", ["docker-compose.yml", "docker-compose.prod.yml"])
+    def test_public_url_reaches_the_scheduler(self, compose: str):
+        doc = yaml.safe_load((REPO_ROOT / compose).read_text(encoding="utf-8"))
+        scheduler_env = doc["services"]["scheduler"]["environment"]
+        assert scheduler_env.get("TF_PUBLIC_URL") == "${TF_PUBLIC_URL:-}"
+
+
 class TestSchedulerRender:
     def test_full_stack(self, tmp_path: Path):
         _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
@@ -221,6 +247,8 @@ class TestSchedulerRender:
         assert env["TF_S3_ENDPOINT_URL"] == "https://us-ord-1.linodeobjects.com"
         assert env["TF_S3_REGION"] == "us-ord-1"
         assert env["TF_SESSION_SECURE"] == "true"
+        # The domain is the origin MCP clients sign in to (docs/MCP.md).
+        assert env["TF_PUBLIC_URL"] == "https://forge.example.com"
         assert 1 <= int(env["TF_WORKER_MAX_CONCURRENT"]) <= 4
 
         caddyfile = (tmp_path / "render" / "Caddyfile").read_text()
@@ -235,15 +263,10 @@ class TestSchedulerRender:
         _render(SCHEDULER, tmp_path, SCHEDULER_FULL_ENV)
         env = _env_file(tmp_path)
         scheduler_env = _compose(tmp_path)["services"]["scheduler"]["environment"]
-        passed_through = (
-            " ".join(str(v) for v in scheduler_env.values())
-            if isinstance(scheduler_env, dict)
-            else " ".join(scheduler_env)
-        )
 
-        for key in ("TF_ADMIN_PASSWORD", "TF_AUTH_SECRET", "TF_DB_URL"):
+        for key in ("TF_ADMIN_PASSWORD", "TF_AUTH_SECRET", "TF_DB_URL", "TF_PUBLIC_URL"):
             assert env.get(key), f"{key} is missing from the rendered .env"
-            assert f"${{{key}}}" in passed_through, (
+            assert scheduler_env.get(key) == f"${{{key}}}", (
                 f"{key} is written into .env but the scheduler container never receives it"
             )
 
@@ -256,8 +279,79 @@ class TestSchedulerRender:
 
         env = _env_file(tmp_path)
         assert env["TF_SESSION_SECURE"] == "false"
+        # No domain: the origin is the SSH tunnel's loopback address, the one
+        # place MCP clients accept plain HTTP.
+        assert env["TF_PUBLIC_URL"] == "http://localhost:8000"
         assert env["TF_S3_ENDPOINT_URL"] == ""
         assert env["TF_DB_URL"].startswith("postgresql://tf:")
+
+    def test_linode_assigned_name_when_no_domain(self, tmp_path: Path):
+        """A deployer with no domain opts into the name every Linode already
+        has; it resolves on its own and is its own registrable domain for
+        Let's Encrypt, so HTTPS needs no DNS step and no credential."""
+        _render(
+            SCHEDULER, tmp_path, {"ASSIGNED_NAME": "yes", "TF_SS_PUBLIC_IPV4": "172.236.111.170"}
+        )
+        env = _env_file(tmp_path)
+        name = "172-236-111-170.ip.linodeusercontent.com"
+        assert env["TF_DOMAIN"] == name
+        assert env["TF_PUBLIC_URL"] == f"https://{name}"
+        assert env["TF_SESSION_SECURE"] == "true"
+        # No token, so the stock Caddy image and HTTP-01.
+        compose = _compose(tmp_path)
+        assert "caddy" in compose["services"]
+        assert "build" not in compose["services"]["caddy"]
+        assert "dns cloudflare" not in (tmp_path / "render" / "Caddyfile").read_text()
+        # The next-steps note still tells the deployer how to log in.
+        note = (tmp_path / "render" / "NEXT-STEPS.txt").read_text()
+        assert "No DNS" in note
+        assert "TF_ADMIN_PASSWORD" in note
+        assert f"https://{name}" in note
+
+    def test_assigned_name_ignores_a_cloudflare_token(self, tmp_path: Path):
+        """The token proves control of the deployer's own zone; the assigned
+        name is in Linode's, so DNS-01 could never succeed there and the
+        stock challenges must stay on."""
+        _render(
+            SCHEDULER,
+            tmp_path,
+            {
+                "ASSIGNED_NAME": "yes",
+                "TF_SS_PUBLIC_IPV4": "172.236.111.170",
+                "CLOUDFLARE_DNS_TOKEN_PASSWORD": "cf-sentinel-token",
+            },
+        )
+        compose = _compose(tmp_path)
+        assert "build" not in compose["services"]["caddy"]
+        assert "dns cloudflare" not in (tmp_path / "render" / "Caddyfile").read_text()
+        assert _env_file(tmp_path)["CLOUDFLARE_API_TOKEN"] == ""
+
+    def test_a_typed_domain_beats_the_assigned_name(self, tmp_path: Path):
+        # No TF_SS_PUBLIC_IPV4: a typed domain must not even ask for it.
+        _render(SCHEDULER, tmp_path, {**SCHEDULER_FULL_ENV, "ASSIGNED_NAME": "yes"})
+        assert _env_file(tmp_path)["TF_DOMAIN"] == "forge.example.com"
+
+    def test_render_mode_never_asks_the_metadata_service(self, tmp_path: Path):
+        """Outside a Linode the metadata address does not exist; a render
+        that would need it fails at once with the reason, instead of hanging
+        on a link-local address."""
+        out = tmp_path / "render"
+        out.mkdir(exist_ok=True)
+        result = subprocess.run(
+            [BASH, str(SCHEDULER)],
+            env={
+                **os.environ,
+                "DOMAIN": "",
+                "TF_SS_PUBLIC_IPV4": "",
+                "ASSIGNED_NAME": "yes",
+                "TF_SS_RENDER_DIR": str(out).replace("\\", "/"),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode != 0
+        assert "TF_SS_PUBLIC_IPV4" in result.stdout + result.stderr
 
     def test_managed_db_drops_postgres(self, tmp_path: Path):
         url = "postgresql://tf:pw@db.example.com:5432/forge?sslmode=require"
