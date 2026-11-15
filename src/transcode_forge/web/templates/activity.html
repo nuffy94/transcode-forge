@@ -112,13 +112,9 @@
                         hx-get="/partials/activity-skips" hx-trigger="change" hx-target="#skipped-container"
                         hx-include="#skip-library-filter, #skip-sort, #skip-dir">
                     <option value="">All reasons</option>
-                    <option value="already_hevc">Already HEVC</option>
-                    <option value="not_h264">Not H264</option>
-                    <option value="size_regression">Size regression</option>
-                    <option value="below_vmaf_floor">Below VMAF floor</option>
-                    <option value="stream_loss">Stream loss</option>
-                    <option value="too_small">Too small</option>
-                    <option value="manual_skip">Manual skip</option>
+                    {% for r in skip_reasons %}
+                    <option value="{{ r.value }}">{{ r.label }}</option>
+                    {% endfor %}
                 </select>
                 <select id="skip-library-filter" aria-label="Filter by library" class="forge-select" name="library_id"
                         hx-get="/partials/activity-skips" hx-trigger="change" hx-target="#skipped-container"
