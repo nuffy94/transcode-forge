@@ -2,7 +2,7 @@
 
 Covers:
 - Scratch manager disk-space guard, orphan cleanup, shutdown
-- Derivative key determinism
+- Upload key is the key the agent registers (downscale included)
 - S3 backend initialization
 - fetch() round-trip: download from S3 to scratch
 - commit() round-trip: upload to S3 + register in derivatives table
@@ -12,7 +12,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import time
 from pathlib import Path
@@ -21,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from transcode_forge.config import Settings
+from transcode_forge.models.derivative import derivative_key_for_job
+from transcode_forge.models.job import Job
 from transcode_forge.repos import derivatives as deriv_repo
 from transcode_forge.worker.storage.s3 import S3Backend
 from transcode_forge.worker.storage.scratch import ScratchManager
@@ -156,61 +157,71 @@ def test_scratch_manager_cleanup_on_shutdown(
     asyncio.run(_test())
 
 
-def test_derivative_key_determinism() -> None:
-    """Test that the same input → same key, different inputs → different keys."""
+@pytest.mark.asyncio
+async def test_s3_downscale_upload_key_is_the_registered_key(
+    s3_backend: S3Backend, test_settings, tmp_path: Path
+) -> None:
+    """On S3, a downscaled file is uploaded under the same key the agent
+    registers with the scheduler, so the catalog row points at an object
+    that is actually in the bucket. Runs the real agent flow and the real
+    S3Backend.commit; only the network edges are mocked."""
+    from transcode_forge.worker.hardware import HardwareCapabilities
+    from transcode_forge.worker.http_agent import HttpWorkerAgent
 
-    def compute_key(job: dict) -> str:
-        source_path = job.get("source_path", "")
-        source_resolution = job.get("source_resolution") or ""
-        source_audio_codec = job.get("source_audio_codec") or ""
-        target_resolution = job.get("target_resolution", "")
-        target_audio_codec = job.get("target_audio_codec", "")
-        encoder = job.get("encoder", "")
-        crf = job.get("crf", 0)
-        preset = job.get("preset", "")
+    local_output = tmp_path / "movie.mkv"
+    local_output.write_bytes(b"downscaled" * 1000)
 
-        hash_input = (
-            f"{source_path}|{source_resolution}|{source_audio_codec}"
-            f"|{target_resolution}|{target_audio_codec}|{encoder}|{crf}|{preset}"
-        )
-        key_hash = hashlib.blake2b(hash_input.encode(), digest_size=16).hexdigest()
-        ext = "mkv"
-        return f"{key_hash}_{encoder}-crf{crf}.{ext}"
+    uploaded_keys: list[str] = []
 
-    # Test 1: same params → same key
-    job1 = {
-        "source_path": "/mnt/transcode/source.mkv",
-        "source_resolution": "1920x1080",
-        "source_audio_codec": "aac",
-        "target_resolution": "1280x720",
-        "target_audio_codec": "aac",
-        "encoder": "x265",
-        "crf": 23,
-        "preset": "slow",
-    }
-    job2 = job1.copy()
+    class MockClient:
+        async def upload_fileobj(self, fileobj, bucket, key, **kwargs):
+            uploaded_keys.append(key)
 
-    key1 = compute_key(job1)
-    key2 = compute_key(job2)
-    assert key1 == key2, "Same params must produce same key"
+    class MockAsyncContext:
+        async def __aenter__(self):
+            return MockClient()
 
-    # Test 2: different target_resolution → different key
-    job3 = job1.copy()
-    job3["target_resolution"] = "854x480"
-    key3 = compute_key(job3)
-    assert key1 != key3, "Different target_resolution must produce different key"
+        async def __aexit__(self, *args):
+            pass
 
-    # Test 3: different source_audio_codec → different key
-    job4 = job1.copy()
-    job4["source_audio_codec"] = "opus"
-    key4 = compute_key(job4)
-    assert key1 != key4, "Different source_audio_codec must produce different key"
+    class MockSession:
+        def client(self, *args, **kwargs):
+            return MockAsyncContext()
 
-    # Test 4: different encoder → different key
-    job5 = job1.copy()
-    job5["encoder"] = "h264"
-    key5 = compute_key(job5)
-    assert key1 != key5, "Different encoder must produce different key"
+    s3_backend.session = MockSession()
+    s3_backend.fetch = AsyncMock(return_value=local_output)  # type: ignore[method-assign]
+
+    agent = HttpWorkerAgent(test_settings, "http://scheduler", "test-token")
+    agent.worker_id = "worker-1"
+    agent.capabilities = HardwareCapabilities(
+        encoders=["cpu"],
+        pairs=[("hevc", "cpu")],
+        ffmpeg_version="ffmpeg 7.0",
+        os_platform="Linux",
+    )
+    job = Job(
+        source_path="masters/movie.mkv",
+        library="s3-movies",
+        source_codec="h264",
+        source_resolution="3840x2160",
+        target_height=1080,
+        quality_value=21,
+    )
+    object.__setattr__(job, "_backend_type", "s3")
+
+    agent._client = AsyncMock()
+    agent._client.check_derivative = AsyncMock(return_value={"found": False})
+
+    with (
+        patch("transcode_forge.worker.http_agent.run_pipeline") as mock_pipeline,
+        patch.object(agent, "_get_backend_for_job", return_value=s3_backend),
+    ):
+        mock_pipeline.return_value = {"source_size": 100_000}
+        await agent._process_job(job)
+
+    agent._client.register_derivative.assert_called_once()
+    registered_key = agent._client.register_derivative.call_args.kwargs["derivative_key"]
+    assert uploaded_keys == [registered_key]
 
 
 def test_s3_backend_initialization(s3_backend: S3Backend) -> None:
@@ -345,17 +356,14 @@ async def test_s3_commit_round_trip(s3_backend: S3Backend, db) -> None:
 
     try:
         # Job dict with complete metadata
-        job = {
-            "id": "job-commit-test-1",
-            "source_path": "/mnt/transcode/source.mkv",
-            "source_resolution": "1920x1080",
-            "source_audio_codec": "aac",
-            "target_resolution": "1280x720",
-            "target_audio_codec": "aac",
-            "encoder": "x265",
-            "crf": 23,
-            "preset": "slow",
-        }
+        job = Job(
+            id="job-commit-test-1",
+            source_path="/mnt/transcode/source.mkv",
+            library="Test Library",
+            source_codec="h264",
+            source_resolution="1920x1080",
+            quality_value=23,
+        )
         source_key = "masters/source.mkv"
 
         # Track uploaded objects in a dict (to verify upload).
@@ -392,7 +400,7 @@ async def test_s3_commit_round_trip(s3_backend: S3Backend, db) -> None:
             assert result.space_saved == 0, "S3 backend should not reclaim space"
 
             # Compute the expected key.
-            expected_key = await _compute_expected_derivative_key(job)
+            expected_key = derivative_key_for_job(job, local_output)
 
             # Assert: derivative was uploaded (check tracked uploads).
             assert expected_key in uploaded_objects, (
@@ -452,19 +460,16 @@ async def test_s3_commit_no_registry_row_on_upload_failure(s3_backend: S3Backend
         f.write(b"test data")
 
     try:
-        job = {
-            "id": "job-upload-fail",
-            "source_path": "/mnt/transcode/source.mkv",
-            "source_resolution": "1920x1080",
-            "source_audio_codec": "aac",
-            "target_resolution": "1280x720",
-            "target_audio_codec": "aac",
-            "encoder": "x265",
-            "crf": 23,
-            "preset": "slow",
-        }
+        job = Job(
+            id="job-upload-fail",
+            source_path="/mnt/transcode/source.mkv",
+            library="Test Library",
+            source_codec="h264",
+            source_resolution="1920x1080",
+            quality_value=23,
+        )
 
-        expected_key = await _compute_expected_derivative_key(job)
+        expected_key = derivative_key_for_job(job, local_output)
 
         # Patch the session's client method to fail on upload_fileobj.
         original_session = s3_backend.session
@@ -542,17 +547,14 @@ async def test_s3_commit_scratch_released_after_success(s3_backend: S3Backend, d
     local_output = scratch_dir / "output.mkv"
     local_output.write_bytes(b"transcoded" * 1000)
 
-    job = {
-        "id": job_id,
-        "source_path": "/mnt/transcode/source.mkv",
-        "source_resolution": "1920x1080",
-        "source_audio_codec": "aac",
-        "target_resolution": "1280x720",
-        "target_audio_codec": "aac",
-        "encoder": "x265",
-        "crf": 23,
-        "preset": "slow",
-    }
+    job = Job(
+        id=job_id,
+        source_path="/mnt/transcode/source.mkv",
+        library="Test Library",
+        source_codec="h264",
+        source_resolution="1920x1080",
+        quality_value=23,
+    )
 
     # Track uploaded objects.
     uploaded_objects = {}
@@ -594,27 +596,6 @@ async def test_s3_commit_scratch_released_after_success(s3_backend: S3Backend, d
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
-
-
-async def _compute_expected_derivative_key(job: dict) -> str:
-    """Compute the expected goal-keyed derivative key.
-
-    Mirrors the logic in S3Backend.commit() (which mirrors
-    http_agent._derivative_key_for): the key is the GOAL — recipe details
-    like encoder/crf/preset never participate.
-    """
-    from transcode_forge.models.derivative import compute_derivative_key
-
-    source_resolution = job.get("source_resolution") or ""
-    return compute_derivative_key(
-        source_path=job.get("source_path", ""),
-        source_resolution=source_resolution,
-        source_audio_codec=job.get("source_audio_codec") or "",
-        target_resolution=job.get("target_resolution", "") or source_resolution,
-        target_audio_codec=job.get("target_audio_codec", "") or "copy",
-        target_codec=job.get("target_codec", "hevc") or "hevc",
-        target_vmaf=job.get("target_vmaf"),
-    )
 
 
 class _FailingClient:
@@ -687,7 +668,13 @@ class TestS3ChecksumCompat:
             await backend.commit(
                 local_output=local,
                 source="masters/movie.mkv",
-                job={"id": "job-1", "source_path": "masters/movie.mkv"},
+                job=Job(
+                    id="job-1",
+                    source_path="masters/movie.mkv",
+                    library="L",
+                    source_codec="h264",
+                    quality_value=21,
+                ),
             )
 
         cfg = backend.session.client.call_args.kwargs["config"]
