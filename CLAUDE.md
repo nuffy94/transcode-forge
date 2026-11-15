@@ -171,7 +171,7 @@ to the browser.
 
 All DB access lives in `repos/` — one module per resource (jobs, workers,
 media, libraries, scans, skipped, system, schedules, exclusions, users,
-worker_tokens, settings, derivatives). Models in `models/` are Pydantic
+worker_tokens, settings, derivatives, oauth). Models in `models/` are Pydantic
 `BaseModel` with `StrEnum` for statuses.
 
 ### Database abstraction
@@ -208,6 +208,41 @@ short-circuits unauthenticated requests with 401 (API) or 302 to /login
 (HTML). Worker-side endpoints (`/api/worker/*`) are exempt — they use
 bearer-token auth via `require_worker_token` instead.
 
+### MCP endpoint
+
+`/mcp` is an OAuth 2.1 resource server built on the official `mcp` SDK
+(docs/MCP.md is the design record, docs/MCP-THREAT-MODEL.md the controls
+and their tests). `mcp/app.py` stacks the SDK's bearer middleware, the
+SDK's require-auth wrapper, our `Gate` and the SDK transport, in that
+order. The gate admits only the 2026-07-28 protocol revision, applies a
+per-grant request budget, and authorizes `tools/call` from the one table
+in `mcp/registry.py` using the `Mcp-Name` header, answering `403` with an
+`insufficient_scope` challenge; the transport then rejects any body that
+names a different tool, so the header is safe to authorize on. Tokens are
+opaque, stored as kind-prefixed HMAC digests in `oauth_tokens`, and resolve
+through `repos/oauth.py` to a grant (the unit of permission and
+revocation). Every tool needs an entry in `TOOL_SCOPES`; `check_policy`
+fails the build otherwise. Audit records go to the
+`transcode_forge.mcp.audit` logger and never contain a token.
+
+The authorization server is `mcp/authz.py`: `/oauth/authorize` validates a
+request and parks it as one `oauth_transactions` row (migration 0020),
+`/oauth/consent` is the admin-session page whose nonce the decision must
+carry, `/oauth/token` redeems codes and rotates refresh tokens, and
+`/oauth/revoke` is RFC 7009. The SDK's authorization handlers are
+deliberately not mounted (they drop the token-time `resource`, split load
+from redeem, match redirects exactly and omit the metadata flags Claude
+needs); only its models and redirect builder are used. Clients are rows of
+`oauth_clients`: a `cimd` row's id is its metadata document URL, fetched by
+`mcp/cimd.py` behind an SSRF guard and cached on the row; an `admin` row is
+registered in Settings with exact redirect URIs. A registered loopback
+redirect matches any port. `redeem_code` and `redeem_refresh_token` in
+`repos/oauth.py` are each one conditional UPDATE whose marker is read back
+after the commit (SQLite's shared connection can lose an uncommitted update
+to another request's rollback); a replay revokes the grant. Everything under `/mcp`, `/oauth` and `/.well-known` is mounted only
+when `TF_PUBLIC_URL` is set, and `tests/test_mcp_authz.py` walks the route
+table to prove it.
+
 ### Web UI
 
 Jinja2 templates with HTMX for partials. "Forge Console" design — warm
@@ -233,6 +268,8 @@ src/transcode_forge/
 │                        # encoder.py, hardware.py, storage/
 ├── scanner/             # scanner.py, probe.py
 ├── migrations/          # numbered .sql files + runner
+├── mcp/                 # /mcp: registry, tools, gate, app; authz + cimd = the
+│                        # OAuth authorization server and the client-document fetch
 └── web/                 # routes.py, websocket.py, templates/, static/
 ```
 
@@ -274,6 +311,12 @@ Common knobs:
   `TF_SCRATCH_DIR` — fast local scratch for S3 downloads/uploads.
 - `TF_SESSION_SECURE` — set true behind a TLS reverse proxy so the admin
   session cookie carries the Secure flag.
+- `TF_PUBLIC_URL` — the origin clients use (`https://forge.example.com`).
+  It is the audience every MCP token is minted for and the URL the OAuth
+  metadata advertises, so it is configured, never read from a request
+  header. Empty (the default) means `/mcp` is not mounted.
+  `TF_MCP_RATE_LIMIT_PER_MINUTE` — per-grant request budget on `/mcp`
+  (default 120).
 
 Worker-side:
 - `TF_SERVER_URL` — scheduler URL (presence selects HTTP mode).

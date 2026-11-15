@@ -4,6 +4,75 @@ All notable changes to Transcode Forge are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **HTTPS with no domain on Linode.** The scheduler StackScript gains a
+  `assigned_name` UDF: with no domain given and `yes` selected, it serves
+  on the name Linode already assigns the instance
+  (`<ip-with-dashes>.ip.linodeusercontent.com`), which resolves on its
+  own and is its own domain for Let's Encrypt, so there is no DNS step
+  and no credential. A typed domain still wins. The next-steps note and
+  the runbook say where to watch Caddy's certificate retries on the
+  own-domain path.
+- **MCP through the SSH tunnel.** A localhost-only StackScript deploy
+  sets `TF_PUBLIC_URL` to `http://localhost:8000`, the tunnel's address,
+  so a client on the tunnel can sign in; clients accept plain HTTP only on
+  loopback, which the tunnel is.
+
+### Changed
+- The Linode runbook's plan table uses the current Cloud Manager plan
+  names and hourly prices.
+
+## [0.17.0] - 2026-10-27
+
+Scheduler only. Migrations 0019 and 0020 run at boot; workers need
+nothing. Everything new is inert until `TF_PUBLIC_URL` is set to the
+HTTPS origin clients use. Compose installs that keep their own compose
+file add `TF_PUBLIC_URL: "${TF_PUBLIC_URL:-}"` to the scheduler
+environment (the shipped files carry it); StackScript deploys take it
+from the domain.
+
+### Added
+- **MCP endpoint.** `/mcp` serves the Model Context Protocol (2026-07-28
+  revision, Streamable HTTP) as an OAuth 2.1 resource server. Six read-only
+  tools over libraries, media, jobs and stats. A bearer token resolves to a
+  revocable grant with per-tool scopes; grants are issued, listed and
+  revoked at `/api/mcp/grants`. Mounted only when `TF_PUBLIC_URL` is set.
+  Migration 0019 adds `oauth_clients`, `oauth_grants` and `oauth_tokens`.
+  Design: `docs/MCP.md`; threat model: `docs/MCP-THREAT-MODEL.md`.
+- **Sign-in for MCP clients.** The scheduler is its own OAuth 2.1
+  authorization server: `/oauth/authorize`, a consent page under the admin
+  login, `/oauth/token`, `/oauth/revoke` and the RFC 8414 metadata document.
+  Claude Code and claude.ai connect with nothing but the URL, identify
+  themselves with their client metadata document, and get a grant on your
+  consent; refresh tokens rotate, a replayed code or refresh token revokes
+  the grant, the `resource` is checked at both ends, and the public
+  endpoints share the per-address request budget. Clients are managed
+  under Settings, Connected apps: the Claude Code document is
+  allowed when the endpoint is on, other document URLs and hand-registered
+  clients are added there. Migration 0020 adds `oauth_transactions` and
+  `oauth_clients.metadata_fetched_at`.
+- **Write tools.** `queue_file` and `cancel_job` under the `jobs:write`
+  scope, obtained only through a step-up consent. They call the same
+  functions the REST routes call.
+- **Login returns to the page asked for.** An unauthenticated page request
+  now redirects to `/login?next=...`; after login the browser goes back to
+  that local path (the consent page, most of all).
+- **Linode StackScript sets `TF_PUBLIC_URL`.** A scheduler deployed with a
+  domain gets `https://<domain>` as its public URL, so the MCP endpoint and
+  its sign-in are on from first boot. A localhost-only deploy leaves it
+  empty and the endpoint stays unmounted. The two quickstart compose
+  files pass the variable through from `.env` as well.
+
+### Fixed
+- **One spelling of the issuer.** A `TF_PUBLIC_URL` written with capitals
+  or an explicit default port (`https://Forge.Example.com:443/`) is
+  normalized once, and the metadata document, the `iss` on every redirect
+  and the resource identifier all read that one string. Before, the
+  metadata and the redirects carried the raw spelling while the resource
+  was normalized, and a client comparing the two refused the sign-in.
+
 ## [0.16.0] - 2026-09-16
 
 One change, scheduler only. Migration 0018 runs at boot. Workers need
