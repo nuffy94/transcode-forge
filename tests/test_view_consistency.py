@@ -532,6 +532,62 @@ class TestRecentScansSingleSource:
             )
 
 
+class TestMcpGrantsViews:
+    """The grants list is one derivation: the API `status` and the Settings
+    partial's pill come from the same repo field (docs/MCP.md)."""
+
+    async def test_api_status_matches_partial_pill(self, client, app) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from transcode_forge.repos import oauth as oauth_repo
+
+        db = app.state.db
+        resource = "http://test/mcp"
+        await oauth_repo.create_manual_grant(
+            db, label="g-active", scopes={"jobs:read"}, resource=resource, user_id="u"
+        )
+        revoked, _ = await oauth_repo.create_manual_grant(
+            db, label="g-revoked", scopes={"jobs:read"}, resource=resource, user_id="u"
+        )
+        await oauth_repo.revoke_grant(db, revoked)
+        past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        await oauth_repo.create_manual_grant(
+            db,
+            label="g-expired",
+            scopes={"jobs:read"},
+            resource=resource,
+            user_id="u",
+            expires_at=past,
+        )
+        rows = (await client.get("/api/mcp/grants")).json()["data"]
+        api = {row["label"]: row["status"] for row in rows}
+        assert api == {"g-active": "active", "g-revoked": "revoked", "g-expired": "expired"}
+        html = (await client.get("/partials/mcp-grants")).text
+        for label, status in api.items():
+            row_html = html.split(label, 1)[1].split("</tr>", 1)[0]
+            assert status.capitalize() in row_html, (label, status)
+
+
+class TestMcpClientsViews:
+    """The clients list is one derivation: the API `status` and the Settings
+    partial's pill come from the same repo field (docs/MCP.md)."""
+
+    async def test_api_status_matches_partial_pill(self, client, app) -> None:
+        from transcode_forge.repos import oauth as oauth_repo
+
+        db = app.state.db
+        await oauth_repo.allow_cimd_client(db, "https://a.example/doc", name="c-active")
+        await oauth_repo.allow_cimd_client(db, "https://b.example/doc", name="c-disabled")
+        await oauth_repo.disable_client(db, "https://b.example/doc")
+        rows = (await client.get("/api/mcp/clients")).json()["data"]
+        api = {row["name"]: row["status"] for row in rows}
+        assert api == {"c-active": "active", "c-disabled": "disabled"}
+        html = (await client.get("/partials/mcp-clients")).text
+        for name, status in api.items():
+            row_html = html.split(name, 1)[1].split("</tr>", 1)[0]
+            assert status.capitalize() in row_html, (name, status)
+
+
 class TestStatAssertionGuard:
     """K4: a test that checks a bare digit string is `in` a page passes on
     a wrong count, because some digit is always on the page. Counts are
