@@ -1,0 +1,69 @@
+{% from "partials/_icons.html" import icon %}
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    {% include "partials/_head.html" %}
+    <title>Allow access · Transcode Forge</title>
+</head>
+<body class="bg-forge-bg text-forge-paper font-body forge-grain antialiased min-h-screen flex items-center justify-center px-6">
+    <div class="forge-seam" aria-hidden="true"></div>
+
+    <div class="w-full max-w-md relative z-10">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <span class="forge-brand-mark">{{ icon('flame', 'forge-icon--lg') }}</span>
+            <span>
+                <span class="forge-brand-eyebrow">Transcode</span>
+                <span class="forge-brand-word font-display !text-3xl">FORGE</span>
+            </span>
+        </div>
+
+        <div class="forge-panel">
+            <div class="forge-panel-hd"><h1 class="forge-panel-title">Allow access?</h1></div>
+            <form method="post" action="/oauth/consent" class="p-4 space-y-4">
+                <input type="hidden" name="txn" value="{{ txn_id }}">
+                <input type="hidden" name="nonce" value="{{ nonce }}">
+
+                <p class="text-sm leading-relaxed">
+                    <span class="text-forge-paper font-semibold">{{ client_label }}</span>
+                    wants to use this installation through the MCP endpoint at
+                    <code class="font-mono text-xs text-forge-ember break-all">{{ resource }}</code>.
+                </p>
+
+                <div>
+                    <p class="forge-stat-label mb-1.5">It is asking to</p>
+                    <ul class="space-y-1">
+                        {% for scope in scopes %}
+                        <li class="flex items-baseline gap-2 text-sm">
+                            <code class="font-mono text-2xs text-forge-mute shrink-0">{{ scope.name }}</code>
+                            <span>{{ scope.description }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+
+                <p class="font-mono text-2xs text-forge-mute leading-relaxed">
+                    After you decide, your browser is sent to
+                    <code class="text-forge-paper">{{ redirect_host }}</code>.
+                    {% if loopback %}
+                    That is an address on this computer. Any program here could be listening on it,
+                    so continue only if you started this sign-in yourself.
+                    {% endif %}
+                </p>
+
+                <div class="flex gap-2">
+                    <button type="submit" name="decision" value="allow" class="forge-btn forge-btn--ember flex-1 justify-center">
+                        Allow
+                    </button>
+                    <button type="submit" name="decision" value="deny" class="forge-btn flex-1 justify-center">
+                        Deny
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <p class="font-mono text-2xs text-forge-mute text-center mt-5 tracking-wider">
+            Access can be revoked at any time under Settings, Connected apps.
+        </p>
+    </div>
+</body>
+</html>
