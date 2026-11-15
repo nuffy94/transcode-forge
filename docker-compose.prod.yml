@@ -46,6 +46,8 @@ services:
       TF_ADMIN_PASSWORD: "${TF_ADMIN_PASSWORD:-}"
       TF_LOG_LEVEL: "${TF_LOG_LEVEL:-info}"
       TF_SESSION_SECURE: "${TF_SESSION_SECURE:-false}"
+      # The origin MCP clients use; empty leaves /mcp unmounted (docs/MCP.md).
+      TF_PUBLIC_URL: "${TF_PUBLIC_URL:-}"
       TF_LIBRARY_MOVIES: "/media/movies"
       TF_LIBRARY_TV: "/media/tv"
     volumes:
