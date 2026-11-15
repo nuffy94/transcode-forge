@@ -157,6 +157,7 @@ change some of the variables below without a restart.
 | `TF_LOG_LEVEL` | `debug`, `info`, `warning`, `error` or `critical` (default `info`) |
 | `TF_SESSION_SECURE` | Set `true` behind HTTPS so the session cookie is only sent over HTTPS |
 | `TF_AUTH_SECRET` | Signs sessions and protects stored worker tokens. `bootstrap.sh` sets it; if it is ever unset, the app makes a new one each start, which logs you out and breaks every issued worker token |
+| `TF_PUBLIC_URL` | The HTTPS origin clients use (for example `https://forge.example.com`). Setting it turns on the MCP endpoint at `/mcp` and its sign-in; see [docs/MCP.md](docs/MCP.md) |
 
 **Guides:** [Getting Started](docs/GETTING-STARTED.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md) · [Backup](docs/BACKUP.md) ·
@@ -181,6 +182,12 @@ It is built for one admin on a network you control.
 - **Workers** hold only the scheduler URL and a token you can revoke, never
   database or Redis credentials. Tokens are stored as HMAC-SHA256 hashes,
   not as the token itself.
+- **MCP clients** (Claude Code, claude.ai and other Model Context Protocol
+  clients) sign in through the browser (OAuth 2.1, PKCE, a consent page
+  under the admin login) or with a bearer token issued in Settings; either
+  way the credential is bound to a revocable grant and scoped per tool. Off
+  until `TF_PUBLIC_URL` is set. Design and threat model:
+  [docs/MCP.md](docs/MCP.md).
 
 **Automatic HTTPS with Caddy.** Put this `Caddyfile` in front of the app and
 Caddy gets and renews the certificate for you:

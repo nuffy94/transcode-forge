@@ -36,7 +36,7 @@ class TestNoSetupDoor:
         # before routing ever gets a say.
         resp = await unauthed_client.get("/setup", follow_redirects=False)
         assert resp.status_code == 302
-        assert resp.headers["location"] == "/login"
+        assert resp.headers["location"] == "/login?next=%2Fsetup"
 
     async def test_setup_page_does_not_exist_even_when_logged_in(self, client: AsyncClient):
         resp = await client.get("/setup", follow_redirects=False)
@@ -89,7 +89,7 @@ class TestMiddlewareGate:
     async def test_html_redirects_to_login(self, unauthed_client: AsyncClient):
         resp = await unauthed_client.get("/", follow_redirects=False)
         assert resp.status_code == 302
-        assert resp.headers["location"] == "/login"
+        assert resp.headers["location"] == "/login?next=%2F"
 
     async def test_htmx_request_gets_hx_redirect_not_page(self, unauthed_client: AsyncClient):
         """An expired-session HTMX poll must return HX-Redirect (a full-page
