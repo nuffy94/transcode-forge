@@ -112,21 +112,13 @@ window.revokeToken = revokeToken; // the shared tokens partial calls it inline
 
 let _deadIds = [];
 
-// Workers silent this long are safe to remove; matches the server's
-// WORKER_STALE_THRESHOLD_SECONDS.
-const STALE_THRESHOLD_MS = 30 * 60 * 1000;
-
-function isStale(worker) {
-    if (!worker.last_heartbeat) return true;
-    return Date.now() - new Date(worker.last_heartbeat).getTime() >= STALE_THRESHOLD_MS;
-}
-
 async function refreshDeadCount() {
     try {
         const resp = await fetch('/api/workers');
         if (!resp.ok) return;
         const { data } = await resp.json();
-        _deadIds = data.filter(isStale).map((w) => w.id);
+        // The server computes `removable` from the delete gate's threshold.
+        _deadIds = data.filter((w) => w.removable).map((w) => w.id);
         const btn = document.getElementById('clear-dead-btn');
         const label = document.getElementById('clear-dead-label');
         if (!btn || !label) return;

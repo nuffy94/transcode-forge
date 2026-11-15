@@ -3,7 +3,7 @@
 {% block title %}TV Shows · Transcode Forge{% endblock %}
 
 {% block content %}
-<div class="flex flex-col gap-4">
+<div class="flex flex-col gap-4" data-status-pills="{{ status_pills|tojson|forceescape }}">
 
     <header class="flex items-end justify-between gap-4 flex-wrap">
         <div>

@@ -14,6 +14,7 @@ import aiosqlite
 import pytest
 from httpx import AsyncClient
 
+from tests.helpers import read_stat
 from transcode_forge.models.job import Job
 from transcode_forge.models.scan import Scan, ScanStatus
 from transcode_forge.models.worker import Worker
@@ -76,7 +77,7 @@ class TestDashboardStatsPartial:
 
         response = await client.get("/partials/dashboard-stats")
         assert response.status_code == 200
-        assert "1" in response.text  # completed count
+        assert read_stat(response.text, "jobs-completed") == 1
         assert "0.2" in response.text  # ~0.19 GB formats to 0.2
 
     async def test_dashboard_stats_with_queued_jobs(self, client: AsyncClient, app):
@@ -96,7 +97,7 @@ class TestDashboardStatsPartial:
 
         response = await client.get("/partials/dashboard-stats")
         assert response.status_code == 200
-        assert "3" in response.text  # queued count
+        assert read_stat(response.text, "jobs-queued") == 3
 
     async def test_dashboard_stats_with_online_workers(self, client: AsyncClient, app):
         """Test dashboard stats displays online worker count."""
@@ -113,7 +114,7 @@ class TestDashboardStatsPartial:
 
         response = await client.get("/partials/dashboard-stats")
         assert response.status_code == 200
-        assert "2" in response.text  # workers_online
+        assert read_stat(response.text, "workers-online") == 2
 
 
 class TestSchedulerInfoPartial:
@@ -142,7 +143,7 @@ class TestSchedulerInfoPartial:
 
         response = await client.get("/partials/scheduler-info")
         assert response.status_code == 200
-        assert "3" in response.text  # library_count
+        assert read_stat(response.text, "libraries") == 3
 
     async def test_scheduler_info_with_queued_jobs(self, client: AsyncClient, app):
         """Test scheduler info displays queued job count."""
@@ -162,7 +163,7 @@ class TestSchedulerInfoPartial:
 
         response = await client.get("/partials/scheduler-info")
         assert response.status_code == 200
-        assert "2" in response.text  # jobs_queued
+        assert read_stat(response.text, "jobs-queued") == 2
 
     async def test_scheduler_info_queue_paused_status(self, client: AsyncClient, app):
         """Test scheduler info reflects queue pause status."""

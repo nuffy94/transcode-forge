@@ -1,8 +1,8 @@
 {% from "partials/_icons.html" import icon %}
-{#- The jobs-queued span is a data-contract hook (C.1):
-    tests/test_view_consistency.py extracts its bare-integer text and
-    cross-checks it against the dashboard tile, sidebar badge, and
-    /api/stats. Keep the id and the bare number. -#}
+{#- The data-stat spans are data-contract hooks (C.1): tests read their
+    bare-integer text by name (tests/helpers.read_stat) and cross-check
+    the queue count against the dashboard tile, sidebar badge, and
+    /api/stats. Keep the hooks and the bare numbers. -#}
 <div class="space-y-3 font-mono text-[11px]">
     <div class="flex items-center justify-between">
         <span class="forge-stat-label">Redis</span>
@@ -44,11 +44,11 @@
     <div class="pt-3 border-t border-forge-rule/60 space-y-2">
         <div class="flex justify-between items-center">
             <span class="forge-stat-label">Libraries</span>
-            <span class="font-semibold text-forge-paper tabular-nums">{{ library_count }}</span>
+            <span data-stat="libraries" class="font-semibold text-forge-paper tabular-nums">{{ library_count }}</span>
         </div>
         <div class="flex justify-between items-center">
             <span class="forge-stat-label">In queue</span>
-            <span id="jobs-queued" class="font-semibold {% if jobs_queued %}text-forge-ember{% else %}text-forge-mute{% endif %} tabular-nums">{{ jobs_queued }}</span>
+            <span id="jobs-queued" data-stat="jobs-queued" class="font-semibold {% if jobs_queued %}text-forge-ember{% else %}text-forge-mute{% endif %} tabular-nums">{{ jobs_queued }}</span>
         </div>
     </div>
 </div>
