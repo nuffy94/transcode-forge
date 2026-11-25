@@ -31,16 +31,6 @@ def _validate_vmaf(value: str) -> str:
     return value
 
 
-def _validate_quality(value: str) -> str:
-    try:
-        quality = int(value)
-    except ValueError as exc:
-        raise ValueError(f"Quality preset must be an integer, got {value!r}") from exc
-    if not 1 <= quality <= 51:
-        raise ValueError(f"Quality preset must be 1-51, got {quality}")
-    return value
-
-
 # key -> value validator. This is the complete set of override-able settings;
 # set_override rejects anything else (secrets can never become DB-editable
 # by accident — extending this list is an explicit, reviewed act).
@@ -49,9 +39,6 @@ TUNABLE_KEYS: dict[str, Callable[[str], str]] = {
     "target_vmaf": _validate_vmaf,
     "vmaf_safety_mean": _validate_vmaf,
     "vmaf_safety_perc5": _validate_vmaf,
-    "quality_movies": _validate_quality,
-    "quality_tv": _validate_quality,
-    "quality_anime": _validate_quality,
 }
 # vmaf_min_floor was retired by the gate decoupling (2026-07-05): the gate
 # no longer derives from the target, so the old coupled floor is neither

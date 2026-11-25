@@ -6,9 +6,9 @@ Master + derivative model with content-addressed keys:
 - lock/unlock(): DB-based coordination (minimal; job-claim already guards).
 - cleanup(): Release scratch space.
 
-Derivatives are named deterministically: blake2b(source_path|source_resolution|
-source_audio_codec|target_resolution|target_audio_codec|encoder|crf|preset)
-suffixed with encoder+crf+ext. Same source+params → same key → transparent dedup.
+Derivatives are named by models.derivative.derivative_key_for_job: a
+goal-keyed hash suffixed with codec+ext. Same source+goal → same key →
+transparent dedup.
 
 Bucket layout: Single bucket with prefixes for v1:
   - masters/{prefix}/{object_key}
@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -31,6 +31,9 @@ from transcode_forge.db import DBConnection
 from transcode_forge.s3compat import s3_client_config
 from transcode_forge.worker.storage.base import CommitResult
 from transcode_forge.worker.storage.scratch import ScratchManager
+
+if TYPE_CHECKING:
+    from transcode_forge.models.job import Job
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +190,7 @@ class S3Backend:
         self,
         local_output: Path,
         source: str,
-        job: Any,
+        job: Job,
         space_saved: int = 0,
     ) -> CommitResult:
         """Upload a transcoded output as a derivative.
@@ -199,8 +202,7 @@ class S3Backend:
         Args:
             local_output: Path to the transcoded file (local filesystem).
             source: S3 object key of the master.
-            job: Job object (Pydantic model or dict) with id, source_path,
-                target_resolution, encoder, crf, etc.
+            job: The Job being committed; its goal names the derivative.
             space_saved: Unused for S3 backend (always returns 0).
 
         Returns:
@@ -209,42 +211,13 @@ class S3Backend:
         Raises:
             IOError: If upload fails or output file is missing.
         """
-        from transcode_forge.models.derivative import compute_derivative_key
+        from transcode_forge.models.derivative import derivative_key_for_job
 
         stat_result = await asyncio.to_thread(local_output.stat)
         output_size = stat_result.st_size
 
-        # Extract job fields, supporting both Pydantic models and dicts.
-        def _get_field(obj: Any, field: str, default: Any = "") -> Any:
-            """Get a field from a Pydantic model or dict."""
-            if hasattr(obj, field):
-                return getattr(obj, field) or default
-            if isinstance(obj, dict):
-                return obj.get(field, default)
-            return default
-
-        source_path = _get_field(job, "source_path", "")
-        source_resolution = _get_field(job, "source_resolution", "") or ""
-        source_audio_codec = _get_field(job, "source_audio_codec", "") or ""
-        # Mirror http_agent._derivative_key_for exactly — the upload key must
-        # equal the key the agent registers/dedup-checks with the scheduler.
-        target_resolution = _get_field(job, "target_resolution", "") or source_resolution
-        target_audio_codec = _get_field(job, "target_audio_codec", "") or "copy"
-        target_codec = _get_field(job, "target_codec", "hevc") or "hevc"
-        target_vmaf = _get_field(job, "target_vmaf", None)
-        job_id = _get_field(job, "id", "")
-
-        # Compute the goal-keyed derivative key.
-        derivative_key = compute_derivative_key(
-            source_path=source_path,
-            source_resolution=source_resolution,
-            source_audio_codec=source_audio_codec,
-            target_resolution=target_resolution,
-            target_audio_codec=target_audio_codec,
-            target_codec=target_codec,
-            target_vmaf=target_vmaf,
-            local_output=local_output,
-        )
+        job_id = job.id
+        derivative_key = derivative_key_for_job(job, local_output)
 
         logger.info(
             "Uploading derivative for job %s: %s → s3://%s/%s",
@@ -322,15 +295,14 @@ class S3Backend:
             db=self.db,
         )
 
-    async def cleanup(self, job: Any) -> None:
+    async def cleanup(self, job: Job) -> None:
         """Clean up temporary resources after a job.
 
         Releases scratch space and orphaned S3 parts.
 
         Args:
-            job: Job model or dict with id (the agent passes the Pydantic
-                Job model; assuming a dict here crashed the job loop).
+            job: The job to clean up after.
         """
-        job_id = job.id if hasattr(job, "id") else job.get("id", "")
+        job_id = job.id
         logger.info("Cleaning up S3 job %s", job_id)
         await self.scratch_manager.release(job_id=job_id)
