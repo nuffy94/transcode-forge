@@ -531,3 +531,67 @@ class TestMcpClientsViews:
         for name, status in api.items():
             row_html = html.split(name, 1)[1].split("</tr>", 1)[0]
             assert status.capitalize() in row_html, (name, status)
+
+
+class TestSkipsReachActivity:
+    """A file's skip reason is shown in the catalog (media_files) and on
+    Activity's "Scan skips" (skipped_files). Every skip, whoever decides
+    it, has to reach both, and every reason the filter offers has to be
+    one a skip can carry.
+    """
+
+    async def _library(self, db) -> str:
+        from transcode_forge.repos import libraries as lib_repo
+
+        return await lib_repo.create_library(db, name="Films", media_type="movies", path="/m")
+
+    async def test_manual_skip_is_listed(self, client: AsyncClient, app):
+        from transcode_forge.repos import media as media_repo
+
+        db = app.state.db
+        lib_id = await self._library(db)
+        fid = await media_repo.upsert_media_file(
+            db,
+            library_id=lib_id,
+            file_path="/m/by-hand.mkv",
+            filename="by-hand.mkv",
+            video_codec="h264",
+            file_size=1234,
+        )
+        resp = await client.post("/api/media/skip", json={"file_ids": [fid]})
+        assert resp.status_code == 200
+
+        filtered = (await client.get("/partials/activity-skips?reason=manual_skip")).text
+        assert "by-hand.mkv" in filtered
+        assert "by-hand.mkv" in (await client.get("/partials/activity-skips")).text
+
+        # Unskipping in the catalog takes it off Activity too.
+        await client.post("/api/media/unskip", json={"file_ids": [fid]})
+        assert "by-hand.mkv" not in (await client.get("/partials/activity-skips")).text
+
+    async def test_scanner_skips_are_listed(self, client: AsyncClient, app):
+        from transcode_forge.repos import media as media_repo
+
+        db = app.state.db
+        lib_id = await self._library(db)
+        for name, codec in (("hevc-one", "hevc"), ("mpeg-one", "mpeg2video")):
+            await media_repo.upsert_media_file(
+                db,
+                library_id=lib_id,
+                file_path=f"/m/{name}.mkv",
+                filename=f"{name}.mkv",
+                video_codec=codec,
+            )
+        hevc = (await client.get("/partials/activity-skips?reason=already_hevc")).text
+        other = (await client.get("/partials/activity-skips?reason=not_h264")).text
+        assert "hevc-one.mkv" in hevc
+        assert "mpeg-one.mkv" in other
+
+    async def test_filter_offers_exactly_the_skip_reasons(self, client: AsyncClient):
+        from transcode_forge.models.skipped import SkipReason
+
+        html = (await client.get("/activity?view=skips")).text
+        m = re.search(r'id="skip-reason-filter".*?</select>', html, re.DOTALL)
+        assert m is not None
+        offered = set(re.findall(r'<option value="([^"]*)"', m.group(0))) - {""}
+        assert offered == {r.value for r in SkipReason}

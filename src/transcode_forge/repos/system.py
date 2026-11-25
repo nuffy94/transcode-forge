@@ -23,11 +23,19 @@ async def set_state(db: DBConnection, key: str, value: str) -> None:
 
 
 async def is_queue_paused(db: DBConnection) -> bool:
-    """The queue is paused if either the manual flag is set OR we're outside
-    every active schedule window. Imported here to avoid a circular import.
-    """
-    if (await get_state(db, "queue_paused", "0")) == "1":
-        return True
+    """Workers get nothing to claim while paused by hand or while every
+    active schedule window is closed."""
+    return await is_paused_by_hand(db) or await is_schedule_closed(db)
+
+
+async def is_paused_by_hand(db: DBConnection) -> bool:
+    """The pause flag the Pause/Resume button owns."""
+    return (await get_state(db, "queue_paused", "0")) == "1"
+
+
+async def is_schedule_closed(db: DBConnection) -> bool:
+    """Outside every enabled schedule window. Only Settings changes this.
+    Imported here to avoid a circular import."""
     from transcode_forge.repos import schedules as sched_repo
 
     return not await sched_repo.is_within_active_window(db)

@@ -21,6 +21,7 @@ from transcode_forge.models.job import (
     WAITING_JOB_STATUSES,
     display_percent,
 )
+from transcode_forge.models.skipped import SkipReason
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES
 from transcode_forge.redis import check_redis_health
 from transcode_forge.repos import exclusions as excl_repo
@@ -45,6 +46,8 @@ templates.env.globals["retryable_job_statuses"] = RETRYABLE_JOB_STATUSES
 templates.env.globals["alive_worker_statuses"] = ALIVE_WORKER_STATUSES
 # Progress percentages round in one place, shared with the live event.
 templates.env.filters["percent"] = display_percent
+# Activity's skip-reason filter offers exactly the reasons a skip can carry.
+templates.env.globals["skip_reasons"] = list(SkipReason)
 
 # Jinja2 has no bitwise '&' operator, so a template doing `days_mask & 1`
 # fails to COMPILE (TemplateSyntaxError) — which 500'd /partials/schedules

@@ -597,6 +597,15 @@ async def test_tuning_api_rejects_invalid_and_non_editable(client: AsyncClient):
     assert "target_vmaf" not in r.json()["overrides"]
 
 
+async def test_quality_presets_live_on_the_library_not_the_tuning_api(client: AsyncClient):
+    """Queueing reads libraries.quality_preset, so a tuning key for the
+    preset would save a value nothing uses. The library row is its only home."""
+    for key in ("quality_movies", "quality_tv", "quality_anime"):
+        r = await client.put("/api/settings/tuning", json={"values": {key: "30"}})
+        assert r.status_code == 400, key
+        assert key not in (await client.get("/api/settings/tuning")).json()["data"]
+
+
 async def test_tuning_api_requires_auth(unauthed_client: AsyncClient):
     r = await unauthed_client.get("/api/settings/tuning")
     assert r.status_code == 401
