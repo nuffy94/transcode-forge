@@ -121,26 +121,7 @@ def _job(name: str, status: JobStatus = JobStatus.PENDING, library_id: str | Non
 
 
 @pytest_asyncio.fixture
-async def mcp_running(app: Any) -> Any:
-    """The transport's session manager has to be running, as the lifespan
-    would run it. The app fixture skips the lifespan. It is entered and left
-    in one dedicated task: its task group refuses to exit from another."""
-    started, stop = asyncio.Event(), asyncio.Event()
-
-    async def runner() -> None:
-        async with app.state.mcp_session_manager.run():
-            started.set()
-            await stop.wait()
-
-    task = asyncio.create_task(runner())
-    await started.wait()
-    yield
-    stop.set()
-    await task
-
-
-@pytest_asyncio.fixture
-async def mcp(app: Any, mcp_running: Any) -> Any:
+async def mcp(app: Any) -> Any:
     """A client with no cookie and no token: only what each test adds."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -261,9 +242,7 @@ async def test_bad_credentials_get_401(app: Any, mcp: AsyncClient, case: str) ->
         assert token not in resp.text
 
 
-async def test_admin_session_alone_is_not_a_credential(
-    client: AsyncClient, mcp_running: Any
-) -> None:
+async def test_admin_session_alone_is_not_a_credential(client: AsyncClient) -> None:
     """Row 3: the logged-in browser session never satisfies /mcp."""
     resp = await _list_tools(client, None)
     assert resp.status_code == 401

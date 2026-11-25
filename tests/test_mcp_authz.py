@@ -490,7 +490,7 @@ async def test_deny_sends_access_denied_and_grants_nothing(
 
 
 async def test_code_exchange_issues_tokens_that_work(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any, app: Any
+    anon: AsyncClient, client: AsyncClient, app: Any
 ) -> None:
     tokens = await obtain_tokens(anon, client)
     assert tokens["token_type"] == "Bearer"
@@ -550,9 +550,7 @@ async def test_code_exchange_rejections(anon: AsyncClient, client: AsyncClient) 
     assert resp.status_code == 400
 
 
-async def test_code_replay_revokes_the_grant(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any
-) -> None:
+async def test_code_replay_revokes_the_grant(anon: AsyncClient, client: AsyncClient) -> None:
     code, verifier, _ = await obtain_code(anon, client)
     first = await exchange(anon, code, verifier)
     assert first.status_code == 200
@@ -583,9 +581,7 @@ async def test_expired_code_is_refused(
     assert resp.json()["error"] == "invalid_grant"
 
 
-async def test_refresh_rotates_and_a_replay_revokes(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any
-) -> None:
+async def test_refresh_rotates_and_a_replay_revokes(anon: AsyncClient, client: AsyncClient) -> None:
     tokens = await obtain_tokens(anon, client)
     rotated = await refresh(anon, tokens["refresh_token"])
     assert rotated.status_code == 200, rotated.text
@@ -632,9 +628,7 @@ async def test_revoked_grant_ends_refresh_too(anon: AsyncClient, client: AsyncCl
 # ── revocation endpoint ──────────────────────────────────────────────
 
 
-async def test_revocation_endpoint(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any, app: Any
-) -> None:
+async def test_revocation_endpoint(anon: AsyncClient, client: AsyncClient, app: Any) -> None:
     tokens = await obtain_tokens(anon, client)
     unknown_client = await anon.post(
         "/oauth/revoke",
@@ -690,7 +684,7 @@ async def test_refused_document_means_unknown_client(
 
 
 async def test_admin_client_flow_matches_redirects_exactly(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any
+    anon: AsyncClient, client: AsyncClient
 ) -> None:
     created = await client.post(
         "/api/mcp/clients",
@@ -714,7 +708,7 @@ async def test_admin_client_flow_matches_redirects_exactly(
 
 
 async def test_disabled_client_is_cut_off_everywhere(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any
+    anon: AsyncClient, client: AsyncClient
 ) -> None:
     tokens = await obtain_tokens(anon, client)
     code, verifier, _ = await obtain_code(anon, client)
@@ -733,9 +727,7 @@ async def test_disabled_client_is_cut_off_everywhere(
 # ── the step-up round trip (the Phase 2 acceptance test) ─────────────
 
 
-async def test_step_up_round_trip(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any, app: Any
-) -> None:
+async def test_step_up_round_trip(anon: AsyncClient, client: AsyncClient, app: Any) -> None:
     """A read grant is challenged for jobs:write, the client re-authorizes
     with the wider scope, and the retried call succeeds."""
     job = Job(
@@ -817,7 +809,7 @@ def test_redirect_matches_rule() -> None:
 
 
 async def test_startup_seeding_keeps_a_disabled_client_disabled(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any, app: Any
+    anon: AsyncClient, client: AsyncClient, app: Any
 ) -> None:
     """Seeding creates the Claude documents on first boot and never undoes
     an operator's decision: a disabled client stays disabled across restarts,
@@ -845,7 +837,7 @@ async def test_startup_seeding_keeps_a_disabled_client_disabled(
     ],
 )
 async def test_redirect_uri_is_compared_as_the_client_spelled_it(
-    anon: AsyncClient, client: AsyncClient, mcp_running: Any, registered: str
+    anon: AsyncClient, client: AsyncClient, registered: str
 ) -> None:
     """A parsed URL re-serializes differently (default port dropped, host
     lowercased, a bare origin gains a slash); the exchange has to accept the

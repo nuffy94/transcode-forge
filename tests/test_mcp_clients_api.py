@@ -71,7 +71,9 @@ async def test_allow_admin_client(client: AsyncClient) -> None:
     assert resp.status_code == 200, resp.text
     client_id = resp.json()["id"]
     assert client_id.startswith("tf-")
-    (row,) = (await client.get("/api/mcp/clients")).json()["data"]
+    # Startup already allowed the Claude client documents, so find this one.
+    rows = {row["id"]: row for row in (await client.get("/api/mcp/clients")).json()["data"]}
+    row = rows[client_id]
     assert row["name"] == "Inspector"
     assert row["redirect_uris"] == ["https://i.example/cb"]
     for bad in (

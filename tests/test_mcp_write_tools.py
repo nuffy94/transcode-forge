@@ -69,7 +69,7 @@ async def _queued_job(db: Any, name: str = "a") -> Job:
     return job
 
 
-async def test_write_tools_need_the_write_scope(app: Any, mcp_running: Any) -> None:
+async def test_write_tools_need_the_write_scope(app: Any) -> None:
     read_only = await _grant(app.state.db, "catalog:read", "jobs:read")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         for tool, args in (("cancel_job", {"job_id": "x"}), ("queue_file", {"file_id": "x"})):
@@ -78,7 +78,7 @@ async def test_write_tools_need_the_write_scope(app: Any, mcp_running: Any) -> N
             assert 'scope="jobs:write"' in resp.headers["www-authenticate"]
 
 
-async def test_cancel_job(app: Any, mcp_running: Any) -> None:
+async def test_cancel_job(app: Any) -> None:
     db = app.state.db
     token = await _grant(db, "jobs:write")
     waiting = await _queued_job(db, "waiting")
@@ -108,7 +108,7 @@ async def test_cancel_job(app: Any, mcp_running: Any) -> None:
         assert "Job not found" in missing["content"][0]["text"]
 
 
-async def test_queue_file(app: Any, mcp_running: Any) -> None:
+async def test_queue_file(app: Any) -> None:
     db = app.state.db
     token = await _grant(db, "jobs:write")
     file_id = await seed_media_file(db, "/movies/film.mkv")
@@ -150,7 +150,7 @@ async def test_rest_cancel_route_is_unchanged(client: AsyncClient, app: Any) -> 
     assert (await client.post("/api/jobs/no-such-job/cancel")).status_code == 404
 
 
-async def test_cancel_refuses_a_job_a_worker_already_holds(app: Any, mcp_running: Any) -> None:
+async def test_cancel_refuses_a_job_a_worker_already_holds(app: Any) -> None:
     """The waiting check and the write are one statement: a claim that landed
     first keeps its job, its worker and its claim token."""
     db = app.state.db

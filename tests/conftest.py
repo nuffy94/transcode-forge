@@ -10,6 +10,7 @@ SQLite-only runs can't reach. Tests that genuinely can't run on Postgres
 carry ``@pytest.mark.sqlite_only``.
 """
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -109,16 +110,40 @@ def test_settings(tmp_db_path: str, tmp_path: Path) -> Settings:
 
 @pytest_asyncio.fixture
 async def app(test_settings: Settings) -> Any:
-    """A test FastAPI app booted through the real lifespan, with Redis mocked."""
+    """A test FastAPI app booted through the real lifespan, with Redis mocked.
+
+    The lifespan is entered and left in one dedicated task. It runs the MCP
+    session manager, whose task group refuses to exit from a task other than
+    the one that entered it, and a fixture's teardown is another task.
+    """
     application = create_app(settings=test_settings)
 
     mock_redis = AsyncMock()
     mock_redis.ping = AsyncMock(return_value=True)
     mock_redis.aclose = AsyncMock()
 
-    with patch("transcode_forge.main.create_redis_pool", AsyncMock(return_value=mock_redis)):
-        async with lifespan(application):
-            yield application
+    started, stop = asyncio.Event(), asyncio.Event()
+
+    async def serve() -> None:
+        with patch("transcode_forge.main.create_redis_pool", AsyncMock(return_value=mock_redis)):
+            async with lifespan(application):
+                started.set()
+                await stop.wait()
+
+    serving = asyncio.create_task(serve())
+    ready = asyncio.create_task(started.wait())
+    try:
+        await asyncio.wait({serving, ready}, return_when=asyncio.FIRST_COMPLETED)
+        if not started.is_set():
+            # Startup raised: surface it here instead of waiting forever.
+            await serving
+        yield application
+    finally:
+        # Every way out, a failed or cancelled setup included, ends the
+        # lifespan and joins its task.
+        ready.cancel()
+        stop.set()
+        await serving
 
 
 @pytest_asyncio.fixture
@@ -140,24 +165,3 @@ async def unauthed_client(app: Any) -> AsyncClient:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-
-
-@pytest_asyncio.fixture
-async def mcp_running(app: Any) -> AsyncIterator[None]:
-    """The MCP transport's session manager, running as the lifespan would run
-    it (the app fixture skips the lifespan). Entered and left in one dedicated
-    task: its task group refuses to exit from another."""
-    import asyncio
-
-    started, stop = asyncio.Event(), asyncio.Event()
-
-    async def runner() -> None:
-        async with app.state.mcp_session_manager.run():
-            started.set()
-            await stop.wait()
-
-    task = asyncio.create_task(runner())
-    await started.wait()
-    yield
-    stop.set()
-    await task
