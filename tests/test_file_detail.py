@@ -132,3 +132,54 @@ class TestFileDetailPartial:
         assert resp.status_code == 200
         assert "Lift exclusion" in resp.text
         assert "Queue transcode" not in resp.text
+
+
+class TestStatusPillSingleSource:
+    """S1-9: the status-to-pill map is defined once server-side. The drawer
+    and the TV episode list read it as a Jinja global, and the Movies/TV
+    tables (catalog.js) read the same map through data-status-pills. A
+    needs_transcode file used the queued style in the tables but fell
+    through to the muted pending style in the drawer and episode list."""
+
+    @staticmethod
+    def _pill(html: str) -> str:
+        import re
+
+        m = re.search(r'class="forge-pill (forge-pill--[\w-]+)"', html)
+        assert m is not None, "no status pill rendered"
+        return m.group(1)
+
+    async def test_needs_transcode_reads_one_style_everywhere(self, client: AsyncClient, app):
+        import html as html_lib
+        import json
+        import re
+
+        db = app.state.db
+        lib_id = await lib_repo.create_library(
+            db, name="tv", media_type="tv", path="/media/tv", quality_preset=21
+        )
+        fid = await media_repo.upsert_media_file(
+            db,
+            library_id=lib_id,
+            file_path="/media/tv/Show/S01E01.mkv",
+            filename="S01E01.mkv",
+            show_name="Show",
+            season=1,
+            episode=1,
+            video_codec="h264",
+            file_size=2_000_000_000,
+        )
+        file = await media_repo.get_media_file(db, fid)
+        assert file is not None and file["transcode_status"] == "needs_transcode"
+
+        drawer = self._pill((await client.get(f"/partials/file-detail?file_id={fid}")).text)
+        episodes = self._pill(
+            (await client.get("/partials/tv-episodes", params={"show": "Show"})).text
+        )
+        assert drawer == episodes == "forge-pill--queued"
+
+        for page in ("/movies", "/tv"):
+            m = re.search(r"data-status-pills=\"([^\"]+)\"", (await client.get(page)).text)
+            assert m is not None, f"{page} does not hand catalog.js the pill map"
+            pills = json.loads(html_lib.unescape(m.group(1)))
+            assert pills["needs_transcode"] == drawer

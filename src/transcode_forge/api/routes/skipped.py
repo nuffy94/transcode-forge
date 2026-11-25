@@ -16,19 +16,12 @@ router = APIRouter(tags=["skipped"])
 @router.get("/skipped")
 async def list_skipped(
     library_id: str | None = Query(None, description="Library id to filter"),
-    reason: str | None = Query(None, description="Skip reason to filter"),
+    reason: SkipReason | None = Query(None, description="Skip reason to filter"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=200, description="Results per page (max 200)"),
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
     """List skipped files with optional filters."""
-    # Validate reason if provided
-    if reason and reason not in SkipReason.__members__.values():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid reason. Valid values: {', '.join(SkipReason.__members__.keys())}",
-        )
-
     offset = (page - 1) * per_page
     files, total = await skip_repo.list_skipped(
         db, library_id=library_id, reason=reason, limit=per_page, offset=offset
