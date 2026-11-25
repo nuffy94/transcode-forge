@@ -581,7 +581,9 @@ class TestMcpClientsViews:
         await oauth_repo.disable_client(db, "https://b.example/doc")
         rows = (await client.get("/api/mcp/clients")).json()["data"]
         api = {row["name"]: row["status"] for row in rows}
-        assert api == {"c-active": "active", "c-disabled": "disabled"}
+        # Startup already allowed the Claude client documents; they get the
+        # same pill check below.
+        assert {"c-active": "active", "c-disabled": "disabled"}.items() <= api.items()
         html = (await client.get("/partials/mcp-clients")).text
         for name, status in api.items():
             row_html = html.split(name, 1)[1].split("</tr>", 1)[0]

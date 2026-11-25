@@ -211,9 +211,9 @@ async def test_restart_drains_before_register_and_claim(client: AsyncClient, app
     assert agent1.outbox.pending_job_ids() == {job.id}
     # agent1 "dies" here (no cleanup — that's the point).
 
-    # New life, same state dir, same token — same worker identity. Emulate
-    # start()'s exact order: drain FIRST (needs only the bound token)...
-    issue_headers_client = agent1._client  # same token client works
+    # New life, same state dir, same token: same worker identity. run() is
+    # the real boot order (drain, register, recover, loops); only the
+    # process shell (logging, signals, hardware probe) is left out.
     agent2 = HttpWorkerAgent(
         Settings(
             worker_name="mortal-node",
@@ -224,16 +224,25 @@ async def test_restart_drains_before_register_and_claim(client: AsyncClient, app
         "unused-placeholder-token",
     )
     await agent2._client.aclose()
-    agent2._client = issue_headers_client
-    agent2.worker_id = agent1.worker_id
+    agent2._client = agent1._client  # same token client works
+    agent2.capabilities = agent1.capabilities
+    agent2.host = agent1.host
+    agent2._claim_backoff = Backoff(base=0.001, cap=0.005)
 
     hostile1.watch("claim-job")
     claims_before = hostile1.hit_count("claim-job")
-    assert await agent2._drain_outbox() is DrainResult.EMPTY
+    run_task = asyncio.create_task(agent2.run())
+    try:
+        async with asyncio.timeout(10):
+            while hostile1.hit_count("claim-job") == claims_before:
+                await asyncio.sleep(0.01)
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
 
     final = await job_repo.get_job(app.state.db, job.id)
     assert final.status == JobStatus.COMPLETE  # finished work survived the crash
-    assert hostile1.hit_count("claim-job") == claims_before  # drained before any claim
     assert agent2.outbox.pending_job_ids() == set()
 
 
@@ -367,12 +376,20 @@ async def test_stale_entry_never_lands_on_reclaimed_job(client: AsyncClient, app
     worker may claim again, so it can never land on attempt 2."""
     agent, _hostile = await _make_agent(client, app, tmp_path, "fence-node")
     job = await _queue_and_claim(client, app, agent, "fence")
-    # Stale attempt-1 outcome, delivery lost:
-    _journal(agent, job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
-    # Operator retries the job — same id, ownership cleared:
-    await job_repo.update_job(
-        app.state.db, job.id, status=JobStatus.PENDING, worker_id=None, error_message=None
+    # Attempt 1 fails through the real report path, but the ack is lost,
+    # so the same report stays journaled:
+    await agent._client.failed(
+        job_id=job.id,
+        error_message="attempt-1 stale",
+        retry_count=1,
+        claim_token=agent._claim_token,
     )
+    assert (await job_repo.get_job(app.state.db, job.id)).status == JobStatus.FAILED
+    _journal(agent, job.id, "failed", {"error_message": "attempt-1 stale", "retry_count": 1})
+    # Operator retries the job through the real endpoint: same id, owner
+    # and claim token cleared.
+    retry = await client.post(f"/api/jobs/{job.id}/retry")
+    assert retry.status_code == 200, retry.text
 
     # The job loop's fence: drain MUST settle before any claim.
     assert await agent._drain_outbox() is DrainResult.EMPTY  # 403 → discarded

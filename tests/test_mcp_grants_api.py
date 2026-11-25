@@ -7,10 +7,8 @@ exist, and revokes one. The token is returned once and never shown again.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-import pytest_asyncio
 from httpx import AsyncClient
 
 from transcode_forge.repos import oauth as oauth_repo
@@ -20,22 +18,6 @@ META = {
     "io.modelcontextprotocol/protocolVersion": PV,
     "io.modelcontextprotocol/clientCapabilities": {},
 }
-
-
-@pytest_asyncio.fixture
-async def mcp_running(app: Any) -> Any:
-    started, stop = asyncio.Event(), asyncio.Event()
-
-    async def runner() -> None:
-        async with app.state.mcp_session_manager.run():
-            started.set()
-            await stop.wait()
-
-    task = asyncio.create_task(runner())
-    await started.wait()
-    yield
-    stop.set()
-    await task
 
 
 async def _tools_list(c: AsyncClient, token: str) -> Any:
@@ -60,7 +42,7 @@ async def test_requires_admin_session(unauthed_client: AsyncClient) -> None:
     assert (await unauthed_client.delete("/api/mcp/grants/some-id")).status_code == 401
 
 
-async def test_issue_list_use_revoke(client: AsyncClient, app: Any, mcp_running: Any) -> None:
+async def test_issue_list_use_revoke(client: AsyncClient, app: Any) -> None:
     resp = await client.post("/api/mcp/grants", json={"label": "laptop", "scopes": ["jobs:read"]})
     assert resp.status_code == 200, resp.text
     issued = resp.json()

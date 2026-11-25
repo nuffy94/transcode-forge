@@ -14,15 +14,12 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from transcode_forge.admin import ensure_admin
-
-ADMIN_PW = "release-gate-password-123"
-
 
 async def test_install_to_add_worker_flow(unauthed_client: AsyncClient, app: Any) -> None:
     # 1. The instance already has an owner (startup made one); log in.
-    await ensure_admin(app.state.db, ADMIN_PW)
-    r = await unauthed_client.post("/api/auth/login", json={"password": ADMIN_PW})
+    r = await unauthed_client.post(
+        "/api/auth/login", json={"password": app.state.settings.admin_password}
+    )
     assert r.status_code == 200
 
     # 2. Preflight is healthy (no critical library/ffmpeg issues block us).
@@ -70,8 +67,9 @@ async def test_install_to_add_worker_flow(unauthed_client: AsyncClient, app: Any
 async def test_revoked_token_cannot_register(unauthed_client: AsyncClient, app: Any) -> None:
     """A revoked token is rejected at registration — the offboarding side of
     the gate."""
-    await ensure_admin(app.state.db, ADMIN_PW)
-    await unauthed_client.post("/api/auth/login", json={"password": ADMIN_PW})
+    await unauthed_client.post(
+        "/api/auth/login", json={"password": app.state.settings.admin_password}
+    )
     token = (await unauthed_client.post("/api/worker-tokens", json={"label": "doomed"})).json()[
         "token"
     ]

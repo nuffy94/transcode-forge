@@ -46,3 +46,30 @@ async def test_cancellation_is_quiet(caplog):
             await task
         await asyncio.sleep(0)
     assert caplog.text == ""
+
+
+@pytest.fixture
+async def stranded_scan(db):
+    """A scan row left 'running' by a process that died mid-scan. Listed
+    before ``app`` in a test's arguments, so it exists when the app boots."""
+    from transcode_forge.models.scan import Scan
+    from transcode_forge.repos import scans as scan_repo
+
+    return await scan_repo.create_scan(db, Scan(library="movies"))
+
+
+async def test_the_app_fixture_boots_through_the_real_lifespan(stranded_scan, app):
+    """Every test's app starts the way the server does, so a startup step
+    that goes missing from lifespan fails the suite."""
+    from transcode_forge.models.scan import ScanStatus
+    from transcode_forge.repos import scans as scan_repo
+    from transcode_forge.repos import users as user_repo
+
+    live = {t.get_name() for t in asyncio.all_tasks() if not t.done()}
+    assert {"scheduled-scans", "stale-workers", "orphan-requeue"} <= live
+
+    assert app.state.redis is not None  # the mock the fixture patched in
+    assert await user_repo.has_admin(app.state.db)
+
+    scan = await scan_repo.get_scan(app.state.db, stranded_scan)
+    assert scan is not None and scan.status == ScanStatus.FAILED
