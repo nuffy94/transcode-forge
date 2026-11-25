@@ -28,7 +28,9 @@ from transcode_forge.models.job import (
     ACTIVE_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     Job,
+    JobPhase,
     JobStatus,
+    display_percent,
 )
 from transcode_forge.models.worker import ALIVE_WORKER_STATUSES, Worker, WorkerStatus
 from transcode_forge.repos import jobs as job_repo
@@ -422,7 +424,7 @@ async def register(
     active = ",".join("?" * len(ACTIVE_JOB_STATUSES))
     cur = await db.execute(
         "UPDATE jobs SET status = ?, worker_id = NULL, claim_token = NULL,"
-        " started_at = NULL, progress = 0, phase = NULL, updated_at = ?"
+        " started_at = NULL, updated_at = ?"
         f" WHERE worker_id = ? AND status IN ({active})",
         (
             JobStatus.QUEUED.value,
@@ -566,17 +568,20 @@ async def check_derivative(
                 "derivative_key": body.derivative_key,
             }
         claim_token = await _require_claim_token(db, token_row, body.claim_token)
-        won = await job_repo.finalize_job(
-            db,
-            job_id,
-            job.worker_id or "",
-            JobStatus.COMPLETE,
-            claim_token=claim_token,
-            output_size=existing.get("output_size"),
-            space_saved=0,  # S3 doesn't reclaim space.
-            progress=1.0,
-            completed_at=datetime.now(UTC).isoformat(),
-        )
+        # A transaction, like the worker's own reports: finalize_job also
+        # moves the catalog row, and both writes land together.
+        async with db.transaction() as tx:
+            won = await job_repo.finalize_job(
+                tx,
+                job_id,
+                job.worker_id or "",
+                JobStatus.COMPLETE,
+                claim_token=claim_token,
+                output_size=existing.get("output_size"),
+                space_saved=0,  # S3 doesn't reclaim space.
+                progress=1.0,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
         if not won:
             await _answer_lost_finalize(db, job_id, JobStatus.COMPLETE)
         logger.info(
@@ -603,13 +608,17 @@ async def progress(
 ) -> None:
     job = await _require_owned_job(db, job_id, token_row)
     claim_token = await _require_claim_token(db, token_row, body.claim_token)
+    # phase_pct is "this station's progress" for every phase, so the
+    # station bar reads one field. Encode's number arrives in progress
+    # (old workers send it nowhere else), so it is copied here.
+    phase_pct = body.progress if body.phase == JobPhase.ENCODE else body.phase_pct
     fields: dict[str, object] = {"progress": body.progress}
     if body.phase is not None:
         # phase_pct/phase_detail always ride along (None clears) so a
         # stale gauge % can't survive into the next phase.
         fields |= {
             "phase": body.phase,
-            "phase_pct": body.phase_pct,
+            "phase_pct": phase_pct,
             "phase_detail": body.phase_detail,
         }
     won = await job_repo.report_progress(
@@ -639,8 +648,12 @@ async def progress(
                         "progress": body.progress,
                         "speed": body.speed,
                         "phase": body.phase,
-                        "phase_pct": body.phase_pct,
+                        "phase_pct": phase_pct,
                         "phase_detail": body.phase_detail,
+                        # What the page shows, rounded here so the
+                        # browser only displays it (models.job).
+                        "percent": display_percent(body.progress),
+                        "phase_percent": display_percent(phase_pct),
                     }
                 ),
             )
@@ -687,10 +700,6 @@ async def complete_job(
             completed_at=datetime.now(UTC).isoformat(),
         )
         if won:
-            # Keep the catalog in step with the outcome — S3 rows can't
-            # self-heal on rescan (the master object is unchanged), so this
-            # is their only path out of 'queued'.
-            await media_repo.update_status_by_job(tx, job_id, transcode_status="complete")
             # The swap replaced the file: the row must describe the output
             # (codec, size, downscaled dimensions), not the last scan, or
             # it reads complete|h264 until the next rescan re-probes it.
@@ -735,6 +744,7 @@ async def skip_job(
             job.worker_id or "",
             JobStatus.SKIPPED,
             claim_token=claim_token,
+            skip_reason=body.reason,
             error_message=body.error_message[:MAX_ERROR_MESSAGE_LEN] or None,
             achieved_vmaf=body.achieved_vmaf,
             achieved_vmaf_perc5=body.achieved_vmaf_perc5,
@@ -754,9 +764,6 @@ async def skip_job(
                 resolution=job.source_resolution,
                 file_size=job.source_size,
                 skip_reason=SkipReason(body.reason),
-            )
-            await media_repo.update_status_by_job(
-                tx, job_id, transcode_status="skipped", skip_reason=body.reason
             )
     if not won:
         await _answer_lost_finalize(db, job_id, JobStatus.SKIPPED)
@@ -786,10 +793,6 @@ async def fail_job(
             retry_count=body.retry_count,
             completed_at=datetime.now(UTC).isoformat(),
         )
-        if won:
-            # Original kept and re-queueable; the row keeps job_id so the
-            # drawer still surfaces the failed job.
-            await media_repo.update_status_by_job(tx, job_id, transcode_status="needs_transcode")
     if not won:
         await _answer_lost_finalize(db, job_id, JobStatus.FAILED)
 
