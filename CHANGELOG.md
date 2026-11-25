@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-25
+
+Scheduler and workers, no migration. Upgrade the scheduler first, then the
+workers. Two things to expect afterwards. The first scan fills Activity's
+Scan skips with every file the scanner skips, which on a library that was
+mostly HEVC already is thousands of rows. And the `quality_movies`,
+`quality_tv` and `quality_anime` overrides saved through the Settings API
+are no longer accepted: queueing never read them, the preset on each
+library is the one that counts.
+
 ### Added
 - **HTTPS with no domain on Linode.** The scheduler StackScript gains a
   `assigned_name` UDF: with no domain given and `yes` selected, it serves
@@ -19,10 +29,79 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sets `TF_PUBLIC_URL` to `http://localhost:8000`, the tunnel's address,
   so a client on the tunnel can sign in; clients accept plain HTTP only on
   loopback, which the tunnel is.
+- **Retry on cancelled jobs.** The API already retried a cancelled job,
+  the pages only offered the button on failed ones. The retryable statuses
+  are now one set beside the enum, read by the retry endpoint and both job
+  tables, so cancelled jobs show Retry on Queue and Activity and bulk
+  retry includes them. (#148)
+- **`/api/queue/status` says why the queue is paused.** It returns
+  `paused_by_hand` and `schedule_closed` apart, and still returns `paused`
+  for either. (#146)
 
 ### Changed
 - The Linode runbook's plan table uses the current Cloud Manager plan
   names and hourly prices.
+- **Quality presets live on the library.** `quality_movies`, `quality_tv`
+  and `quality_anime` leave the tunable settings. The `TF_QUALITY_*` env
+  values still seed each library's preset on its first scan, and the
+  library panel edits the value queueing uses. (#146)
+- **`/api/skipped` answers 422 for an unknown `reason`.** The parameter is
+  typed by the skip-reason enum, so the framework validates it. It was a
+  hand check that answered 400. (#149)
+- **The dashboard's Cancel button on running jobs is gone.** The cancel
+  endpoint only accepts waiting jobs, so the button could only error.
+  Cancelling from Queue is unchanged. (#147)
+- **Images are published by the run that tested them.** Publishing is the
+  last job of the test workflow and needs every other job, on main and on
+  a version tag alike. It was its own workflow that never waited for the
+  tests. (#144)
+
+### Fixed
+- **A finished file can be queued again.** A path counted as busy if it
+  had any job that was not failed or cancelled, so a skipped or completed
+  job blocked its path forever: a file the quality gate rejected could
+  never be queued again, and neither could new content at the path of a
+  finished file. A path is now busy only while it has a waiting or active
+  job. (#143)
+- **S3: a downscaled file is uploaded under the key the catalog records.**
+  The upload derived its key from the source resolution and the catalog
+  from the target height, so the catalog pointed at an object that was
+  not in the bucket. One function names every derivative now. Jobs without
+  a downscale and filesystem libraries were not affected. (#145)
+- **A retried job starts clean.** A retried job showed the previous
+  attempt's progress and phase ("83% gauging") until its first report.
+  The claim resets everything an attempt writes about itself. (#148)
+- **A lost claim reply no longer strands a job.** If the reply to a claim
+  was lost, the job sat in transcoding while its worker idled, and Cancel,
+  Retry and Remove worker all refused. Registration now counts as a
+  heartbeat, so the abandoned-job sweep releases it. (#148)
+- **S3: a reused encode marks its file complete.** The catalog row stayed
+  queued. Finishing a job now writes the matching catalog status in the
+  same transaction, for every way a job can end. (#148)
+- **A station fills to the percentage it reports.** Only Encode drew a
+  fill, so Gauge showed fully lit while its label read 55%. Every station
+  with a number draws a fill of that width, and one without breathes. (#147)
+- **Percentages and savings round in one place.** A progress label flipped
+  between 12% and 13% at exact halves, and 12.5% average savings read 12
+  on Stats and 13 on Activity. The server rounds once and the pages only
+  display the result. (#147, #149)
+- **Manual and scanner skips reach Activity.** Only worker skips were
+  written to the table Activity reads, so four of the seven reason
+  filters could never match. Every skip goes through one writer, the
+  filter offers exactly the reasons a skip can carry, and un-skipping in
+  the catalog removes the record. (#146)
+- **Resume outside a schedule window tells the truth.** The button said
+  "Queue resumed" while the closed window kept the queue paused. It now
+  toggles only the pause set by hand and reads "Waiting for schedule
+  window" when the window is what holds the queue. (#146)
+- **Remove shows only on a worker the API will remove.** The button
+  appeared on a worker that had just gone offline, and the API refused it
+  for 30 minutes. The server decides once, and the page and the API read
+  that answer. (#149)
+- **One size format.** The dashboard showed "2048.0 GiB" where Stats
+  showed "2.0 TiB". (#149)
+- **One pill style per status.** "Needs transcode" was amber in the tables
+  and muted in the drawer and the TV episode list. (#149)
 
 ## [0.17.0] - 2026-10-27
 
