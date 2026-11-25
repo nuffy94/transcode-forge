@@ -853,8 +853,10 @@ input.forge-input.pl-8 { padding-left: 2rem; }
    Pipeline stations — the dashboard's per-job station bar. Five time
    phases (Search/Encode/Verify/Gauge/Swap) + tick marks for the
    sub-second protocol steps (Lock ahead; Confirm/Cleanup/Unlock behind).
-   Only Encode carries a percentage fill; active timed phases breathe —
-   never a fake 0% bar (type workshop / phase redesign, 2026-07-13).
+   An active station with a known percentage carries a fill; one without
+   breathes, never a fake 0% bar (type workshop / phase redesign,
+   2026-07-13). Every station holds a fill and a readout slot so a live
+   phase change only moves classes; only the active one shows them.
    ==================================================================== */
 .forge-stations { display: flex; gap: 3px; align-items: flex-start; }
 .forge-station { flex: 1; min-width: 0; }
@@ -912,6 +914,9 @@ input.forge-input.pl-8 { padding-left: 2rem; }
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
     animation: forge-meter-shimmer 2.4s linear infinite;
 }
+.forge-station:not(.forge-station--active) .forge-station-fill,
+.forge-station--timed .forge-station-fill,
+.forge-station:not(.forge-station--active) [data-phase-detail] { display: none; }
 .forge-station-lbl { margin-top: 4px; }
 .forge-tick {
     width: 3px;
