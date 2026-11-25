@@ -123,7 +123,11 @@ jobs:
   qa-sweep:
     # Deterministic UX/QA sweep (axe + error capture + screenshots) against a
     # seeded demo-static instance. Separate job — needs a browser, no Redis.
-    runs-on: ubuntu-latest
+    # The image is named, not ubuntu-latest: the pixel baselines were blessed
+    # on this OS's fonts, and the locked Playwright only installs its browser
+    # on releases it knows. Moving it is a change of its own, together with a
+    # Playwright bump and a re-bless (docs/QA.md).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
