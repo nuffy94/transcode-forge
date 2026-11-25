@@ -50,11 +50,21 @@ CI (`.github/workflows/tests.yml`) runs five jobs on every push and PR:
 - `css-fresh` — `build_css.py --check`; fails if the committed CSS is
   stale relative to its source.
 - `image-build` — the production Dockerfile must build (its baked-in
-  encoder + VMAF smoke runs at PR time; publishing stays in
-  `publish.yml`), and `scripts/check_image_lock.py` run inside the
+  encoder + VMAF smoke runs at PR time; it never pushes), and
+  `scripts/check_image_lock.py` run inside the
   result must find every installed distribution pinned in `uv.lock` at
   the same version. The image installs from the lock export, so the
-  suite tests what the fleet runs.
+  suite tests what the fleet runs. It then copies the static libvmaf
+  ffmpeg out of that image and runs `tests/test_vmaf_integration.py`
+  through it with `TF_REQUIRE_LIBVMAF=1`: the only place a real VMAF
+  measurement runs under pytest (everywhere else the file self-skips).
+
+A sixth job, `publish`, runs only on pushes to main, on `v*` tags and on
+manual runs, never on PRs. It needs all five jobs above, then builds and
+pushes the GHCR image (main to `:edge`; a `v*` tag to its version tags
+plus `:latest`). An image can only come from a commit whose own tests
+passed, so pushing a release tag runs the whole suite again first. There
+is no separate publish workflow.
 
 A formatting drift, type error, dialect regression, or CSS drift will
 fail the build — always run `ruff format`, `mypy src/`, and rebuild the
@@ -289,14 +299,17 @@ Common knobs:
   There is no HTTP endpoint that creates the account (R-040).
 - `TF_LIBRARY_MOVIES`, `TF_LIBRARY_TV`, `TF_LIBRARY_ANIME` — library paths.
 - `TF_QUALITY_*` — reference-scale CRF (lower = better quality, bigger
-  file); mapped per encoder in `worker/encoder.py`.
+  file); mapped per encoder in `worker/encoder.py`. Used once, to seed
+  each library's `quality_preset` on the first scan. After that the
+  preset is set per library (the Settings page library panel), and the
+  library row is what queueing reads.
 - `TF_DEFAULT_CODEC` — pre-fills the queue-time codec selector (hevc).
 - `TF_TARGET_VMAF` — the quality goal the CRF search aims for on samples
   (not a gate). `TF_VMAF_SAFETY_MEAN` / `TF_VMAF_SAFETY_PERC5` — absolute
   "refuse to keep" floors for the full-file gate (91.5/86 defaults on
   the VMAF v1 scale, calibrated in plans/vmaf-v1-gate1-results.md), never
-  derived from the target. These, `TF_DEFAULT_CODEC` and the quality
-  presets are DB-overridable from the Settings page (`repos/settings.py`,
+  derived from the target. These and `TF_DEFAULT_CODEC` are
+  DB-overridable from the Settings page (`repos/settings.py`,
   `effective(key)` = DB override else env). The old `TF_VMAF_MIN_FLOOR`
   knob is retired and ignored.
 - `TF_CRF_SEARCH_ENABLED` toggles the per-file CRF search. Worker-side

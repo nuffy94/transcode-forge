@@ -50,16 +50,14 @@ function loadStats() {
         .then(({ data }) => {
             const completed = data.completed || 0;
             const failed = data.jobs_by_status?.failed || 0;
-            const savedGiB = (data.total_space_saved_bytes || 0) / 1073741824;
-            const source = data.total_source_bytes || 0;
-            const output = data.total_output_bytes || 0;
-            const avgPct = source > 0 ? Math.round((1 - output / source) * 100) : 0;
+            const saved = data.total_space_saved_display || { value: '0.0', unit: 'GiB' };
+            // Rounded once server-side (api/routes/stats.avg_savings_pct).
+            const avgPct = data.avg_savings_pct || 0;
 
             document.getElementById('stat-completed').textContent = String(completed);
+            // Pre-formatted server-side (api/routes/stats.format_size).
             document.getElementById('stat-saved').innerHTML =
-                savedGiB >= 1024
-                    ? `${(savedGiB / 1024).toFixed(1)}<span class="forge-stat-unit">TiB</span>`
-                    : `${savedGiB.toFixed(1)}<span class="forge-stat-unit">GiB</span>`;
+                `${saved.value}<span class="forge-stat-unit">${saved.unit}</span>`;
             document.getElementById('stat-avg').innerHTML =
                 `${avgPct}<span class="forge-stat-unit">%</span>`;
             document.getElementById('stat-failed').textContent = String(failed);

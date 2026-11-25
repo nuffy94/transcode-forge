@@ -10,9 +10,8 @@
 {% if jobs %}
 <div>
     {% for job in jobs %}
-    {# round, not int-truncate: ops.js Math.round()s the same value over the
-       WebSocket — disagreeing here made the label/width flip every poll. #}
-    {% set pct = (job.progress * 100)|round|int %}
+    {# |percent rounds exactly like the live event; ops.js only displays it. #}
+    {% set pct = job.progress|percent %}
     <div class="px-4 py-3 {% if not loop.last %}border-b border-forge-rule/60{% endif %} hover:bg-forge-panel-hi/30 transition-colors {% if file_ids.get(job.source_path) %}cursor-pointer{% endif %}"
          data-job-id="{{ job.id }}"
          {% if job.phase %}data-phase="{{ job.phase }}"{% endif %}
@@ -26,9 +25,6 @@
             {% endif %}
             <span class="flex-1"></span>
             <span class="forge-pill forge-pill--running"><span class="forge-dot forge-dot--hot forge-pulse"></span>{{ job.status }}</span>
-            <button class="forge-iconbtn forge-iconbtn--danger" data-action="cancel-job" data-id="{{ job.id }}" aria-label="Cancel {{ job.source_path.split('/')[-1] }}">
-                {{ icon('x', 'forge-icon--sm') }}
-            </button>
         </div>
         {{ station_bar(job, pct) }}
     </div>

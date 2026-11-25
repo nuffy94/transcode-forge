@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from transcode_forge.api.deps import get_db
 from transcode_forge.db import DBConnection
-from transcode_forge.models.job import WAITING_JOB_STATUSES, Job, JobStatus
+from transcode_forge.models.job import (
+    RETRYABLE_JOB_STATUSES,
+    WAITING_JOB_STATUSES,
+    Job,
+    JobStatus,
+)
 from transcode_forge.repos import exclusions as excl_repo
 from transcode_forge.repos import jobs as job_repo
 from transcode_forge.repos import media as media_repo
@@ -74,11 +79,11 @@ async def retry_job(
     response: Response,
     db: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
-    """Retry a failed job."""
+    """Retry a failed or cancelled job."""
     job = await job_repo.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
+    if job.status not in RETRYABLE_JOB_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot retry job with status '{job.status}'")
     if await excl_repo.is_excluded(db, job.source_path):
         raise HTTPException(
@@ -95,7 +100,6 @@ async def retry_job(
         # to go with its owner or a report still in flight from it would
         # match the next claim (R-020).
         claim_token=None,
-        progress=0,
         error_message=None,
         retry_count=job.retry_count + 1,
     )
@@ -158,9 +162,11 @@ async def resume_queue(db: DBConnection = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/queue/status")
 async def queue_status(db: DBConnection = Depends(get_db)) -> dict[str, Any]:
-    """Get queue pause state."""
-    paused = await system_repo.is_queue_paused(db)
-    return {"paused": paused}
+    """Get queue pause state, with its two causes apart: the button owns
+    only the hand-set pause, the schedule window is changed in Settings."""
+    by_hand = await system_repo.is_paused_by_hand(db)
+    closed = await system_repo.is_schedule_closed(db)
+    return {"paused": by_hand or closed, "paused_by_hand": by_hand, "schedule_closed": closed}
 
 
 @router.post("/jobs/cancel-all")

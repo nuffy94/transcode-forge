@@ -1,6 +1,7 @@
 {#- KPI strip. DOM shape is load-bearing (tests/test_view_consistency.py):
-    each forge-stat-label's text precedes its forge-stat-value element, and
-    the value's text is the bare integer — no padding, no wrapping spans. -#}
+    each count carries a data-stat hook that tests read by name
+    (tests/helpers.read_stat), and its text is the bare integer, no
+    padding, no wrapping spans. -#}
 <div class="forge-panel grid grid-cols-2 lg:grid-cols-4">
 
     <!-- Space reclaimed — the number this whole system exists to grow -->
@@ -8,10 +9,11 @@
         <div class="absolute inset-y-0 left-0 w-0.5 bg-forge-ember" aria-hidden="true"></div>
         <p class="forge-stat-label">Space reclaimed</p>
         <div class="flex items-baseline gap-1.5 mt-2">
-            <span class="forge-stat-value text-3xl {% if space_saved_gb > 0 %}text-forge-ember-hot{% else %}text-forge-mute{% endif %}">{{ "%.1f"|format(space_saved_gb) }}</span>
-            <span class="forge-stat-unit">GiB</span>
+            {% set saved = space_saved_bytes|size %}
+            <span class="forge-stat-value text-3xl {% if space_saved_bytes > 0 %}text-forge-ember-hot{% else %}text-forge-mute{% endif %}">{{ saved.value }}</span>
+            <span class="forge-stat-unit">{{ saved.unit }}</span>
         </div>
-        <p class="forge-stat-meta mt-2">{% if space_saved_gb > 0 %}cumulative · all libraries{% else %}nothing reclaimed yet · queue an encode{% endif %}</p>
+        <p class="forge-stat-meta mt-2">{% if space_saved_bytes > 0 %}cumulative · all libraries{% else %}nothing reclaimed yet · queue an encode{% endif %}</p>
     </div>
 
     <!-- Completed -->
@@ -20,7 +22,7 @@
             <p class="forge-stat-label">Completed</p>
             <span class="forge-dot {% if completed %}forge-dot--on{% else %}forge-dot--off{% endif %}"></span>
         </div>
-        <div class="mt-2"><span class="forge-stat-value text-3xl {% if completed %}text-forge-oxide{% else %}text-forge-mute{% endif %}">{{ completed }}</span></div>
+        <div class="mt-2"><span data-stat="jobs-completed" class="forge-stat-value text-3xl {% if completed %}text-forge-oxide{% else %}text-forge-mute{% endif %}">{{ completed }}</span></div>
         <p class="forge-stat-meta mt-2">jobs finished</p>
     </div>
 
@@ -30,7 +32,7 @@
             <p class="forge-stat-label">Queued</p>
             <span class="forge-dot {% if queued %}forge-dot--hot forge-pulse{% else %}forge-dot--off{% endif %}"></span>
         </div>
-        <div class="mt-2"><span class="forge-stat-value text-3xl {% if queued %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ queued }}</span></div>
+        <div class="mt-2"><span data-stat="jobs-queued" class="forge-stat-value text-3xl {% if queued %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ queued }}</span></div>
         <p class="forge-stat-meta mt-2">{% if queued %}waiting for capacity{% else %}queue is clear{% endif %}</p>
     </div>
 
@@ -40,7 +42,7 @@
             <p class="forge-stat-label">Workers</p>
             <span class="forge-dot {% if workers_online > 0 %}forge-dot--on forge-pulse{% else %}forge-dot--off{% endif %}"></span>
         </div>
-        <div class="mt-2"><span class="forge-stat-value text-3xl {% if workers_online > 0 %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ workers_online }}</span></div>
+        <div class="mt-2"><span data-stat="workers-online" class="forge-stat-value text-3xl {% if workers_online > 0 %}text-forge-paper{% else %}text-forge-mute{% endif %}">{{ workers_online }}</span></div>
         <p class="forge-stat-meta mt-2">{% if workers_online > 0 %}online or busy{% else %}none connected{% endif %}</p>
     </div>
 

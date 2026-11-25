@@ -6,15 +6,18 @@
 
   Jobs with a reported phase render the five-station pipeline bar
   (Search → Encode → Verify → Gauge → Swap) with tick marks for the
-  sub-second protocol steps; only Encode shows a percentage — the timed
-  phases used to masquerade as a stuck "0%" meter. Jobs without a phase
+  sub-second protocol steps. One rule for every station: job.phase_pct
+  (the progress endpoint copies Encode's progress into it) draws a fill
+  of that width; a station without one breathes. Jobs without a phase
   (pre-phase workers) keep the classic meter row.
 
-  data-progress-bar / data-progress-pct / .forge-station[data-station]
-  stay load-bearing for ops.js WS updates (contract C.1) — ops.js finds
-  the row by data-job-id document-wide, so both pages animate live with
-  no page-specific JS. The caller owns the row element and its
-  data-job-id / data-phase attributes.
+  Every station carries the same fill ([data-station-fill]) and readout
+  ([data-phase-detail]) slot, shown only while active (forge.css), so a
+  live phase change in ops.js only moves state classes and always has a
+  target. data-progress-bar / data-progress-pct belong to the classic
+  meter. ops.js finds the row by data-job-id document-wide, so both
+  pages animate live with no page-specific JS (contract C.1). The caller
+  owns the row element and its data-job-id / data-phase attributes.
 
   show_copy: the dashboard renders the phase sentence under the bar; the
   queue's table cell skips it (the station labels carry the words).
@@ -35,21 +38,22 @@
 {% if job.phase and job.phase in order %}
 {% set cur = order.index(job.phase) %}
 {% set gate_off = job.target_vmaf is none %}
+{% set spct = job.phase_pct|percent %}
 <div class="forge-stations">
     <span class="forge-tick forge-tick--lit" role="img" aria-label="Lock: original claimed and protected" title="Lock"></span>
     {% for key, label in STATIONS %}
     {% set i = loop.index0 %}
     {% set off = gate_off and key in ('search', 'gauge') %}
     {% set state = 'off' if off else ('done' if i < cur else ('active' if i == cur else 'todo')) %}
-    <div class="forge-station forge-station--{{ state }}{% if state == 'active' and key != 'encode' %} forge-station--timed{% endif %}" data-station="{{ key }}">
+    {% set active = state == 'active' %}
+    <div class="forge-station forge-station--{{ state }}{% if active and spct is none %} forge-station--timed{% endif %}" data-station="{{ key }}">
         <div class="forge-station-seg">
-            {% if key == 'encode' and state == 'active' %}<div class="forge-station-fill" data-progress-bar style="width: {{ pct }}%;"></div>{% endif %}
+            <div class="forge-station-fill" data-station-fill{% if active and spct is not none %} style="width: {{ spct }}%;"{% endif %}></div>
         </div>
-        <div class="forge-station-lbl flex justify-between gap-1 font-mono text-2xs uppercase {% if state == 'active' %}text-forge-ember-hot{% elif state == 'done' %}text-forge-oxide/90{% else %}text-forge-mute{% endif %}">
+        <div class="forge-station-lbl flex justify-between gap-1 font-mono text-2xs uppercase {% if active %}text-forge-ember-hot{% elif state == 'done' %}text-forge-oxide/90{% else %}text-forge-mute{% endif %}">
             <span>{{ label }}</span>
-            {% if key == 'encode' and state == 'active' %}<span class="tabular-nums font-semibold" data-progress-pct>{% if pct %}{{ pct }}%{% else %}…{% endif %}</span>
-            {% elif off %}<span>off</span>
-            {% elif state == 'active' %}<span class="tabular-nums font-semibold" data-phase-detail>{% if job.phase_pct is not none %}{{ (job.phase_pct * 100)|round|int }}%{% elif job.phase_detail %}{{ job.phase_detail }}{% endif %}</span>{% endif %}
+            {% if off %}<span>off</span>{% endif %}
+            <span class="tabular-nums font-semibold" data-phase-detail>{% if active %}{% if spct is not none %}{{ spct }}%{% elif job.phase_detail %}{{ job.phase_detail }}{% endif %}{% endif %}</span>
         </div>
     </div>
     {% endfor %}
@@ -58,7 +62,7 @@
     <span class="forge-tick" role="img" aria-label="Unlock: lock released" title="Unlock"></span>
 </div>
 {% if show_copy %}
-<p class="mt-2 font-mono text-xs text-forge-ember-hot font-semibold">{{ PHASE_COPY.get(job.phase, job.phase) }}{% if job.phase == 'encode' and pct %} · {{ pct }}%{% elif job.phase_pct is not none %} · {{ (job.phase_pct * 100)|round|int }}%{% elif job.phase_detail %} · {{ job.phase_detail }}{% endif %}</p>
+<p class="mt-2 font-mono text-xs text-forge-ember-hot font-semibold">{{ PHASE_COPY.get(job.phase, job.phase) }}{% if spct is not none %} · {{ spct }}%{% elif job.phase_detail %} · {{ job.phase_detail }}{% endif %}</p>
 {% endif %}
 {% else %}
 {# Pre-phase worker (or phase not yet reported): the classic meter. #}

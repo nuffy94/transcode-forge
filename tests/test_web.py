@@ -78,6 +78,58 @@ class TestProgressPollMorph:
             assert "48%" in resp.text, partial
             assert "47%" not in resp.text, partial
 
+    async def test_halves_round_up_like_the_live_event(self, client: AsyncClient, app):
+        """Exact halves round up in the markup, the same integer the
+        progress event carries: 0.125 is 13% (Jinja's round said 12%) and
+        a Gauge at 0.345 is 35% (it said 34%)."""
+        db = app.state.db
+        meter = Job(
+            source_path="/media/movies/HalfMeter.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        gauge = Job(
+            source_path="/media/movies/HalfGauge.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        for job in (meter, gauge):
+            await job_repo.create_job(db, job)
+        await job_repo.update_job(db, meter.id, status="transcoding", progress=0.125)
+        await job_repo.update_job(
+            db, gauge.id, status="transcoding", progress=1.0, phase="gauge", phase_pct=0.345
+        )
+
+        for partial in ("/partials/active-transcodes", "/partials/jobs"):
+            resp = await client.get(partial)
+            assert resp.status_code == 200
+            assert "data-progress-pct>13%" in resp.text, partial
+            assert "data-phase-detail>35%" in resp.text, partial
+
+    async def test_running_jobs_offer_no_cancel(self, client: AsyncClient, app):
+        """The active list only holds jobs the cancel endpoint refuses
+        (it accepts waiting jobs only), so a Cancel button there could
+        only ever fail with "Error: Bad Request"."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Running.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(db, job.id, status="transcoding", progress=0.2)
+
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert "Running.mkv" in resp.text
+        assert 'data-action="cancel-job"' not in resp.text
+        refused = await client.post(f"/api/jobs/{job.id}/cancel")
+        assert refused.status_code == 400
+
     async def test_phased_job_renders_station_bar(self, client: AsyncClient, app):
         """A job with a reported phase renders the five-station pipeline bar
         with the current station active — and gate-off jobs mark Search and
@@ -578,6 +630,42 @@ class TestPartials:
         assert "Heartbeat" in response.text
         assert "stale" in response.text or "lost" in response.text
 
+    @pytest.mark.parametrize(
+        ("status", "silent_for", "removable"),
+        [
+            ("offline", timedelta(seconds=5), False),
+            ("dead", timedelta(seconds=5), False),
+            ("offline", timedelta(minutes=31), True),
+            ("dead", timedelta(minutes=31), True),
+        ],
+    )
+    async def test_remove_button_agrees_with_delete_gate(
+        self, client: AsyncClient, app, status: str, silent_for: timedelta, removable: bool
+    ):
+        """S1-4: the Remove button, the Clear stale list (/api/workers) and
+        DELETE all read one server-computed `removable`. An offline worker
+        that heartbeated seconds ago showed the button, then DELETE refused
+        it for 30 minutes."""
+        from transcode_forge.models.worker import Worker, WorkerStatus
+        from transcode_forge.repos import workers as worker_repo
+
+        db = app.state.db
+        worker = Worker(name="w-gate", host="h", status=WorkerStatus(status))
+        await worker_repo.upsert_worker(db, worker)
+        seen = (datetime.now(UTC) - silent_for).isoformat()
+        await db.execute(
+            "UPDATE workers SET last_heartbeat = ?, status = ? WHERE id = ?",
+            (seen, status, worker.id),
+        )
+        await db.commit()
+
+        page = await client.get("/partials/workers")
+        assert ('data-action="remove-worker"' in page.text) is removable
+        listed = (await client.get("/api/workers")).json()["data"]
+        assert [w["removable"] for w in listed] == [removable]
+        deleted = await client.request("DELETE", f"/api/workers/{worker.id}")
+        assert (deleted.status_code == 200) is removable
+
     async def test_outcomes_partial_has_sortable_headers(self, client: AsyncClient, app):
         """Column headers must be click-to-sort (wired to sortOutcomes) and the
         route must accept sort/dir without erroring."""
@@ -819,6 +907,49 @@ class TestStationPhaseDetail:
         resp = await client.get("/partials/jobs?status=transcoding")
         assert resp.status_code == 200
         assert "data-phase-detail>42%" in resp.text
+
+    async def test_known_pct_draws_a_fill_not_a_breath(self, client: AsyncClient, app):
+        """A station with a known percentage fills to it; only a station
+        without one breathes. A Gauge at 42% used to breathe full width
+        (read as done) while its label said 42%."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/GaugeFill.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=1.0, phase="gauge", phase_pct=0.42
+        )
+        for partial in ("/partials/active-transcodes", "/partials/jobs?status=transcoding"):
+            resp = await client.get(partial)
+            assert resp.status_code == 200
+            assert "forge-station--timed" not in resp.text, partial
+            assert 'data-station-fill style="width: 42%;"' in resp.text, partial
+
+    async def test_every_station_carries_fill_and_readout_slot(self, client: AsyncClient, app):
+        """A live phase change only moves state classes, so every station
+        needs its own fill and readout slot for ops.js to target."""
+        db = app.state.db
+        job = Job(
+            source_path="/media/movies/Slots.mkv",
+            library="movies",
+            source_codec="h264",
+            quality_value=21,
+            target_vmaf=95.0,
+        )
+        await job_repo.create_job(db, job)
+        await job_repo.update_job(
+            db, job.id, status="transcoding", progress=0.6, phase="encode", phase_pct=0.6
+        )
+        resp = await client.get("/partials/active-transcodes")
+        assert resp.status_code == 200
+        assert resp.text.count("data-station-fill") == 5
+        assert resp.text.count("data-phase-detail") == 5
+        assert "data-phase-detail>60%" in resp.text
 
     async def test_search_probe_label_renders_on_dashboard(self, client: AsyncClient, app):
         db = app.state.db
